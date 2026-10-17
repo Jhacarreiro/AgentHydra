@@ -435,7 +435,11 @@ export const updateScheduler = (b: Partial<SchedulerState>) =>
 // dispatch). See server/src/core/shared.ts for the DTO shapes.
 export const listInstances = () => j<CMInstance[]>('/api/instances')
 /** Each profile's signed-in login off disk, without the list's process scan: cheap enough to ask every few seconds. */
-export const listInstanceLogins = () => j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
+export const listInstanceLogins = () =>
+  j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
+/** Which of these app pids still run, by a signal-0 probe and no process scan; a gone one makes the next list scan fresh. */
+export const instancesAlive = (pids: number[]) =>
+  j<{ alive: Record<string, boolean> }>(`/api/instances/alive?pids=${pids.join(',')}`)
 export interface ClaudeNativeProfileConfig {
   port: number
   mode: 'native-only' | 'prefer-native'
@@ -462,7 +466,10 @@ export const getInstanceLoginHistory = (dir: string) =>
 /** The person's own Open: `raise` brings the new window in front of AgentHydra's (the daemon launches it from the
  *  background, so Windows would leave it behind; owner 2026-10-09: Open "just sitting there"). */
 export const openInstance = (dir: string) =>
-  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, { method: 'POST', body: JSON.stringify({ raise: true }) })
+  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, {
+    method: 'POST',
+    body: JSON.stringify({ raise: true }),
+  })
 /** `confirmExternal` is the explicit opt-in required to quit the DEFAULT (non-isolated) Claude
  *  Desktop — the server refuses that dir without it (see core/instances.ts quitInstance guard). */
 export const quitInstance = (dir: string, opts: { confirmExternal?: boolean } = {}) =>
@@ -486,10 +493,10 @@ export const createInstanceShortcut = (dir: string) =>
 /** Add the lightweight Instances chooser to the user's Desktop. */
 export const createInstanceModeShortcut = () =>
   j<CMActionResult>('/api/instance-mode/shortcut', { method: 'POST' })
-export const deleteInstance = (dir: string, confirmName: string) =>
+export const deleteInstance = (dir: string, note: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Update an instance's UI metadata: display label (a pure relabel — never touches the folder,
  *  so it works while the instance runs), icon glyph, and icon color. A field present in the
@@ -508,7 +515,8 @@ export const setInstanceMeta = (
     body: JSON.stringify(patch),
   })
 /** A new Desktop instance; the daemon names its folder (nobody is asked for a name). */
-export const createInstance = () => j<CMActionResult>('/api/instances', { method: 'POST', body: '{}' })
+export const createInstance = () =>
+  j<CMActionResult>('/api/instances', { method: 'POST', body: '{}' })
 export const getDesktopInstall = (opts: { fresh?: boolean } = {}) =>
   j<CMDesktopInstall>(`/api/desktop-install${opts.fresh ? '?fresh=1' : ''}`)
 
@@ -790,10 +798,10 @@ export const linkCliInstanceToDesktop = (
     method: 'POST',
     body: JSON.stringify({ desktopDir, desktopLabel }),
   })
-export const deleteCliInstance = (id: string, confirmName: string) =>
+export const deleteCliInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Copy CLI logins to another PC: one encrypted bundle in Downloads; `signOut` also signs this PC
  *  out of each (a move). See server/src/core/cli-login-move.ts. The passphrase is made here and
@@ -1100,6 +1108,8 @@ export const listCliMayteWorkers = (
   if (filter.limit !== undefined) q.set('limit', String(filter.limit))
   // `lean`: no result, reports or whole attempts (the open task's detail route has them); an older daemon ignores it.
   q.set('lean', '1')
+  // Only this pane omits raw launch/ETA records it never reads. Older daemons keep their lean answer.
+  q.set('pane', '1')
   return j<CliMayteWorkerView[]>(`/api/corch/workers?${q}`)
 }
 /** A worker from another PC that shares the queue (GET /api/corch/remote): the row's fields only. */
@@ -1353,10 +1363,10 @@ export const renameCodexInstance = (id: string, name: string | null) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   })
-export const deleteCodexInstance = (id: string, confirmName: string) =>
+export const deleteCodexInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 
 // --- auto-resume monitor (Feature E) -------------------------------------------
@@ -1463,7 +1473,8 @@ export interface DshInstance {
 }
 export const listDshInstances = () => j<DshInstance[]>('/api/dsh-instances')
 /** A new DeepSeek home; the daemon names it. */
-export const createDshInstance = () => j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: '{}' })
+export const createDshInstance = () =>
+  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: '{}' })
 /** Start a server for this home (or open a window against one already running) — both are this. */
 export const launchDshInstance = (id: string) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/launch`, { method: 'POST' })
@@ -1476,7 +1487,7 @@ export const renameDshInstance = (id: string, name: string) =>
   })
 export const deleteDshInstance = (
   id: string,
-  opts: { deleteFiles?: boolean; confirmName?: string } = {},
+  opts: { deleteFiles?: boolean; note?: string } = {},
 ) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',

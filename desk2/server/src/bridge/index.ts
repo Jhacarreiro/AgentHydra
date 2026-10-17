@@ -18,7 +18,7 @@
 import { type SearchResult, searchResult } from '@shared/find'
 import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
-import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
+import { mapAccounts, pickHealthy } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, jobDirs, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
 import { attachJobModels } from './swarm-models'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
@@ -43,6 +43,7 @@ import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDe
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
+import { createBackgroundTasks } from './background-tasks'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
@@ -52,7 +53,6 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
 export { BridgeError } from './client'
-export { DEFAULT_ACCOUNT } from './accounts'
 
 type Ids = Iterable<string> | Promise<Iterable<string>>
 
@@ -201,10 +201,18 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** Who is signed in where (desktop instances, CLI instances), for resumeAccount. */
   async function resumeData(): Promise<ResumeData> {
     if (logins && now() - logins.at < INSTANCES_FRESH_MS) return logins.data
+    // A failed read answers this call with what it has, but is not kept: a cached empty list would
+    // leave every chat without its account for the next 30 s, though the next read may succeed. A 404
+    // is an AgentHydra without the route, a lasting answer, and is kept.
+    let failed = false
+    const none = (err: unknown) => {
+      if (!(err instanceof BridgeError && err.kind === 'http' && err.status === 404)) failed = true
+      return []
+    }
     const [desktops, numbers, clis] = await Promise.all([
-      client.desktopInstances().catch(() => []),
-      client.instanceNumbers().catch(() => []),
-      cliInstances().catch(() => []),
+      client.desktopInstances().catch(none),
+      client.instanceNumbers().catch(none),
+      cliInstances().catch(none),
     ])
     const key = (p: string) => resolve(p).toLowerCase()
     const emailOf = new Map(numbers.filter((n) => n.kind === 'desktop').map((n) => [key(n.handle), n.email]))
@@ -212,13 +220,19 @@ export function createBridge(opts: BridgeOptions = {}) {
       desktops: desktops.map((d) => ({ num: d.num, name: d.name, label: d.label, dir: d.dir, uuid: d.loginUuid ?? null, email: emailOf.get(key(d.dir)) ?? null })),
       clis,
     }
-    logins = { at: now(), data }
+    if (!failed) logins = { at: now(), data }
     return data
   }
 
   async function instanceDirs(): Promise<Map<string, string>> {
     if (configDirs && now() - configDirs.at < INSTANCES_FRESH_MS) return configDirs.byId
-    const list = await cliInstances().catch(() => [])
+    let list: AhCliInstance[]
+    try {
+      list = await cliInstances()
+    } catch {
+      // Not kept: the last good map stands (or an empty one this once), and the next call reads again.
+      return configDirs?.byId ?? new Map()
+    }
     configDirs = { at: now(), byId: new Map(list.map((i) => [i.id, i.configDir])) }
     return configDirs.byId
   }
@@ -242,15 +256,14 @@ export function createBridge(opts: BridgeOptions = {}) {
       ])
       return keptAccounts.ok(mapAccounts(instances, running))
     } catch (err) {
-      if (unreachable(err)) return keptAccounts.get() ?? [DEFAULT_ACCOUNT_INFO]
+      if (unreachable(err)) return keptAccounts.get() ?? []
       throw err
     }
   }
 
-  /** The account the window shows for 'auto' when it continues an outside session: the default login.
-   *  Hydra Desk chooses no account; a new chat is a CliMayte worker and CliMayte places it. */
-  async function pickAccount(): Promise<AccountRef> {
-    return { ...DEFAULT_ACCOUNT }
+  /** The account 'auto' would place a chat on now: one with room, the least used first; null when none has room. */
+  async function pickAccount(): Promise<AccountRef | null> {
+    return pickHealthy(await listAccounts(), new Set())
   }
 
   /** Reads once per WORKERS_FRESH_MS; both recent and all share the same tick. */
@@ -490,8 +503,12 @@ export function createBridge(opts: BridgeOptions = {}) {
       sessions: got.sessions ?? [],
       workers: got.workers ?? [],
       codexTurns: await codexTurns(got.codexChats ?? []),
+      background: await backgroundTasks.read(got.live ?? []),
     }
   }
+
+  /** Each live engine's open background tasks, read where its transcript grew (background-tasks.ts). */
+  const backgroundTasks = createBackgroundTasks()
 
   /** Whether each Codex thread active in the last STALE_AFTER_MS has its last turn open (codex-rollout.ts codexTurnOpen),
    *  kept by the rollout's size and mtime, so a file that has not changed is not read again. */
@@ -504,22 +521,21 @@ export function createBridge(opts: BridgeOptions = {}) {
     })
     const recentIds = new Set(recent.map((c) => c.threadId))
     for (const id of turnKept.keys()) if (!recentIds.has(id)) turnKept.delete(id)
-    await Promise.all(
-      recent.map(async (c) => {
-        const path = await codexRollout(c.threadId).catch(() => null)
-        if (!path) return
-        try {
-          const st = await stat(path)
-          const key = `${path}|${st.size}|${st.mtimeMs}`
-          const kept = turnKept.get(c.threadId)
-          const open = kept?.key === key ? kept.open : codexTurnOpen(path)
-          turnKept.set(c.threadId, { key, open })
-          out.set(c.threadId, open)
-        } catch {
-          // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
-        }
-      }),
-    )
+    // One thread at a time: Bun starts an I/O thread for every fs call in flight and keeps it for the server's life.
+    for (const c of recent) {
+      const path = await codexRollout(c.threadId).catch(() => null)
+      if (!path) continue
+      try {
+        const st = await stat(path)
+        const key = `${path}|${st.size}|${st.mtimeMs}`
+        const kept = turnKept.get(c.threadId)
+        const open = kept?.key === key ? kept.open : codexTurnOpen(path)
+        turnKept.set(c.threadId, { key, open })
+        out.set(c.threadId, open)
+      } catch {
+        // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
+      }
+    }
     return out
   }
 
@@ -732,21 +748,42 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** A whole outside session's history, kept by file size and mtime (a file that grew is read again). */
   const wholeKept = new Map<string, { key: string; items: TranscriptItem[]; index: TranscriptIndex }>()
   const WHOLE_KEPT = 3
+  /** Only the index and context numbers of the newest INDEX_KEPT sessions: the rail's reads and the poller's warm-up come
+   *  from here, so opening a chat does not read its whole transcript again. */
+  const indexKept = new Map<string, { key: string; index: TranscriptIndex }>()
+  const INDEX_KEPT = 50
+  const INDEX_WARM = 20
+  /** The size|mtime key of the session's file: its Claude Code .jsonl, else its Codex rollout (a Codex chat's items come from
+   *  the daemon's tail, which grows with the rollout); '' when neither is known or the file is gone. Before the rollout counted,
+   *  a Codex chat had no key, so its index was never kept and the warm-up rebuilt the same one at every poll. */
+  async function fileKey(sessionId: string): Promise<string> {
+    const file = foundAt.get(sessionId) ?? (await codexRollout(sessionId).catch(() => null))
+    if (!file) return ''
+    try {
+      const st = await stat(file)
+      return `${st.size}|${st.mtimeMs}`
+    } catch {
+      return ''
+    }
+  }
+  function keepIndex(sessionId: string, key: string, index: TranscriptIndex): void {
+    indexKept.delete(sessionId)
+    indexKept.set(sessionId, { key, index })
+    while (indexKept.size > INDEX_KEPT) indexKept.delete(indexKept.keys().next().value!)
+  }
   async function externalWhole(sessionId: string, cwd: string | null): Promise<{ items: TranscriptItem[]; index: TranscriptIndex }> {
+    // The file's key is checked before the transcript is read: an unchanged file costs one stat.
+    const before = await fileKey(sessionId)
+    const hit = wholeKept.get(sessionId)
+    if (before && hit && hit.key === before) return hit
     const items = await externalHistory(sessionId, cwd)
     const file = foundAt.get(sessionId)
-    let key = ''
-    try {
-      const st = file ? await stat(file) : null
-      if (st) key = `${st.size}|${st.mtimeMs}`
-    } catch {
-      // gone: not kept
-    }
+    const key = await fileKey(sessionId)
     const kept = wholeKept.get(sessionId)
     if (key && kept && kept.key === key) return kept
     // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
     // for a chat with none, a Codex rollout's last token_count (with its window).
-    let context: { tokens: number; window: number | null } | null = null
+    let context: { tokens: number; window: number | null; total?: number | null } | null = null
     try {
       if (key && file) {
         const tokens = lastContextTokens(file)
@@ -758,17 +795,45 @@ export function createBridge(opts: BridgeOptions = {}) {
     } catch {
       // gone since it was found: no context, the rest of the index stands
     }
-    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null } }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null, sessionTokens: context?.total ?? null } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)
       while (wholeKept.size > WHOLE_KEPT) wholeKept.delete(wholeKept.keys().next().value!)
+      keepIndex(sessionId, key, built.index)
     }
     return built
   }
 
   async function externalIndex(sessionId: string, cwd: string | null = null): Promise<TranscriptIndex> {
+    const key = await fileKey(sessionId)
+    const hit = indexKept.get(sessionId)
+    if (key && hit && hit.key === key) return hit.index
     return (await externalWhole(sessionId, cwd)).index
+  }
+
+  /** Builds the index of the one most recently active idle session (of the INDEX_WARM newest) whose file changed since it
+   *  was last built, so opening it finds it ready. One build per call, none while a build runs; true when it built one. */
+  let warming = false
+  async function warmIndexes(sessions: readonly Pick<ExternalSession, 'id' | 'cwd' | 'status' | 'lastActivityAt'>[]): Promise<boolean> {
+    if (warming) return false
+    warming = true
+    try {
+      const newest = [...sessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)).slice(0, INDEX_WARM)
+      for (const s of newest) {
+        if (s.status === 'working') continue // its file changes every step: warmed when it rests
+        const key = await fileKey(s.id)
+        const hit = indexKept.get(s.id)
+        if (key && hit && hit.key === key) continue
+        await externalWhole(s.id, s.cwd)
+        return true
+      }
+      return false
+    } catch {
+      return false // a session that cannot be read now is tried again at the next poll
+    } finally {
+      warming = false
+    }
   }
 
   async function externalSearch(sessionId: string, query: string, cwd: string | null = null): Promise<SearchResult> {
@@ -1095,6 +1160,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalOlder,
     externalOlderPage,
     externalHistory,
+    warmIndexes,
     externalIndex,
     externalSearch,
     externalItem,

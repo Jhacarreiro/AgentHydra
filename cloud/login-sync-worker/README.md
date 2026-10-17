@@ -47,8 +47,9 @@ token, never the token.
    before updating AgentHydra on the PCs. If you ever reset or replace the D1 database, delete and
    recreate the Durable Object with it (it holds the old head).
 6. Add a Cron Trigger (Worker settings > Triggers, for example `17 3 * * *`, once a day). It prunes
-   tombstones older than 30 days (`scheduled()`); a request never does. Without it the Worker still
-   works and tombstones only pile up. The schema is checked with one `PRAGMA user_version` per cold
+   tombstones older than 30 days and frees chat chunks that no row names once their newest is a day
+   old (`scheduled()`); a request never does. Without it the Worker still works and tombstones and
+   such chunks only pile up. The schema is checked with one `PRAGMA user_version` per cold
    isolate and migrated only when the database is behind.
 
 `GET /v1/health` answers `{"ok":true}` without a token, to check the address.
@@ -62,8 +63,10 @@ token, never the token.
   profiles in a profile of the same name and number (written only while that profile is closed).
 - **The pairing code** holds the store address, its token and the encryption key. Move it the way
   you would move a password, never in a chat or a ticket.
-- **Leave one login out** on one PC with its switch in Login sync. Logging out leaves it out too, so
-  the store does not sign it straight back in.
+- **Leave one CLI login out** on one PC with its switch in Login sync. Logging out leaves it out too,
+  so the store does not sign it straight back in. Desktop logins always sync.
+- **Deleting an instance deletes it on the other PC too.** The delete asks why, and the other PC
+  shows who deleted it with that note. Signing in again anywhere brings it back.
 - **Keep a synced desktop account open on one PC at a time.** One you signed in separately on both
   PCs is left alone, and both stay signed in.
 - **Stop syncing on this PC** forgets the store here; the store keeps its copies for the others.
@@ -101,10 +104,24 @@ check who writes a chat. Since 2026-10-05 the clients keep each chat view only: 
 on writes its row and chunks. That PC starts its copy over with `DELETE /v1/chats/:id` and a fresh
 upload whenever another PC has written into it.
 
+**The store is a relay (schema 4, 2026-10-17).** Each PC keeps its own copy of every chat, so the store
+carries a transcript only until the PCs that read it have it. Keeping every live chat whole filled the
+400 MB room twice in two days (2026-10-16 and 10-17). A reading PC says `POST /v1/chats/:id/ack {pc,
+next, o}` ("I hold every chunk of this row's stream below seq `next`") after it has written what it took
+and saved its state. The readers of a chat are the PCs the store saw in the last 14 days (a changes poll
+or an ack) other than the one the chat started on; one seen that never acks (an older build, or chats
+off) holds the chunks. The chunks below the lowest reader's ack are deleted and their room given back,
+and the floor is noted: a read below it answers `410 {error:"gone", floor}` and a write below it is
+refused as taken. A PC that gets 410 (it joined later, lost its copy or was away two weeks) asks for the
+chat again the way it does for missing chunks (the row marked `rs`), and the PC it started on streams it
+afresh. Each stream is named in the row's `meta.o`; an ack of a stream the row no longer carries is 409
+and frees nothing. The first request after the deploy adds `chat_acks` and `chat_floor`.
+
 **Room for chats.** Transcripts take at most 400 MB of the database (a running total in
 `chat_usage`), because D1's free plan stops a whole database at 500 MB and the logins live in the same
-one: a full chat room never stops a login from syncing. AgentHydra removes a chat from the store three
-days after it was archived (each PC keeps its copy). On Workers Paid (10 GB per database) you can raise the
+one: a full chat room never stops a login from syncing. Besides the relay, AgentHydra removes a chat's
+row from the store three days after it was archived (each PC keeps its copy), and a PC sends its most
+recently active chats first, so the room left goes to what runs now. On Workers Paid (10 GB per database) you can raise the
 room with an optional plain-text variable `CHAT_STORE_MB`.
 
 The queue routes (the "Share CliMayte queue" toggle in AgentHydra) need this Worker **redeployed

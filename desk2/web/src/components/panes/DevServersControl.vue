@@ -18,7 +18,7 @@ const s = computed(() => props.ctx.settings.value)
 const dev = useDevServers()
 const running = props.ctx.running
 const starting = computed(() => dev.status.value?.state === 'starting')
-const dot = { ok: 'var(--success)', busy: 'var(--warning, var(--text-muted))', bad: 'var(--danger)', idle: 'var(--text-muted)' }
+const dot = { ok: 'var(--success)', busy: 'var(--text-muted)', bad: 'var(--danger)', idle: 'var(--text-muted)' }
 const devLine = computed(() => {
   const line = serviceLine(dev.status.value)
   return { ...line, background: dot[line.tone] }

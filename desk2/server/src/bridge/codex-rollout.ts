@@ -36,9 +36,10 @@ export async function findCodexRollout(threadId: string, homes: readonly string[
   return null
 }
 
-/** The tokens in context after the thread's last turn and the model's window (null when its event names none), from the newest
- *  `token_count` event with a last turn's usage; null when the file's end has none. */
-export function lastCodexContext(path: string): { tokens: number; window: number | null } | null {
+/** The tokens in context after the thread's last turn, the model's window (null when its event names none) and the thread's
+ *  running total so far (`total_token_usage`; null when the event has none), from the newest `token_count` event with a last
+ *  turn's usage; null when the file's end has none. */
+export function lastCodexContext(path: string): { tokens: number; window: number | null; total: number | null } | null {
   const size = statSync(path).size
   for (const max of [256 * 1024, TAIL_BYTES]) {
     const lines = readTail(path, max).split('\n')
@@ -46,12 +47,13 @@ export function lastCodexContext(path: string): { tokens: number; window: number
       const line = lines[i]!
       if (!line.includes('"token_count"')) continue
       try {
-        const rec = JSON.parse(line) as { payload?: { type?: unknown; info?: { last_token_usage?: { total_tokens?: unknown }; model_context_window?: unknown } | null } }
+        const rec = JSON.parse(line) as { payload?: { type?: unknown; info?: { last_token_usage?: { total_tokens?: unknown }; total_token_usage?: { total_tokens?: unknown }; model_context_window?: unknown } | null } }
         const info = rec.payload?.type === 'token_count' ? rec.payload.info : null
         const tokens = info?.last_token_usage?.total_tokens
         if (typeof tokens !== 'number' || !(tokens > 0)) continue
         const window = info?.model_context_window
-        return { tokens, window: typeof window === 'number' && window > 0 ? window : null }
+        const total = info?.total_token_usage?.total_tokens
+        return { tokens, window: typeof window === 'number' && window > 0 ? window : null, total: typeof total === 'number' && total > 0 ? total : null }
       } catch {
         // the tail's first line may be cut
       }

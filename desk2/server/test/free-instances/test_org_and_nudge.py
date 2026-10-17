@@ -183,7 +183,8 @@ def test_nudge_sends_one_temporary_message_on_haiku_and_records_nothing(tmp_path
     assert result == {"nudged": True, "organization_id": ORG_A}
     assert [(o, p, m) for o, p, m, _ in sent] == [(ORG_A, service.KEEPALIVE_PROMPT, "claude-haiku-9")]
     kwargs = sent[0][3]
-    assert kwargs["temporary"] is True
+    # No privacy argument exists: ClaudeHttp.send creates every chat Incognito and checks it (test_private_only).
+    assert "temporary" not in kwargs
     assert kwargs["on_text"] is None
     assert not kwargs.get("web_search")
     registry = ChatRegistry(tmp_path / "chats.sqlite3")

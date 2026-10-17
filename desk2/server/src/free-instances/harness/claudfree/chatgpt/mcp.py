@@ -19,7 +19,7 @@ def build_server(client=None):
         "ClaudFree ChatGPT",
         version="0.8.0",
         log_level="WARNING",
-        instructions=f"Call chatgpt_schema for capability limits. Automatic preparation: {client.auto_prepare}. Call create/resume directly; fresh single-use verification is collected automatically when needed with a short JavaScript runtime. HTTP commands never start a browser. chatgpt_prepare is optional prewarming. No automatic resend after an uncertain result; read chat_id first. Login is a separate manual CLI command.",
+        instructions=f"Call chatgpt_schema for capability limits. Automatic preparation: {client.auto_prepare}. With automatic preparation enabled, call create/resume directly: the saved login is restored in a disposable headless browser context for one ordinary send, then HTTP verifies the reply. Read-only commands never open a browser. chatgpt_prepare is only for explicit legacy sends with auto_prepare=False; it does not prewarm automatic browser sends. No automatic resend after an uncertain result; read chat_id first. Login is a separate manual CLI command.",
     )
     read = ToolAnnotations(
         read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
@@ -74,7 +74,7 @@ def build_server(client=None):
 
     @server.tool(annotations=send)
     def chatgpt_prepare(count: int = 3) -> CallToolResult:
-        """Prepare 1-8 HTTP sends with JavaScript, then close the runtime. No browser or message."""
+        """Prepare 1-8 explicit legacy HTTP sends (auto_prepare=False). Automatic browser sends do not use this pool. No message is sent."""
         return call(client.prepare, count)
 
     @server.tool(annotations=read)
@@ -94,12 +94,12 @@ def build_server(client=None):
 
     @server.tool(annotations=send)
     def chatgpt_create_chat(prompt: str, name: str | None = None) -> CallToolResult:
-        """Create a Temporary, unpersonalized chat. Preparation is automatic; no browser or retry."""
+        """Create a Temporary, unpersonalized chat. Automatic preparation uses the saved login in a headless browser; no automatic resend."""
         return call(client.create, prompt, name=name, brief=True)
 
     @server.tool(annotations=send)
     def chatgpt_resume_chat(reference: str, prompt: str) -> CallToolResult:
-        """Continue a Temporary Chat by name/UUID. Preparation is automatic; no browser or retry."""
+        """Continue a Temporary Chat by name/UUID. Automatic preparation uses the saved login in a headless browser; no automatic resend."""
         return call(client.resume, reference, prompt, brief=True)
 
     @server.tool(annotations=local)

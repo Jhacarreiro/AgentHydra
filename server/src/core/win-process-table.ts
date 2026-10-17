@@ -14,6 +14,7 @@
 // never "none running".
 
 import { createRequire } from 'node:module'
+import { createBasicProcessTable } from './win-basic-process-table'
 
 /** One row of the table, as Toolhelp32 reports it. */
 export interface NativeProcess {
@@ -110,10 +111,32 @@ function load(): Native | null {
     const mem = new Uint8Array(72)
     const memView = new DataView(mem.buffer)
 
+    // Basic snapshots avoid the full process/thread statistics Toolhelp collects. Keep this
+    // optional: older Windows, a missing export or an invalid snapshot still uses Toolhelp.
+    let basic: (() => NativeProcess[] | null) | undefined
+    if (process.arch === 'x64') {
+      try {
+        const query = dlopen('ntdll.dll', {
+          NtQuerySystemInformation: {
+            args: [FFIType.u32, FFIType.ptr, FFIType.u32, FFIType.ptr],
+            returns: FFIType.i32,
+          },
+        }).symbols.NtQuerySystemInformation
+        basic = createBasicProcessTable(
+          (buffer, returned) => query(252, ptr(buffer), buffer.length, ptr(returned)),
+          ptr,
+        )
+      } catch {
+        // Toolhelp remains available even when this optional query cannot be loaded.
+      }
+    }
+
     const text = (u16: Uint16Array, length: number) => utf16.decode(u16.subarray(0, length))
 
     return {
       table() {
+        const fast = basic?.()
+        if (fast) return fast
         const snap = k.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
         // INVALID_HANDLE_VALUE is -1, which bun:ffi hands back as a pointer it cannot represent.
         if (!snap || snap === -1) return null

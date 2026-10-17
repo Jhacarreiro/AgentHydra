@@ -4,7 +4,7 @@ website = "https://openai.com"
 key_url = "https://platform.openai.com/api-keys"
 docs = "https://developers.openai.com/api/reference/resources/responses"
 transport = "openai-responses"
-capabilities = ["chat"]
+capabilities = ["chat", "image-generation"]
 key_billing = "unknown"
 models_path = "/models"
 passthrough = ["openai:"]
@@ -98,3 +98,12 @@ tools = true
 price_ref = "openai/rank:gpt-6-1-sol:openai"
 default_reasoning_effort = "max"
 cc_effort = false
+
+# Image route for `hswarm image` (image.py). Moderated (moderation_blocked); no price on record here.
+[images.gpt-image-1]
+adapter = "openai_images"
+model = "gpt-image-1"
+modes = ["t2i"]
+moderated = true
+input = { quality = "low" }
+sizes = ["1024x1024", "1024x1536", "1536x1024"]

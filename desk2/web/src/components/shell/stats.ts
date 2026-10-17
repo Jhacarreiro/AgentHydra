@@ -66,6 +66,20 @@ export function usd(n: number): string {
   return n >= 100 ? `$${count(Math.round(n))}` : `$${n.toFixed(2)}`
 }
 
+/** 'Feb 6, 2026' for a local YYYY-MM-DD day. */
+function longDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y!, m! - 1, d!).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/** All time is each source's record, not the tools' whole life: say where each record begins (owner, 2026-10-17:
+ *  "847 billion ... over 206 days" read as 206 full days, while Claude Code had deleted every chat older than 30
+ *  days before AgentHydra kept a copy). */
+function recordedSince(s: HomeStats): string | null {
+  const dated = s.sources.filter((x) => x.since).sort((a, b) => a.since!.localeCompare(b.since!))
+  return s.range === 'all' && dated.length ? `Recorded since: ${dated.map((x) => `${x.label} ${longDay(x.since!)}`).join(' · ')}` : null
+}
+
 function agentTime(minutes: number): string {
   return minutes < 60 ? plural(minutes, 'minute', 'minutes') : plural(Math.round(minutes / 60), 'hour', 'hours')
 }
@@ -83,7 +97,9 @@ export function homeTiles(s: HomeStats): StatsTile[] {
       label: 'Total tokens',
       value: compact(t.total),
       strong: true,
-      title: [`Input ${count(t.input)}`, `Cache read ${count(t.cacheRead)}`, `Cache write ${count(t.cacheWrite)}`, `Output ${count(t.output)}`].join('\n')
+      title: [`Input ${count(t.input)}`, `Cache read ${count(t.cacheRead)}`, `Cache write ${count(t.cacheWrite)}`, `Output ${count(t.output)}`, recordedSince(s)]
+        .filter(Boolean)
+        .join('\n')
     },
     { label: 'Active days', value: count(s.activeDays), strong: true, title: s.agentMinutes === null ? undefined : `${agentTime(s.agentMinutes)} of agent time` },
     { label: 'Peak hour', value: s.peakHour ?? UNKNOWN, strong: true, title: s.peakHour ? undefined : why('activity', 'No activity in this range') },
@@ -114,6 +130,13 @@ export interface SourceRow {
   title: string
 }
 
+/** What a source's figures are not, where its row would mislead without it. */
+const SOURCE_NOTES: Record<string, string> = {
+  // kit/ingest-copilot.ts: 925 of 2,731 requests carried a count on 2026-10-17, about 0.02B tokens.
+  'vscode-copilot':
+    'Copilot bills requests, not tokens: most of its requests record no token count, so this row is here so every tool is counted, not for its volume'
+}
+
 /** The Sources list, most tokens first (the server's order). */
 export function homeSources(s: HomeStats): SourceRow[] {
   const max = Math.max(1, ...s.sources.map((x) => x.tokens))
@@ -124,7 +147,7 @@ export function homeSources(s: HomeStats): SourceRow[] {
     tokens: compact(x.tokens),
     cost: x.costUsd === null ? UNKNOWN : usd(x.costUsd),
     share: x.tokens / max,
-    title: `${x.label}: ${plural(x.sessions, 'session', 'sessions')}, ${plural(x.messages, 'message', 'messages')}, ${count(x.tokens)} tokens${x.costUsd === null ? ', not priced' : ''}`
+    title: `${x.label}: ${plural(x.sessions, 'session', 'sessions')}, ${plural(x.messages, 'message', 'messages')}, ${count(x.tokens)} tokens${x.costUsd === null ? ', not priced' : ''}${x.since ? `, recorded since ${longDay(x.since)}` : ''}${SOURCE_NOTES[x.key] ? `\n${SOURCE_NOTES[x.key]}` : ''}`
   }))
 }
 

@@ -3,13 +3,13 @@ import { computed } from 'vue'
 import { Tip } from '@/components/ui/tooltip'
 import { HEADER_BTN } from '@/components/sidebar/rowClasses'
 import { DashboardGlyph } from './glyph'
-import { hasSite, showingDashboard } from './logic'
-import { closeDashboard, dashboardCwd, dashboardList, dashboardOpen, openDashboard } from './store'
+import { hasDashboard, showingDashboard } from './logic'
+import { closeDashboard, dashboardCwd, dashboardList, dashboardOpen, openDashboard, templateList } from './store'
 
-// A sidebar group's dashboard button, beside its New session +: only for a project whose chats wrote a site (the desk list
+// A sidebar group's dashboard button, beside its New session +: only for a project with a dashboard spec or a site its chats wrote (the desk list
 // and the cloud list each draw one per group head; the sidebar keeps dashboardList fresh). A second click closes the page.
 const props = defineProps<{ folder: string | null; label: string }>()
-const shown = computed(() => !!props.folder && hasSite(dashboardList.value, props.folder))
+const shown = computed(() => !!props.folder && hasDashboard(dashboardList.value, templateList.value, props.folder))
 const showing = computed(() => !!props.folder && showingDashboard(dashboardOpen.value, dashboardCwd.value, props.folder))
 const tip = computed(() => `${showing.value ? 'Close' : 'Open'} the ${props.label} dashboard`)
 

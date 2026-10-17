@@ -9,9 +9,9 @@
 // outside session's facts and actions are its session header's, drawn into the cards here (RAIL_TARGETS). DeskFrame places the
 // rail and keeps the chat's text column clear of it.
 import { computed, effectScope, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
-import { CircleCheck, Gauge, LoaderCircle, Network, Sparkles, UserRound, Users, X } from '@lucide/vue'
+import { CircleCheck, Coins, Gauge, GitBranch, LoaderCircle, Network, Sparkles, Timer, UserRound, Users, X } from '@lucide/vue'
 import type { ChatSummary, ToolTally, TranscriptIndex, TranscriptItem } from '@shared/protocol'
-import { tallyTools } from '@shared/transcript-index'
+import { IDLE_GAP_MS, tallyTools } from '@shared/transcript-index'
 import { newSessionGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
@@ -25,10 +25,12 @@ import { connectorList, watchConnectors } from '@/components/connectors/connecti
 import { useClock } from '@/lib/clock'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { cleared } from '@/components/tasks/api'
-import { canStop, elapsedOf, latestTodoList, panelLists, type TaskUnit } from '@/components/tasks/logic'
+import { canStop, elapsedOf, formatElapsed, latestTodoList, panelLists, type TaskUnit } from '@/components/tasks/logic'
 import { useSessionTasks } from '@/components/tasks/session'
 import { holdPeek } from '@/components/session-header/state'
-import { formatCompact } from '@/components/session-header/logic'
+import { ah } from '@/components/session-header/ah'
+import { formatCompact, usageDetail, usageSummary, type AhUsage } from '@/components/session-header/logic'
+import { cachedConnectors, keepConnectors, keepRailFacts, railFacts } from './rail-cache'
 import RailCard from './RailCard.vue'
 import DelegationPanel from './DelegationPanel.vue'
 import { delegationStats, type DelegationService, type ServiceStats } from './delegation'
@@ -87,7 +89,7 @@ onBeforeUnmount(() => {
   clearTimeout(panelTimer)
 })
 
-// Environment and Context: a Hydra Desk chat's own; an outside session's come from its header.
+// Environment and Context: a Hydra Desk chat's own; an outside session's come from its header, all but its active time.
 const SERVICE: Record<string, string> = { codex: 'Codex', chatgpt: 'ChatGPT' }
 const account = computed(() => {
   const c = props.chat
@@ -109,6 +111,48 @@ const contextColor = computed(() => (context.value === null ? '' : context.value
 const meterNote = computed(() => (outsideWindow.value !== null ? `${formatCompact(outsideContext.value!)} of ${formatCompact(outsideWindow.value)}` : cost.value))
 const contextSummary = computed(() =>
   context.value !== null ? `${context.value}% used` : outsideContext.value !== null ? `${formatCompact(outsideContext.value)} tokens` : undefined
+)
+
+// Active: how long the session was working over its whole transcript (the index's activeMs), not the time since it began.
+const activeText = computed(() => (props.index?.activeMs ? `${formatElapsed(props.index.activeMs)} active` : null))
+const ACTIVE_TIP = `Time this chat spent working: each turn from its prompt to its last step, its tools' runs included. A wait of over ${IDLE_GAP_MS / 60_000} minutes with nothing running (on you, a permission or a background task) is left out.`
+
+// A Desk chat's tokens: AgentHydra's count over its session, the HSwarm and CliMayte work it handed off included (an
+// outside session's are its header's, drawn into this card). The last count seen for the session shows at once (rail-cache.ts)
+// and the fresh read replaces it; it is read when the chat opens and again when a turn ends. A Codex chat is not in that
+// count (the daemon answers a Codex thread "source-unsupported"): its running total comes on the chat itself.
+const deskUsage = shallowRef<AhUsage | null>(null)
+const isCodex = computed(() => props.chat?.service === 'codex')
+const deskSession = computed(() => (props.outside || isCodex.value ? null : (props.chat?.sessionId ?? null)))
+async function readDeskUsage(id: string) {
+  const u = await ah.usage({ session_id: id, source: 'claude' }).catch(() => null)
+  if (deskSession.value !== id) return
+  deskUsage.value = u
+  if (u?.status === 'ok') keepRailFacts(id, { usage: u })
+}
+watch(
+  deskSession,
+  (id) => {
+    deskUsage.value = id ? (railFacts(id)?.usage ?? null) : null
+    if (id) void readDeskUsage(id)
+  },
+  { immediate: true }
+)
+watch(
+  () => props.chat?.status,
+  (now, before) => {
+    if (deskSession.value && before === 'working' && now !== 'working') void readDeskUsage(deskSession.value)
+  }
+)
+// An outside Codex session's comes from its rollout's running total (the index's sessionTokens): the daemon's usage route
+// answers Codex "source-unsupported", so its header shows no tokens.
+const codexTokens = computed(() => {
+  if (props.outside) return props.index?.sessionTokens ?? null
+  return isCodex.value && props.chat?.tokensUsed ? props.chat.tokensUsed : null
+})
+const deskUsageText = computed(() => (codexTokens.value !== null ? `${formatCompact(codexTokens.value)} tokens` : deskSession.value ? usageSummary(deskUsage.value) : null))
+const deskUsageTip = computed(() =>
+  codexTokens.value !== null ? `${codexTokens.value.toLocaleString()} tokens this Codex thread has used so far. No cost is shown: a Codex plan is not billed per token.` : usageDetail(deskUsage.value)
 )
 
 // To-dos: the session's latest checklist, while it has one.
@@ -158,12 +202,13 @@ const serverCalls = computed(() => {
 })
 const connectors = computed<RailConnector[]>(() => {
   const list: RailConnector[] = props.chat
-    ? (connectorList.value ?? []).filter((c) => c.givesChats).map((c) => ({ id: c.id, name: c.name, state: c.state, reason: c.reason, calls: serverCalls.value.get(c.id) ?? 0 }))
+    ? (connectorList.value ?? cachedConnectors() ?? []).filter((c) => c.givesChats).map((c) => ({ id: c.id, name: c.name, state: c.state, reason: c.reason, calls: serverCalls.value.get(c.id) ?? 0 }))
     : [...serverCalls.value].map(([id, calls]) => ({ id, name: serverName(id), calls }))
   return list.sort((a, b) => b.calls - a.calls)
 })
 const connectorsOpen = ref(false)
 const connectorsShown = computed(() => (connectorsOpen.value ? connectors.value : connectors.value.slice(0, CONNECTORS_SHOWN)))
+watch(connectorList, (list) => list && keepConnectors(list))
 let stopConnectors: (() => void) | null = null
 onMounted(() => (stopConnectors = watchConnectors(() => 30_000)))
 onBeforeUnmount(() => stopConnectors?.())
@@ -177,12 +222,17 @@ const tasksSummary = computed(() => (lists.value.running.length ? `${lists.value
 
 // Delegation: what this chat sent to HSwarm and CliMayte, from the session's own reads (the whole session, the newest finished
 // ones) and the live lists for the ones it dispatched since. Its panel slides over the cards as the Background tasks panel does.
-const delegation = computed(() => {
+const liveDelegation = computed(() => {
   const sid = props.sessionId
   const mine = (id: string | null | undefined) => !!sid && id === sid
   const workers = [...(own.value?.workers ?? []), ...src.workers.value.filter((w) => mine(w.originSessionId))]
   const live = [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value].filter((j) => mine(j.callerSessionId) || mine(j.callerHostSessionId))
   return delegationStats(workers, [...(own.value?.jobs ?? []), ...live])
+})
+// Until the session's own read lands, the stats last seen for it stand in (numbers and labels only).
+const delegation = computed(() => (own.value || !props.sessionId ? liveDelegation.value : (railFacts(props.sessionId)?.delegation ?? liveDelegation.value)))
+watch(liveDelegation, (stats) => {
+  if (props.sessionId && own.value && stats.length) keepRailFacts(props.sessionId, { delegation: stats })
 })
 const delegationRuns = computed(() => delegation.value.reduce((n, s) => n + s.runs, 0))
 const delegationSummary = computed(() => `${delegationRuns.value.toLocaleString()} ${delegationRuns.value === 1 ? 'run' : 'runs'}`)
@@ -281,6 +331,10 @@ const NO_STOP = 'Only the session that started it can stop this task'
               <UserRound :class="RAIL_ICON" aria-hidden="true" />
               <span class="min-w-0 flex-1 truncate text-text">{{ account }}</span>
             </li>
+            <li v-if="chat.gitBranch" :class="RAIL_ROW" data-testid="rail-branch">
+              <GitBranch :class="RAIL_ICON" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate text-text">{{ chat.gitBranch }}</span>
+            </li>
             <li :class="RAIL_ROW">
               <Sparkles :class="RAIL_ICON" aria-hidden="true" />
               <span class="min-w-0 flex-1 truncate text-text">{{ model }}</span>
@@ -288,7 +342,7 @@ const NO_STOP = 'Only the session that started it can stop this task'
           </ul>
         </RailCard>
 
-        <RailCard v-if="outside || context !== null" id="context" title="Context" :summary="contextSummary">
+        <RailCard v-if="outside || context !== null || deskUsageText || activeText" id="context" title="Context" :summary="contextSummary">
           <!-- The share: a Desk chat's, or an outside session's whose file names the window. -->
           <div v-if="context !== null" class="px-1.5 pb-1.5" data-testid="rail-context-meter">
             <div class="flex h-6.5 items-center gap-2">
@@ -311,6 +365,24 @@ const NO_STOP = 'Only the session that started it can stop this task'
             </li>
           </ul>
           <div v-if="outside" :id="RAIL_TARGETS.context" class="flex flex-col" />
+          <ul v-if="deskUsageText || activeText" class="flex flex-col">
+            <li v-if="deskUsageText">
+              <Tip :label="deskUsageTip">
+                <span :class="RAIL_ROW" tabindex="0" aria-label="Tokens and cost" data-testid="rail-usage">
+                  <Coins :class="RAIL_ICON" aria-hidden="true" />
+                  <span class="tnum min-w-0 flex-1 truncate text-text">{{ deskUsageText }}</span>
+                </span>
+              </Tip>
+            </li>
+            <li v-if="activeText">
+              <Tip :label="ACTIVE_TIP">
+                <span :class="RAIL_ROW" tabindex="0" data-testid="rail-active">
+                  <Timer :class="RAIL_ICON" aria-hidden="true" />
+                  <span class="tnum min-w-0 flex-1 truncate text-text">{{ activeText }}</span>
+                </span>
+              </Tip>
+            </li>
+          </ul>
         </RailCard>
 
         <RailCard v-if="todos" id="todos" title="To-dos" :summary="`${todosDone} of ${todos.length} done`">

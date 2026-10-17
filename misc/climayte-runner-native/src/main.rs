@@ -39,10 +39,13 @@ mod signal;
 use json::Json;
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const WAIT_TIMEOUT: u32 = 0x102;
 /// How often the job's live process count is read for `peakProcesses`.
@@ -70,6 +73,17 @@ struct Spec {
     signal: Option<(String, String)>,
     /// The most processes the worker's tree may have alive at once, the runner included.
     max_processes: Option<u32>,
+    /// Present when the CLI takes its messages as stream-json on stdin: the runner keeps that stdin
+    /// open so a message can reach the CLI mid-turn, and closes it when the turn's result shows.
+    deliver: Option<DeliverSpec>,
+}
+
+struct DeliverSpec {
+    token: String,
+    /// Written once the CLI's stdin is open; the daemon reads the loopback port from it.
+    port_file: String,
+    /// One line per message the runner accepted into the CLI's stdin.
+    delivered: String,
 }
 
 impl Spec {
@@ -99,7 +113,16 @@ impl Spec {
             )),
             _ => None,
         };
+        let deliver = match j.get("deliver") {
+            Some(d @ Json::Obj(_)) => Some(DeliverSpec {
+                token: d.get("token")?.as_str()?.to_string(),
+                port_file: d.get("portFile")?.as_str()?.to_string(),
+                delivered: d.get("delivered")?.as_str()?.to_string(),
+            }),
+            _ => None,
+        };
         Some(Spec {
+            deliver,
             argv,
             cwd: text("cwd")?,
             env,
@@ -180,18 +203,31 @@ fn run() -> i32 {
         return 1;
     }
     let job = job::Job::contain(spec.max_processes);
+    let sink: signal::Sink = Arc::new(Mutex::new(None));
     // The wind-down hook is answered from here once the settings say so; if they cannot be
     // rewritten the CLI keeps the shell form the daemon wrote, and no port is held.
-    if let Some((file, settings)) = &spec.signal {
-        signal::serve(PathBuf::from(file), Path::new(settings));
-    }
-    let mut child = match start(&spec) {
-        Ok(child) => child,
+    let port = match &spec.signal {
+        Some((file, settings)) => signal::serve(
+            PathBuf::from(file),
+            Path::new(settings),
+            spec.deliver.as_ref().map(|d| signal::Deliver {
+                token: d.token.clone(),
+                sink: Arc::clone(&sink),
+                delivered: PathBuf::from(&d.delivered),
+            }),
+        ),
+        None => None,
+    };
+    let (mut child, tee) = match start(&spec, &sink) {
+        Ok(started) => started,
         Err(e) => {
             write_exit(&spec.exit_file, vec![("error", Json::str(e))]);
             return 1;
         }
     };
+    if let (Some(port), Some(d)) = (port, &spec.deliver) {
+        publish_port(&d.port_file, port);
+    }
     write_json(
         &spec.pid_file,
         &Json::obj(vec![
@@ -226,6 +262,13 @@ fn run() -> i32 {
         Ok(status) => status.code().map_or(Json::Null, |c| Json::num(c as u32)),
         Err(_) => Json::Null,
     };
+    if let Some(d) = &spec.deliver {
+        let _ = std::fs::remove_file(&d.port_file);
+    }
+    *sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if let Some(done) = tee {
+        let _ = done.recv_timeout(TEE_FLUSH);
+    }
     let left = job.as_ref().map(|j| j.leftovers(me)).unwrap_or_default();
     let mut fields = vec![("code", code)];
     if !left.is_empty() {
@@ -261,10 +304,14 @@ fn open_out(path: &str, fresh: bool) -> std::io::Result<File> {
     }
 }
 
-fn start(spec: &Spec) -> Result<std::process::Child, String> {
+/// The CLI's stdout copy finished, which the runner waits for at most this long after the CLI ends.
+const TEE_FLUSH: Duration = Duration::from_secs(2);
+
+type Tee = Receiver<()>;
+
+fn start(spec: &Spec, sink: &signal::Sink) -> Result<(std::process::Child, Option<Tee>), String> {
     let program = program(&spec.argv[0], &spec.env, Path::new(&spec.cwd))?;
     let fail = |what: &str, e: std::io::Error| format!("{what}: {e}");
-    let stdin = File::open(&spec.stdin).map_err(|e| fail(&format!("open {}", spec.stdin), e))?;
     let stdout = open_out(&spec.stdout, spec.fresh)
         .map_err(|e| fail(&format!("open {}", spec.stdout), e))?;
     let stderr = if spec.fresh && spec.stderr == spec.stdout {
@@ -272,16 +319,90 @@ fn start(spec: &Spec) -> Result<std::process::Child, String> {
     } else {
         open_out(&spec.stderr, spec.fresh).map_err(|e| fail(&format!("open {}", spec.stderr), e))?
     };
-    Command::new(&program)
+    let mut command = Command::new(&program);
+    command
         .args(&spec.argv[1..])
         .current_dir(&spec.cwd)
         .env_clear()
         .envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    if spec.deliver.is_none() {
+        let stdin = File::open(&spec.stdin).map_err(|e| fail(&format!("open {}", spec.stdin), e))?;
+        return command
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .spawn()
+            .map(|child| (child, None))
+            .map_err(|e| fail(&format!("start {}", program.display()), e));
+    }
+    let prompt = std::fs::read(&spec.stdin).map_err(|e| fail(&format!("read {}", spec.stdin), e))?;
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| fail(&format!("start {}", program.display()), e))
+        .map_err(|e| fail(&format!("start {}", program.display()), e))?;
+    let (Some(out), Some(mut stdin)) = (child.stdout.take(), child.stdin.take()) else {
+        return Err("the CLI's stdio pipes are missing".into());
+    };
+    let (done, tee) = std::sync::mpsc::channel();
+    let tee_sink = Arc::clone(sink);
+    std::thread::spawn(move || {
+        copy_stdout(out, stdout, &tee_sink);
+        let _ = done.send(());
+    });
+    stdin
+        .write_all(&prompt)
+        .and_then(|_| stdin.flush())
+        .map_err(|e| fail("write the prompt", e))?;
+    *sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(stdin));
+    Ok((child, Some(tee)))
+}
+
+/// Copies the CLI's stdout into its log as it arrives. The turn's `result` line closes the CLI's
+/// stdin, so the CLI exits once its turn is over; a message after that finds the stdin closed.
+fn copy_stdout(mut out: std::process::ChildStdout, mut log: File, sink: &signal::Sink) {
+    let mut chunk = [0u8; 16 * 1024];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut turn_over = false;
+    loop {
+        let n = match out.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => n,
+        };
+        let _ = log.write_all(&chunk[..n]).and_then(|_| log.flush());
+        if turn_over {
+            continue;
+        }
+        pending.extend_from_slice(&chunk[..n]);
+        while let Some(end) = pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if is_result(&line) {
+                turn_over = true;
+                *sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                break;
+            }
+        }
+    }
+}
+
+fn is_result(line: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return false;
+    };
+    if !text.contains("\"type\":\"result\"") {
+        return false;
+    }
+    json::parse(text.trim())
+        .and_then(|j| j.get("type").and_then(Json::as_str).map(|t| t == "result"))
+        .unwrap_or(false)
+}
+
+/// The port is written whole or not at all, so a reader never sees half of one.
+fn publish_port(path: &str, port: u16) {
+    let tmp = format!("{path}.tmp");
+    if std::fs::write(&tmp, port.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
 }
 
 /// The extensions Bun.spawn runs as given, in the order it tries them on a name without one.

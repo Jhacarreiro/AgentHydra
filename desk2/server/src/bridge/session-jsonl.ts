@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { historyBuilder, historyToItems, parseJsonl, type HistoryOptions } from '../engine/normalize'
 import { mediaCache } from '../media/cache'
+import { fsSlot, mapFs } from '../fs-pool'
 import { readTail, TAIL_BYTES } from './session-tail'
 
 /** How a session file's records become items: with the media cache, so a Read of a picture, a screenshot and the
@@ -89,15 +90,15 @@ export async function findSessionJsonlAsync(sessionId: string, roots: string[], 
   if (!SESSION_ID.test(sessionId)) return null
   const file = `${sessionId}.jsonl`
   const consider = async (path: string) => {
-    const st = await stat(path).catch(() => null)
+    const st = await fsSlot(() => stat(path)).catch(() => null)
     return st?.isFile() ? { path, mtime: st.mtimeMs } : null
   }
   const found = (list: ({ path: string; mtime: number } | null)[]) => list.filter((h): h is { path: string; mtime: number } => h !== null)
-  let hits = cwd ? found(await Promise.all(roots.map((root) => consider(join(root, encodeProjectDir(cwd), file))))) : []
+  let hits = cwd ? found(await mapFs(roots, (root) => consider(join(root, encodeProjectDir(cwd), file)))) : []
   if (!hits.length) {
     for (const root of roots) {
-      const projects = await readdir(root).catch(() => [] as string[])
-      hits.push(...found(await Promise.all(projects.map((p) => consider(join(root, p, file))))))
+      const projects = await fsSlot(() => readdir(root)).catch(() => [] as string[])
+      hits.push(...found(await mapFs(projects, (p) => consider(join(root, p, file)))))
     }
   }
   if (!hits.length) return null
@@ -307,17 +308,22 @@ function trimWindow(m: Memo, items: TranscriptItem[], keep: number, cap: number)
   let pin = open.size ? m.recs.findIndex((r) => r.uses?.some((id) => open.has(id))) : -1
   if (pin < 0) pin = m.recs.length
   let dropped = 0
-  while (m.recs.length > 1 && m.bytes > keep) {
-    let j = 1
+  let from = 0
+  while (m.recs.length - from > 1 && m.bytes > keep) {
+    let j = from + 1
     while (j < m.recs.length && m.recs[j]!.mid !== undefined && m.recs[j]!.mid === m.recs[j - 1]!.mid) j++
     if (j >= m.recs.length) break
     if (j > pin && m.bytes <= cap) break
-    for (const r of m.recs.splice(0, j)) {
+    for (let i = from; i < j; i++) {
+      const r = m.recs[i]!
       m.bytes -= r.bytes
       dropped += r.bytes
     }
-    pin -= j
+    from = j
   }
+  // Decide the whole prefix before moving the survivors: shifting them once per old message
+  // makes a tail with many short records quadratic to trim.
+  if (from) m.recs.splice(0, from)
   return dropped
 }
 

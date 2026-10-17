@@ -14,6 +14,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
+import { useSidebarSort } from '@/components/sidebar/sort'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
 import ProjectRing from '@/components/sidebar/ProjectRing.vue'
@@ -87,10 +88,12 @@ const ringOf = (r: CloudSession): StatusGlyph => (r.archived ? IDLE_GLYPH : (pro
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
 const hiddenGroups = useHiddenGroups()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
-// Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares;
-// not in select mode, nor while a search or a filter narrows the list.
+// Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares; only in Manual
+// (sidebar/sort.ts), where the order dragged into is the one shown. Not in select mode, nor while a search or a filter
+// narrows the list.
 const rowDrag = useRowDrag()
-const canDrag = computed(() => !cloud.selectMode.value && !cloud.search.value.trim() && !scopesNarrowed(cloud.scopes.value))
+const { sort: sortMode } = useSidebarSort()
+const canDrag = computed(() => sortMode.value === 'manual' && !cloud.selectMode.value && !cloud.search.value.trim() && !scopesNarrowed(cloud.scopes.value))
 const collapsed = ref(new Set<string>())
 function toggleGroup(key: string) {
   const next = new Set(collapsed.value)

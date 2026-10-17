@@ -6,8 +6,7 @@ import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSe
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import type { HeadlessAudioState } from '@shared/headless-audio'
-import { routinesFixtures, cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
-import { routineDetailsFixture } from '@/dev/routine-details-fixture'
+import { cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
 import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import type { ComposerApi } from '@/components/composer/api'
@@ -318,12 +317,6 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     models: async () => MODELS,
     health: async () => ({ ok: true, version: '0.1.0' }),
     bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
-    babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
-    instanceManager: async () => ({ enabled: true, everyMs: 20_000, checkedAt: null, nextCheckAt: null, instances: [], recoveries: [], error: null }),
-    routines: async () => routinesFixtures,
-    routinesAct: async () => routinesFixtures,
-    routineDetails: async (_id, before = null, limit = 50) => routineDetailsFixture(before, limit),
-    orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),
     accounts: async () => sceneAccounts(scene),

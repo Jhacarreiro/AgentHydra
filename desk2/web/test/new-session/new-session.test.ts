@@ -144,8 +144,8 @@ describe('stats card', () => {
       agentMinutes: 86_936,
       heat: [],
       sources: [
-        { key: 'desktop', label: 'Claude desktop', sessions: 311, messages: 224_761, tokens: 61_746_567_890, costUsd: 21_376.3 },
-        { key: 'opencode', label: 'OpenCode', sessions: 4, messages: 4, tokens: 999_950, costUsd: null }
+        { key: 'desktop', label: 'Claude desktop', sessions: 311, messages: 224_761, tokens: 61_746_567_890, costUsd: 21_376.3, since: '2026-06-30' },
+        { key: 'opencode', label: 'OpenCode', sessions: 4, messages: 4, tokens: 999_950, costUsd: null, since: '2026-02-06' }
       ],
       models: [
         { key: 'claude-opus-5-5', sessions: 40 },
@@ -169,7 +169,12 @@ describe('stats card', () => {
       ['HSwarm tasks', '–'],
       ['Cost at API rates', '$257,672']
     ])
-    expect(tiles[2]!.title).toBe('Input 2,000,000,000\nCache read 480,000,000,000\nCache write 5,000,000,000\nOutput 600,000,000')
+    // All time says where each source's record begins, oldest first: older use was never kept.
+    expect(tiles[2]!.title).toBe(
+      'Input 2,000,000,000\nCache read 480,000,000,000\nCache write 5,000,000,000\nOutput 600,000,000\nRecorded since: OpenCode Feb 6, 2026 · Claude desktop Jun 30, 2026'
+    )
+    expect(homeTiles({ ...home, range: '30d' })[2]!.title).not.toContain('Recorded since')
+    expect(homeSources(home)[0]!.title).toBe('Claude desktop: 311 sessions, 224,761 messages, 61,746,567,890 tokens, recorded since Jun 30, 2026')
     expect(tiles[3]!.title).toBe('1,449 hours of agent time')
     expect(tiles[6]!.title).toBe('37 runs stopped at a usage limit\n$3,788 at API rates')
     expect(tiles[7]!.title).toBe('HSwarm did not answer (502)')

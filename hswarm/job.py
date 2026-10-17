@@ -282,7 +282,7 @@ class Job:
         path = config.JOBS_DIR / job_id / "results.jsonl"
         if not path.exists():
             return doc
-        live = _read_live_rows(path)
+        live = _journal_rows(job_id)
         if not live:
             return doc
         results = {**doc.get("results", {}), **live}
@@ -400,12 +400,55 @@ def _live_rows(text: str) -> dict[str, dict]:
     return live
 
 
-def _read_live_rows(path: Path) -> dict[str, dict]:
-    """_live_rows of the file at `path`; empty when it cannot be read."""
-    try:
-        return _live_rows(path.read_text(encoding="utf-8"))
-    except OSError:
+_JOURNAL_ROWS: dict[tuple, tuple[dict, int]] = {}  # stamp -> (rows by task id, journal text length), oldest first
+_JOURNAL_BYTES = 64 << 20  # a cap on the journal text behind the kept rows (the parsed rows take a few times that)
+_JOURNAL_LOCK = threading.Lock()
+
+
+def _journal_stamp(job_id: str) -> tuple | None:
+    """What a read of the job's results.jsonl comes from: the folder file's identity, else the archive's (a zipped job,
+    or a cold job's day archive, shared with its neighbours, so the job id is part of the key)."""
+    from . import archive, history
+
+    for p in (archive.job_dir(job_id) / "results.jsonl", archive.archive_path(job_id)):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        return (job_id, str(p), st.st_ino, st.st_mtime_ns, st.st_size)
+    day = history.job_day_stamp(job_id)
+    return None if day is None else (job_id, *day)
+
+
+def _journal_rows(job_id: str) -> dict[str, dict]:
+    """_live_rows of the job's results.jsonl; empty when it cannot be read. A read is kept under its _journal_stamp
+    only when the stamp holds before and after it, and the text ends on a newline (no half-written last line)."""
+    stamp = _journal_stamp(job_id)
+    if stamp is None:
         return {}
+    if (hit := _JOURNAL_ROWS.get(stamp)) is not None:
+        return _fresh_rows(hit[0])
+    from . import archive
+
+    text = archive.read_text(job_id, "results.jsonl")
+    if text is None:
+        return {}
+    rows = _live_rows(text)
+    if _journal_stamp(job_id) != stamp or (text and not text.endswith("\n")):
+        return rows
+    with _JOURNAL_LOCK:
+        for k in [k for k in _JOURNAL_ROWS if k[0] == job_id]:  # an append or a move made the job's older rows dead
+            del _JOURNAL_ROWS[k]
+        _JOURNAL_ROWS[stamp] = (rows, len(text))
+        while sum(n for _, n in _JOURNAL_ROWS.values()) > _JOURNAL_BYTES:
+            del _JOURNAL_ROWS[next(iter(_JOURNAL_ROWS))]
+    return _fresh_rows(rows)
+
+
+def _fresh_rows(rows: dict[str, dict]) -> dict[str, dict]:
+    """The kept rows, each a copy: an answer is cut in place for the MCP reply (spec.brief_row), which must never
+    reach the kept row the next caller reads."""
+    return {k: dict(v) if isinstance(v, dict) else v for k, v in rows.items()}
 
 
 def fold_journal(job_id: str, doc: dict) -> dict:
@@ -417,13 +460,12 @@ def fold_journal(job_id: str, doc: dict) -> dict:
     summary = doc.get("summary")
     if not isinstance(summary, dict) or not summary.get("finished"):
         return doc
-    from . import archive
 
     results = doc.get("results") or {}
     ids = [t.get("id") for t in doc.get("tasks") or [] if isinstance(t, dict)]
     if all(i in results for i in ids):
         return doc
-    rows = {**_live_rows(archive.read_text(job_id, "results.jsonl") or ""), **results}
+    rows = {**_journal_rows(job_id), **results}
     ordered = {i: rows.pop(i) for i in ids if i in rows}
     return {**doc, "results": {**ordered, **rows}}
 

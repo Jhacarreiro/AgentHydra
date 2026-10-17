@@ -50,8 +50,8 @@
 // POST `edit` changes the keys it names (null removes one), and the file must still check out.
 //
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
-// <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
-// Managers > Routines.
+// <desk home>/routines/proposed/<id>.json with a required "why" and never runs until it is approved: by the owner in Settings >
+// Managers > Routines, or by an agent the owner told to (POST approve, open to any caller since 2026-10-16).
 //
 // CENTRAL ROUTINES (owner, 2026-10-15: "move these Routines ... into some sort of centralized location? In the cranium ...
 // for other people to use this"). When <desk home>/routines-store.json names a store, the manager also reads the routines
@@ -67,13 +67,17 @@
 //   kind "routine", format "routine/1", title (its name), askedBy, why (while it is a proposal), the contract's WHEN and
 //   WHAT keys above (a "schedule" also names its IANA "timeZone"), its folder as "workdir": { "repo", "path" } (found
 //   through "repos" on each computer) or "cwd" (a full path, or one starting with ~/), "runsOn" (the runner labels it
-//   runs on), timeoutMinutes, until, describe, and "approval". Its prompt is the body. A document runs only once a person
+//   runs on), "eachRunner" (optional true or false), timeoutMinutes, until, describe, and "approval". Its prompt is the
+//   body. A document runs only once a person
 //   approved it: "approval" is an Ed25519 signature over its id and everything in it but the approval, by this computer's
 //   approver key (<desk home>/routines-approver.key, made with the store) or one listed in "approvers". An AI may write a
 //   proposal there (POST propose with "store": "central"), never an approval; any change after an approval makes it a
 //   proposal again. A schedule keeps its "timeZone" on every runner, and so does its "until" day.
 // WHERE IT RUNS: only on a runner that carries every label its runsOn names. When one of them is a runner's name it is
-//   pinned to that runner and runs as a local routine does. When none is, any runner carrying them may run it (a schedule
+//   pinned to that runner and runs as a local routine does. "eachRunner": true makes every runner carrying them run its
+//   own, each as a local routine, never claimed (any kind, status included): work each computer does over its own data,
+//   such as learning from that computer's chats (owner, 2026-10-17: AgentHydra, "while it's running, manage this stuff",
+//   on every owner's computer). When neither, any runner carrying them may run it (a schedule
 //   routine only) and exactly one runs each slot: before a slot runs, its runner claims it on the store's run board (the
 //   CrAInium's `routine_runs` tool, under the same repo key), which grants it to the first runner that asks, with a lease
 //   of twice its timeout that the holder renews while the run lives; a lease that lapsed lets another runner take the
@@ -83,6 +87,29 @@
 //   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is not
 //   listed (the store's `problems` name it): the file runs. The manager keeps a copy of each document in
 //   <desk home>/routines/central/ and runs from it while the store cannot be reached.
+// MOVING A ROUTINE (ROUTINES.md 7.7: one at a time, on the owner's say): the owner's Move to central on one of this
+//   computer's routines (POST `move`, any caller, refused without a store) writes it to the store as a document pinned
+//   to this runner (runsOn its name), so it runs here as it did: a schedule keeps this computer's time zone, its folder
+//   becomes the workdir of the checkout "repos" names that holds it (else ~/ in this computer's home; in neither, the move is
+//   refused), and a command argument in this home starts with ~/. The file runs on meanwhile (`moving` on its card), and the
+//   document waits as a proposal (`moving` there too). The owner's approve signs it into the store and retires the file to
+//   <desk home>/routines/moved/ in the same step, so the routine runs from the store, never from both; it keeps its id and
+//   its runs. The owner's discard takes the document out of the store, and the file runs on.
+
+// GROUP AND CAMPAIGNS (owner, 2026-10-16: a Routines tab with the routines "grouped into folders", and the CrAInium's
+//   Campaigns arm connected to AgentHydra). Two optional keys say where a routine belongs; neither changes what a run does:
+//   "group"      the folder the Tools tab's Routines group lists it under (a company, say): 1 to 40 characters.
+//   "campaigns"  the campaigns of the CrAInium's Campaigns arm it works for: 1 to 10 campaign ids (CAMPAIGN_ID).
+//   A central document keeps them in its front matter outside its approval, as it keeps "description", so setting them
+//   leaves the routine approved and running. POST `meta` sets them on a routine (any caller); GET /api/routines/:id/campaigns
+//   reads each named campaign's ledger (the CrAInium's `campaigns` tool, through the person's Connections server).
+
+/** A campaign id, as the Campaigns arm names one. */
+export const CAMPAIGN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+/** The most campaigns one routine names. */
+export const CAMPAIGNS_MAX = 10
+/** The longest group name. */
+export const GROUP_MAX = 40
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
@@ -181,6 +208,10 @@ export interface RoutineDefinition {
   until?: string
   describe?: boolean
   modes?: RoutineModes
+  /** The Tools tab's Routines folder for it (GROUP AND CAMPAIGNS above). */
+  group?: string
+  /** The campaigns it works for (GROUP AND CAMPAIGNS above). */
+  campaigns?: string[]
 }
 
 /** A proposal an AI wrote: the definition, plus why it should be a routine rather than a background task it runs itself. */
@@ -190,6 +221,8 @@ export interface RoutineProposal extends RoutineDefinition {
   source?: 'central'
   /** A central proposal's runner labels. */
   runsOn?: string[]
+  /** A central proposal that moves this computer's routine of the same id to the store: approving it retires that file. */
+  moving?: true
 }
 
 /** POST propose's object: a proposal, and for one kept in the central store `store: "central"` with its central keys
@@ -270,6 +303,12 @@ export interface Routine {
   timeZone?: string
   /** A central routine's newest run, wherever it ran (the run log); null when none is known. */
   latestRun?: CentralRun | null
+  /** This computer's routine is moving to the central store: its document waits for the owner's approve (proposals). */
+  moving?: true
+  /** The Tools tab's Routines folder for it, or null (GROUP AND CAMPAIGNS above). */
+  group: string | null
+  /** The campaigns it works for, or null when it names none. */
+  campaigns: string[] | null
 }
 
 /** GET /api/routines. */
@@ -289,8 +328,10 @@ export interface RoutinesStatus {
 }
 
 /**
- * POST /api/routines. One action per call besides `enabled`. The window (X-Desk-Caller: window) may do every action; an
- * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `edit` sets the keys of a routine's file that
+ * POST /api/routines. One action per call besides `enabled`. Any caller (the window or an agent) may do `run`, `pause`,
+ * `propose`, `approve`, `move` and `meta`. The window only (X-Desk-Caller: window) may do `resume`, `discard`, `edit`, `mode`
+ * and `enabled`; an agent gets 403 for those. `move` moves a routine file to the central
+ * store (MOVING A ROUTINE above). `edit` sets the keys of a routine's file that
  * `set` names (null removes one: `until`, say), every other key as it was; 409 with the reason when the result does not
  * check out, and the file is left alone. `mode` runs the routine's `modes.set` with `value` appended (400 when `value` is
  * not one of its options, 500 with the command's last line when it fails) and reads its status again.
@@ -302,9 +343,13 @@ export interface RoutinesRequest {
   resume?: string
   approve?: string
   discard?: string
+  move?: string
   propose?: RoutineProposalRequest
   edit?: { id: string; set: Record<string, unknown> }
   mode?: { id: string; value: string }
+  /** Set a routine's group and campaigns (any caller): a key it names is set, null removes it, an absent one is kept.
+   *  Its approval and its runs are untouched. 400 when a value does not check out, 404 for no such routine. */
+  meta?: { id: string; group?: string | null; campaigns?: string[] | null }
 }
 
 /** The whole-history numbers of GET /api/routines/:id/details. Times in ms; rates 0 to 1, null when nothing counts. */
@@ -346,4 +391,60 @@ export interface RoutineDetails {
   headline: string | null
   numbers: Record<string, number> | null
   trends: Record<string, Record<string, RoutineTrend>> | null
+}
+
+/** One campaign's ledger as a routine's page shows it (GET /api/routines/:id/campaigns): the Campaigns arm's own record and
+ *  numbers, never an address. Times in ms. */
+export interface CampaignLedger {
+  id: string
+  name: string
+  /** running, held, paused or stopped. */
+  status: string
+  /** Why it is held, paused or stopped, in the campaign's words; null when it says nothing. */
+  statusWhy: string | null
+  goal: string | null
+  cadence: string | null
+  /** What is being worked on now and what comes next: the campaign's own lines. */
+  now: string[]
+  next: string[]
+  /** Addresses ready to send, summed over its lanes; null when no lane says. */
+  ready: number | null
+  /** The ledger's totals over every touch of this campaign; null when it has none. */
+  numbers: {
+    sent: number
+    replied: number
+    bounced: number
+    optedOut: number
+    paid: number
+    followUps: number
+    pending: number
+    lastSentAt: number | null
+  } | null
+  /** First contacts sent per UTC day, oldest first, at most the last 14 days with a send. */
+  days: { day: string; sent: number }[]
+  /** Its newest run lines, newest first (at most 5): one line per routine run or half-day of sends. */
+  runs: {
+    at: number
+    routine: string | null
+    sent: number | null
+    replies: number | null
+    bounces: number | null
+    queued: number | null
+    note: string
+    problems: string[]
+  }[]
+}
+
+/** GET /api/routines/:id/campaigns: the ledger of each campaign the routine names. */
+export interface RoutineCampaigns {
+  id: string
+  campaigns: CampaignLedger[]
+  /** Ids the routine names that the ledger does not know. */
+  missing: string[]
+  /** Entries on the do-not-contact list every campaign shares; null when it could not be read. */
+  doNotContact: number | null
+  /** When the ledger answered, ms; null when it did not. */
+  readAt: number | null
+  /** Why the ledger could not be read (no Connections server, a refusal); null when it was. */
+  error: string | null
 }

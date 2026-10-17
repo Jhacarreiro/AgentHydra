@@ -11,6 +11,8 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { CLAUDE_MAIN_DIR } from '../config'
+import { readHolders } from '../core/account-holders'
 import { listCliInstances } from '../core/cli-instances'
 import { readKnownAccounts } from '../core/known-accounts'
 import { readPastLogins } from '../core/login-history'
@@ -25,7 +27,13 @@ export interface HSwarmAccountRef {
   kind?: 'desktop' | 'cli'
   /** Not signed in anywhere right now: named from the known-accounts store or a profile's login history. */
   former?: true
+  /** The main config folder (~/.claude): a plain `claude`, the VS Code extension, and every desktop chat whose record
+   *  is gone run there, so its usage is credited to whoever is signed in to it. */
+  main?: true
 }
+
+/** The main folder's name in the account lists: it has no instance number. */
+export const MAIN_CLI_LABEL = 'Main CLI (~/.claude)'
 
 /** The id hswarm prints for an account: hswarm/accounts.py account_id. */
 export function hswarmAccountId(uuid: string): string {
@@ -43,6 +51,9 @@ export interface HSwarmAccountSources {
   known?: Record<string, { name?: string | null; email?: string | null }>
   /** Accounts a desktop profile folder has been signed into, with when each was last busy there (ISO). */
   pastLogins?: (dir: string) => Array<{ accountUuid: string; lastSeenAt: string | null }>
+  /** The main folder (~/.claude): who is signed in to it now, who was before (account-holders.json), and the acct
+   *  ids the usage ledger credited to it of which only the id is left (instance `default`). */
+  main?: { current: string | null; past: string[]; ids: string[] }
 }
 
 function cliAccountUuid(configDir: string): string | null {
@@ -74,6 +85,9 @@ export function hswarmAccountMap(src: HSwarmAccountSources): Record<string, HSwa
   for (const c of [...src.cli].sort((a, b) => a.num - b.num)) {
     add(src.cliUuid(c.configDir), { num: c.num, label: c.name, kind: 'cli' })
   }
+  // The main folder's own login, when no numbered instance holds that account (owner, 2026-10-17: the top row of
+  // Cost by account read as a bare acct id, the main folder's usage, because only numbered instances were named).
+  add(src.main?.current, { label: MAIN_CLI_LABEL, kind: 'cli', main: true })
 
   // Fallback tier: signed-out or moved accounts. Never overrides a current login (`out[id]` is set).
   const last = new Map<string, { num: number; label: string; at: string }>()
@@ -101,7 +115,30 @@ export function hswarmAccountMap(src: HSwarmAccountSources): Record<string, HSwa
       ? { num: where.num, label, kind: 'desktop', former: true }
       : { label, former: true }
   }
+  // Last tier: an earlier login of the main folder that nothing else names, by uuid or by the ledger's id alone.
+  const formerMain = { label: MAIN_CLI_LABEL, kind: 'cli', main: true, former: true } as const
+  for (const uuid of src.main?.past ?? []) add(uuid, formerMain)
+  for (const id of src.main?.ids ?? []) if (!out[id]) out[id] = formerMain
   return out
+}
+
+/** The main folder's past holders and the acct ids the ledger credited to it (its `default` instance). */
+async function mainFolderAccounts(): Promise<NonNullable<HSwarmAccountSources['main']>> {
+  const dir = CLAUDE_MAIN_DIR
+  const past = (readHolders()[dir] ?? []).flatMap((h) => (h.uuid ? [h.uuid] : []))
+  let ids: string[] = []
+  try {
+    const { sharedKitStore } = await import('../kit/query')
+    ids = sharedKitStore()
+      .db.query<{ account: string }, []>(
+        "select distinct account from usage_hour where instance = 'default' and account <> ''",
+      )
+      .all()
+      .map((r) => r.account)
+  } catch {
+    // No ledger yet: the main folder is named by its logins alone.
+  }
+  return { current: cliAccountUuid(dir), past, ids }
 }
 
 /** How long one account map is reused. It names accounts for display, and they change only at a
@@ -126,6 +163,7 @@ async function readAccountMap(): Promise<Record<string, HSwarmAccountRef>> {
     cliUuid: cliAccountUuid,
     known: readKnownAccounts(),
     pastLogins: (dir) => past.get(dir) ?? [],
+    main: await mainFolderAccounts(),
   })
 }
 

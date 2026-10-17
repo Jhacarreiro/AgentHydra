@@ -1,25 +1,26 @@
 # Hydra Core per-message hook
 
-The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hydra router (`managers/router.mjs`) in `settings.json`.
+The hook that runs Hydra Core in a Claude Code chat. It registers the core hooks in `settings.json`; an add-on may add hooks of its own.
 
 ## TL;DR
 
-- Three hook events: `UserPromptSubmit` on every message, `SessionStart` after a compact or resume, `Stop` for the president rule below.
+- Three hook events: `UserPromptSubmit` on every message, `SessionStart` after a compact or resume, `Stop` for the add-on rule below.
 - Core mode is on only while `<core dir>/ON` exists. Without it the hook prints nothing, unless a `CRANIUM` file is there (below).
 - No output for CliMayte workers, for prompts starting with `/`, or for a fresh session.
 - Each message is written to `chats/<key>/prompt.txt` and the working folder to `chats/<key>/cwd.txt`. The injected line is one short block that names `hydra.md`, its lead and its tier.
 - Node 22 or newer, no dependencies. Runs in well under 300 ms.
-- `node hydra-core/install.mjs` registers it and removes the router entry (the router entry is saved, so `--uninstall` puts it back exactly).
+- `node hydra-core/install.mjs` registers it and takes out any entry an add-on asks it to take out (the entry is saved, so `--uninstall` puts it back exactly).
 
 ## Files
 
 - `hook.mjs`: the hook. Reads the hook JSON on stdin. Exports `run`, `handle`, `chatKey`, `parseHydraMd`, `coreDir`, `isWorker`, `skipOf`. Seats (`AGENTHYDRA_ROLE=seat` or a Desk chat in `seat-chats.json`), drones and worker shells get nothing; each skip writes one `hook-skip` line to `log.jsonl` with its reason.
 - `install.mjs`: registers the hook in a `settings.json`. Idempotent. Writes a `.bak-<ms>` backup before any change.
+- `addon.mjs`: finds an add-on checkout (`SUE_DREDD_HOME`, else the `sue-dredd` folder beside this repo) and loads one of its modules. Without one, nothing from an add-on runs.
 - `test/*.test.mjs`: `node:test` suites. Run `node --test hydra-core/test/`.
 
 ## Where things live
 
-- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `CRANIUM`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
+- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `CRANIUM`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and the saved-entry file an add-on names (keyed by settings path) live there.
 - Chat key: `HYDRA_DESK_CHAT_ID` when set, else the Claude `session_id`. Characters outside `A-Za-z0-9_.-` become `_`.
 
 ## The CrAInium flowchart (`CRANIUM`)
@@ -29,12 +30,12 @@ A `<core dir>/CRANIUM` file (empty is fine) moves the core off this PC. The flow
 - Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
 - After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.
 - Fast path: the flowchart's quick exits are kept per folder in `~/.connections/cranium/core-head.json` (`AGENTHYDRA_CRANIUM_HEAD_FILE` overrides it), written by the Connections MCP and used for a day. When a folder has them, the message lists its questions and exits, and the chat answers those itself with no tool call; only answers they do not settle call `connections_core`. A folder marked `none` gets no line. Each turn's Stop appends one line to `~/.connections/cranium/core-outbox.jsonl` (`AGENTHYDRA_CRANIUM_OUTBOX_FILE`): whether the chat walked the core and whether it handed work to a delegate, so the core calls that remain can be counted.
-- Nothing is written under the core folder, and the placement, pack and president rule below are off.
+- Nothing is written under the core folder, and the placement, pack and Stop add-on below are off.
 - Seats, drones and worker shells still get nothing, and their skips are not logged. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
 
-## President rule (Stop)
+## Stop and add-ons
 
-When a chat's last message asks a question and the turn made no owner consult, the `Stop` hook blocks the stop once. The reason tells Claude to ask the owner tier first: `core_use { mode: "consult", id: "person:creaitor" }` or `creaitor.py ask`. The person is asked only when that answer says it needs them. An owner consult is a `core_use` consult of an owner-tier person in `catalog/`, or a Bash/PowerShell `creaitor.py ask`. Each block is appended to `log.jsonl` as `president-block`. The hook allows the stop when `stop_hook_active` is set, for CliMayte workers, when the final paragraph has no question (code blocks are ignored), and on any error.
+On `Stop` the hook hands the decision to an add-on module when its checkout is present, and any failure to load or run it lets the stop through. The hook also allows the stop when `stop_hook_active` is set and for CliMayte workers.
 
 ## Install
 
@@ -53,7 +54,7 @@ The installer writes these entries (the command path is the absolute path of `ho
 "Stop":             [ { "hooks": [ { "type": "command", "command": "node \"<repo>/hydra-core/hook.mjs\"" } ] } ]
 ```
 
-Each event keeps one core entry. Installing from another checkout points the existing entry at this checkout's `hook.mjs` and removes any further `hydra-core/hook.mjs` entries, so moving the hook between checkouts never leaves two. Other hooks are left alone. A Manager Hydra router entry (any command ending in `managers/router.mjs`) is removed, and its group is saved in `router-entry.json`. `--uninstall` removes only the core entries and puts the router back where it was.
+Each event keeps one core entry. Installing from another checkout points the existing entry at this checkout's `hook.mjs` and removes any further `hydra-core/hook.mjs` entries, so moving the hook between checkouts never leaves two. Other hooks are left alone. An add-on may ask install to take out one of its entries; the group is saved in the core folder, and `--uninstall` removes only the core entries and puts the saved entry back where it was.
 
 ## Placement
 
@@ -123,7 +124,7 @@ Desk and CliMayte chats wire the hook themselves. `install.mjs` is for plain CLI
 ## Lead
 
 - By default (ASK absent or on) a slot or file chat picks its own lead: core_scope asks the difficulty question, `no 1` loads nothing, 2 or more shows the persona list, and the pick is written to `hydra.md`'s `## Lead`, which the next launch's slot carries. A chat whose `placement.json` already stores a lead keeps it until `hydra.md` names one. The model pick and lead shift below run only with `<core dir>/ASK` set to `off` (write `off` into `<core dir>/ASK`).
-- With ASK off, a chat's lead is picked once, at its first pack, by one small model call to the HSwarm decide door (`AGENTHYDRA_DECIDE_URL`, default `http://127.0.0.1:7793/api/decide`, token from `AGENTHYDRA_HSWARM_TOKEN_FILE`, default `~/.hswarm/console-token`). It gets the five managers' one-liners from the catalog and answers a manager, or `none`: a message with no work in it (ok, thanks, a greeting, a bare "keep going"), or a small task a chat finishes alone in a few minutes (a fact, a status, a rename, a typo, a git or npm command, a fix of a few lines, a quick question), so a chat that needs no help reads no brief. Size is judged first, and a small task (a bug whose fix is a few lines, or one the message calls quick) is `none` (not Gus) even in a field a manager owns, unless it spends money or changes a database schema, a migration or customers' data (an ad spend or audience change, a schema column or migration), which stays that field's manager's; a message spanning several fields is Marcus's; a continuation that names its work ("continue with the ad bid fix") is that work's; the lead is the field where the fix lives, not where the symptom shows. A launch waits at most 5 s and asks three times (majority), the hook path 1 s and asks once. `AGENTHYDRA_LEAD_MODEL` picks the model; `off` skips the call.
+- With ASK off, a chat's lead is picked once, at its first pack, by the people add-on's `lead` seam (one model call; the question, the model and the decide door are the add-on's, and `AGENTHYDRA_LEAD_MODEL=off` skips the call). A launch waits at most 5 s for it and the hook path 1 s. With no add-on, no manager in the catalog, or when its call fails or runs out of time, the word ranker picks among whoever can be become.
 - The call never blocks an event loop: it is an async fetch with its own timer. The daemon's `/api/core/pack` awaits the pick before it builds the pack, a CliMayte Prime launch is held a scheduler tick while its pick runs (`leadPickPending`), keeping the launch slot it took so later-ranked work does not start in its place (with no model to ask, `AGENTHYDRA_LEAD_MODEL=off`, it is not held), and the Desk server runs the slot build in a child process it awaits. The pack and placement builders themselves never call the model; they take the finished pick.
 - When the call fails or runs out of time the word ranker picks (content words only, the shared `how` text not scored, managers not sorted above stronger experts). Each pick logs `lead-pick` with its path (`model` or `words`) and ms.
 - The lead follows the work (ASK off only): on a substantive owner message (not "keep going" or a chore) that the current lead barely matches, or that the word ranker gives to another lead, the hook asks the model whether the lead still fits. When the work moved, the message gets a short lead-change note with the new lead's brief (whole under 9,500 characters, else its first two sections and the become line), `hydra.md`'s `## Lead` is rewritten so the next launch's slot carries it, and `lead-shift` is logged. On a timeout the current lead stays.

@@ -1,5 +1,5 @@
 // Analytics toolkit ingest for the providers that are not Claude: Codex, OpenCode, DSH and Hermes
-// (docs/ANALYTICS-PLAN.md §4.6, piece 6). It turns what usage-foreign.ts's readers see into
+// (docs/ANALYTICS-PLAN.md §4.6, piece 6), and VS Code's Copilot Chat through ingest-copilot.ts. It turns what usage-foreign.ts's readers see into
 // usage_event rows in the KitStore and remembers, per source file, how far it got (ingest_cursor), so
 // a second sweep reads only what is new. Nothing here is wired into the daemon's boot.
 //
@@ -25,7 +25,7 @@
 //    aggregate it keeps no per-call clock.
 // `billed_usd` is only ever OpenCode's own cost. Everything else is list-priced through pricing.ts.
 import { Database } from 'bun:sqlite'
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { extraRootsWithFormat } from '../agent-catalog'
 import { DSH_HOME, OPENCODE_DB_PATH } from '../config'
@@ -42,7 +42,9 @@ import {
   openCodeModelName,
   weighTurnCounts,
 } from '../usage-foreign'
+import { copilotRoots, ingestCopilot } from './ingest-copilot'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
+import { type Lines, linesFrom, splitLines } from './lines'
 import { eventSlices, type KitStore, type UsageEventInput, yieldLoop } from './store'
 import { type ZipEntry, zipEntries, zipEntryStream } from './zip-entries'
 
@@ -63,6 +65,8 @@ export interface ForeignSources {
   dsh: Array<{ home: string; instance: string }>
   /** HSwarm ledger files (ingest-hswarm.ts). */
   hswarm?: string[]
+  /** VS Code `User` folders whose Copilot Chat logs are read (ingest-copilot.ts). */
+  vscodeCopilot?: string[]
 }
 
 export interface ForeignIngestOptions {
@@ -101,7 +105,14 @@ export function discoverForeignSources(): ForeignSources {
     home,
     instance: home === DSH_HOME ? 'dsh:default' : `dsh:${basename(home)}`,
   }))
-  return { codex, opencode, hermes, dsh, hswarm: [hswarmLedgerPath()] }
+  return {
+    codex,
+    opencode,
+    hermes,
+    dsh,
+    hswarm: [hswarmLedgerPath()],
+    vscodeCopilot: copilotRoots(),
+  }
 }
 
 /** One sweep over every source. Only bytes (or rows) that arrived since the last sweep are read. */
@@ -145,6 +156,11 @@ export async function ingestForeign(
     }
   for (const p of sources.hswarm ?? [])
     done('hswarm', p, await ingestHswarm(store, p, { pc: opts.pc }))
+  for (const root of sources.vscodeCopilot ?? [])
+    await ingestCopilot(store, root, {
+      pc: opts.pc,
+      onFile: (path, n) => done('vscode-copilot', path, n),
+    })
   return sum
 }
 
@@ -324,8 +340,6 @@ function filesUnder(root: string, name: RegExp): string[] {
 
 const codexRollouts = (root: string): string[] => filesUnder(root, ROLLOUT_NAME)
 
-type Lines = AsyncGenerator<{ text: string; end: number }>
-
 /** One rollout to read: a file, or an entry of a packed zip, keyed `<zip>!<entry>`. */
 interface RolloutSource {
   key: string
@@ -373,30 +387,6 @@ function rolloutByKey(key: string): RolloutSource | null {
   const st = stat(zip)
   const e = st && zipEntries(zip).find((x) => x.name === name)
   return st && e ? packedRollout(zip, e, st.mtime) : null
-}
-
-/** Complete lines from `offset`, each with the byte offset just past it. A trailing line without its
- *  newline is a write in progress and is left for the next sweep. */
-function linesFrom(path: string, offset: number): Lines {
-  return splitLines(createReadStream(path, { start: offset }), offset)
-}
-
-/** A byte stream that starts at `offset`, cut into complete lines. */
-async function* splitLines(chunks: AsyncIterable<Buffer>, offset: number): Lines {
-  let carry: Buffer = Buffer.alloc(0)
-  let pos = offset
-  for await (const chunk of chunks) {
-    carry = carry.length ? Buffer.concat([carry, chunk as Buffer]) : (chunk as Buffer)
-    let nl = carry.indexOf(0x0a)
-    let from = 0
-    while (nl >= 0) {
-      pos += nl + 1 - from
-      yield { text: carry.toString('utf8', from, nl), end: pos }
-      from = nl + 1
-      nl = carry.indexOf(0x0a, from)
-    }
-    carry = carry.subarray(from)
-  }
 }
 
 function codexEvent(

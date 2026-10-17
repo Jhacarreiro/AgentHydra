@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import { OPENCODE_DB_PATH } from './config'
 import { queryInWorker } from './core/sqlite-worker'
 import type { TailEvent } from './types'
@@ -337,49 +337,185 @@ export interface OpenCodeSessionContent {
   messageCount: number
 }
 
+// A tail poll needs the same converted DTO until either SQLite file changes. Keep only owned,
+// bounded JSON bytes: a 6000-character text slice can otherwise pin a multi-megabyte part string.
+const CONTENT_CACHE_BYTES = 4 * 1024 * 1024
+const CONTENT_CACHE_ENTRIES = 64
+const openCodeContentCache = new Map<string, { stamp: string; bytes: Buffer; charge: number }>()
+let openCodeContentBytes = 0
+
+interface ContentStamp {
+  path: string
+  key: string
+  newestNs: bigint
+}
+
+function contentStamp(path: string): ContentStamp | null {
+  try {
+    const physicalPath = realpathSync(path)
+    let key = ''
+    let newestNs = 0n
+    for (const file of [physicalPath, `${physicalPath}-wal`]) {
+      try {
+        const st = statSync(file, { bigint: true })
+        if (!st.isFile()) return null
+        key += `${st.dev}:${st.ino}:${st.birthtimeNs}:${st.ctimeNs}:${st.mtimeNs}:${st.size};`
+        if (st.mtimeNs > newestNs) newestNs = st.mtimeNs
+        if (st.ctimeNs > newestNs) newestNs = st.ctimeNs
+      } catch (error) {
+        // An absent WAL is normal; inaccessible or unstatable files are not freshness evidence.
+        if (file === physicalPath || (error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+        key += 'x;'
+      }
+    }
+    return { path: physicalPath, key, newestNs }
+  } catch {
+    return null
+  }
+}
+
+function contentHasSettled(stamp: ContentStamp): boolean {
+  return BigInt(Date.now()) * 1_000_000n - stamp.newestNs >= BigInt(STAMP_SETTLE_MS) * 1_000_000n
+}
+
+function dropContent(key: string): void {
+  const entry = openCodeContentCache.get(key)
+  if (entry) openCodeContentBytes -= entry.charge
+  openCodeContentCache.delete(key)
+}
+
+function contentKey(stamp: ContentStamp, sessionId: string): string | null {
+  if (6 * (stamp.path.length + sessionId.length) > CONTENT_CACHE_BYTES) return null
+  return JSON.stringify([stamp.path, sessionId])
+}
+
+function cachedContent(
+  stamp: ContentStamp | null,
+  sessionId: string,
+): OpenCodeSessionContent | null {
+  if (!stamp) return null
+  let key: string | null = null
+  try {
+    key = contentKey(stamp, sessionId)
+    if (key === null) return null
+    const hit = openCodeContentCache.get(key)
+    if (!hit) return null
+    if (hit.stamp !== stamp.key || !contentHasSettled(stamp)) {
+      dropContent(key)
+      return null
+    }
+    openCodeContentCache.delete(key)
+    openCodeContentCache.set(key, hit)
+    // Every caller owns its objects, just as with a fresh SQLite read.
+    return JSON.parse(hit.bytes.toString('utf8')) as OpenCodeSessionContent
+  } catch {
+    if (key !== null) dropContent(key)
+    return null
+  }
+}
+
+function rememberContent(
+  path: string,
+  before: ContentStamp | null,
+  sessionId: string,
+  content: OpenCodeSessionContent,
+): void {
+  let key: string | null = null
+  try {
+    if (!before || !contentHasSettled(before)) return
+    key = contentKey(before, sessionId)
+    if (key === null) return
+    const after = contentStamp(path)
+    if (
+      !after ||
+      after.path !== before.path ||
+      after.key !== before.key ||
+      !contentHasSettled(after)
+    )
+      return
+    // Six bytes per UTF-16 code unit bounds JSON escaping and UTF-8, without first serializing a
+    // huge tool name. Fixed fields are bounded by the converter; oversized answers simply miss.
+    let upperBytes = 64
+    for (const event of content.events) {
+      upperBytes += 256 + 6 * (event.text.length + (event.tool_name?.length ?? 0))
+      if (upperBytes > CONTENT_CACHE_BYTES) return
+    }
+    const json = JSON.stringify(content)
+    const size = Buffer.byteLength(json, 'utf8')
+    const charge = size + 2 * (key.length + before.key.length) + 128
+    if (charge > CONTENT_CACHE_BYTES) return
+    const bytes = Buffer.allocUnsafeSlow(size)
+    bytes.write(json, 'utf8')
+    dropContent(key)
+    while (
+      openCodeContentCache.size >= CONTENT_CACHE_ENTRIES ||
+      openCodeContentBytes + charge > CONTENT_CACHE_BYTES
+    ) {
+      const oldest = openCodeContentCache.keys().next().value
+      if (oldest === undefined) break
+      dropContent(oldest)
+    }
+    openCodeContentCache.set(key, { stamp: before.key, bytes, charge })
+    openCodeContentBytes += charge
+  } catch {
+    // The cache is optional: encoding/allocation failure must not hide a valid SQLite answer.
+    if (key !== null) dropContent(key)
+  }
+}
+
 export function readOpenCodeSession(
   sessionId: string,
   path = OPENCODE_DB_PATH,
 ): OpenCodeSessionContent | null {
+  const stamp = contentStamp(path)
+  const hit = cachedContent(stamp, sessionId)
+  if (hit) return hit
   const db = openDb(path)
   if (!db) return null
+  let content: OpenCodeSessionContent
   try {
-    const messages = db
-      .query<MessageRow, [string]>(
-        'select id, data, time_created from message where session_id = ? order by time_created, id',
-      )
-      .all(sessionId)
-    if (messages.length === 0) return { events: [], messageCount: 0 }
-    const partRows = db
-      .query<PartRow, [string]>(
-        'select message_id, data, time_created from part where session_id = ? order by time_created, id',
-      )
-      .all(sessionId)
-    const byMessage = new Map<string, Array<{ data: unknown; timeCreatedAt: number }>>()
-    for (const row of partRows) {
-      const list = byMessage.get(row.message_id) ?? []
-      list.push({ data: parseJson(row.data), timeCreatedAt: row.time_created })
-      byMessage.set(row.message_id, list)
-    }
-
-    const events: TailEvent[] = []
-    let messageCount = 0
-    for (const row of messages) {
-      const message = parseJson(row.data)
-      const converted = openCodePartsToTailEvents(
-        message?.role,
-        row.time_created,
-        byMessage.get(row.id) ?? [],
-      )
-      if (converted.some((event) => event.kind === 'text')) messageCount++
-      events.push(...converted)
-    }
-    return { events, messageCount }
+    content = readSessionContent(db, sessionId)
   } catch {
     return null
   } finally {
     db.close()
   }
+  rememberContent(path, stamp, sessionId, content)
+  return content
+}
+
+function readSessionContent(db: Database, sessionId: string): OpenCodeSessionContent {
+  const messages = db
+    .query<MessageRow, [string]>(
+      'select id, data, time_created from message where session_id = ? order by time_created, id',
+    )
+    .all(sessionId)
+  if (messages.length === 0) return { events: [], messageCount: 0 }
+  const partRows = db
+    .query<PartRow, [string]>(
+      'select message_id, data, time_created from part where session_id = ? order by time_created, id',
+    )
+    .all(sessionId)
+  const byMessage = new Map<string, Array<{ data: unknown; timeCreatedAt: number }>>()
+  for (const row of partRows) {
+    const list = byMessage.get(row.message_id) ?? []
+    list.push({ data: parseJson(row.data), timeCreatedAt: row.time_created })
+    byMessage.set(row.message_id, list)
+  }
+
+  const events: TailEvent[] = []
+  let messageCount = 0
+  for (const row of messages) {
+    const message = parseJson(row.data)
+    const converted = openCodePartsToTailEvents(
+      message?.role,
+      row.time_created,
+      byMessage.get(row.id) ?? [],
+    )
+    if (converted.some((event) => event.kind === 'text')) messageCount++
+    events.push(...converted)
+  }
+  return { events, messageCount }
 }
 
 /**

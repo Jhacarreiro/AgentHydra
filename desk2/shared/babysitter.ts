@@ -19,12 +19,14 @@ export type BabysitterSource = 'desk' | 'desktop' | 'cli'
 /**
  * Where a stopped chat stands:
  * waiting   its limit has not reset yet
- * resumed   continued after its reset; waiting for the chat to move
+ * resumed   continued after its reset; checked again if the chat has not moved
+ * held      continued, but its app shows work still running in it, so AgentHydra holds the continue and sends it
+ *           once the chat is idle; checked again when the hold is over
  * no-engine its limit reset, but nothing runs the chat to take a message (its app is closed); looked at again
  * gave-up   it stopped again right after each of the last MAX_TRIES continues: left to a person
  * failed    the last continue was refused; looked at again
  */
-export type BabysitterChatState = 'waiting' | 'resumed' | 'no-engine' | 'gave-up' | 'failed'
+export type BabysitterChatState = 'waiting' | 'resumed' | 'held' | 'no-engine' | 'gave-up' | 'failed'
 
 export interface BabysitterChat {
   id: string // a Desk chat id, or an outside session's id
@@ -58,7 +60,7 @@ export interface BabysitterAct {
   title: string
   account: string
   source: BabysitterSource
-  did: 'resumed' | 'gave-up' | 'failed' | 'no-engine'
+  did: 'resumed' | 'held' | 'gave-up' | 'failed' | 'no-engine'
   detail: string
 }
 
@@ -77,6 +79,19 @@ export interface BabysitterStatus {
   acts: BabysitterAct[]
   /** Why the last look saw less than everything (Desk's chats or AgentHydra's sessions did not load), or null. */
   error: string | null
+}
+
+/** A stopped chat a person may have to see to: its continue was refused, had no app to take it, or was given up on. */
+export function babysitterNeedsPerson(state: BabysitterChatState): boolean {
+  return state !== 'waiting' && state !== 'resumed' && state !== 'held'
+}
+
+/** Whether the stopped chats need anyone (owner, 2026-10-16: they read in plain grey): 'person' when one needs a person
+ *  or the last look failed, 'waiting' while chats only wait (on a limit, or on their app for a held continue), null
+ *  when nothing is waiting. AgentHydra's Tools pages colour by it: red, amber, or neither. */
+export function babysitterAttention(s: Pick<BabysitterStatus, 'stopped' | 'error'>): 'person' | 'waiting' | null {
+  if (s.error || s.stopped.some((c) => babysitterNeedsPerson(c.state))) return 'person'
+  return s.stopped.some((c) => c.state === 'waiting' || c.state === 'held') ? 'waiting' : null
 }
 
 /** POST /api/babysitter: turn it on or off (saved in Settings), and/or look now. */

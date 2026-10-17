@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
-import type { ChatSummary, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, TranscriptItem } from '@shared/protocol'
 import type { OrchestratorPlan } from '@shared/orchestrator'
 import type { ServerContext } from '../../src/context'
 import plugin from '../../src/plugins/70-orchestrator'
@@ -15,6 +15,20 @@ import { WAIT_MS } from '../../src/orchestrator/plan'
 
 const NOW = Date.now()
 const MIN = 60_000
+const ROOMY: AccountInfo = {
+  id: 'roomy',
+  label: '#1 me@example.com (Max)',
+  configDir: 'C:/Users/me/.claude-instances/roomy',
+  number: 1,
+  email: null,
+  plan: 'Max',
+  signedIn: true,
+  fiveHourPct: 5,
+  weeklyPct: 5,
+  fiveHourResetsAt: NOW + 5 * 3_600_000,
+  weeklyResetsAt: NOW + 3 * 86_400_000,
+  inUse: false
+}
 const temps: string[] = []
 const stops: (() => void)[] = []
 afterEach(() => {
@@ -63,6 +77,7 @@ function desk(chats: [ChatSummary, TranscriptItem[]][]) {
   app.get('/api/chats', (c) => c.json(chats.map(([ch]) => ch)))
   app.get('/api/chats/:id/items', (c) => c.json(chats.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? []))
   app.get('/api/external/sessions', (c) => c.json([]))
+  app.get('/api/accounts', (c) => c.json([ROOMY]))
   const settings = { orchestrator: false, orchestratorModel: 'opus' }
   const ask = async (req: { brief: { id: string; signals: string[] } }): Promise<{ text: string; resolved: string | null }> => {
     asked.push(req.brief.id)

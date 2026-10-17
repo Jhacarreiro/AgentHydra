@@ -1,0 +1,79 @@
+# OVHcloud AI Endpoints: open models on OVHcloud's servers behind one OpenAI-compatible endpoint. Its anonymous tier
+# takes no key and no account: 2 requests a minute per IP and per model, and a 429 past that (docs.ovhcloud.com,
+# "AI Endpoints - Getting started", read 2026-10-16). A key from a Public Cloud project with a payment method raises it
+# to 400 a minute per project and model. The catalog prices every model at 0. Measured keyless on 2026-10-16:
+# gpt-oss-120b, Qwen3.8-27B and Qwen3.5-397B-A17B each answered in 0.7-3.4 s, with x-ratelimit-limit-minute: 2.
+# A placeholder Bearer is refused (403 "authentication failed"), so a keyless provider sends no credential header.
+# No route here has a benchmark_slug: at 2 requests a minute per model AUTO must not pick it for a fan-out, so a call
+# names the model, `ovhcloud-<model>` or `ovhcloud:<catalog id>`.
+
+base_url = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+about = "Open models on OVHcloud's servers. Free with no key or account, 2 requests a minute per model."
+website = "https://www.ovhcloud.com/en/public-cloud/ai-endpoints/"
+docs = "https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-endpoints-getting-started"
+transport = "openai"
+capabilities = ["chat"]
+keyless = true
+key_billing = "free"
+free_calls = true
+free_tier = true  # free terms may keep what is sent: HSWARM_REDACT_FREE_TIER redacts tasks here
+models_path = "/models"
+passthrough = ["ovhcloud:"]
+options = []
+
+[models.ovhcloud-gpt-oss-120b]
+api_id = "gpt-oss-120b"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models.ovhcloud-gpt-oss-20b]
+api_id = "gpt-oss-20b"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models."ovhcloud-qwen3.8-27b"]
+api_id = "Qwen3.8-27B"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models."ovhcloud-qwen3.6-27b"]
+api_id = "Qwen3.6-27B"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models."ovhcloud-qwen3.5-397b-a17b"]
+api_id = "Qwen3.5-397B-A17B"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models."ovhcloud-llama-3.3-70b"]
+api_id = "Meta-Llama-3_3-70B-Instruct"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+[models."ovhcloud-mistral-small-3.2"]
+api_id = "Mistral-Small-3.2-24B-Instruct-2506"
+ctx = 131072
+price = { hit = 0.0, miss = 0.0, out = 0.0 }
+
+# The anonymous tier counts each model apart, so each model has its own 2-a-minute table.
+[limits.ovhcloud-gpt-oss-120b]
+key_rpm = 2
+
+[limits.ovhcloud-gpt-oss-20b]
+key_rpm = 2
+
+[limits."ovhcloud-qwen3.8-27b"]
+key_rpm = 2
+
+[limits."ovhcloud-qwen3.6-27b"]
+key_rpm = 2
+
+[limits."ovhcloud-qwen3.5-397b-a17b"]
+key_rpm = 2
+
+[limits."ovhcloud-llama-3.3-70b"]
+key_rpm = 2
+
+[limits."ovhcloud-mistral-small-3.2"]
+key_rpm = 2

@@ -158,14 +158,14 @@ class _QueueMgr(_Mgr):
         return await run
 
 
-@pytest.mark.parametrize("replies, served_by", [(1, "rank:gemini-3-8-flash"), (0, "rank:qwen3-8-27b:cerebras")])
+@pytest.mark.parametrize("replies, served_by", [(1, "rank:gemini-3-8-flash"), (0, "rank:qwen3-8-27b:groq")])
 def test_a_queue_at_a_serving_gate_does_not_send_a_task_below_its_floor(monkeypatch, tmp_path, replies, served_by):
     # Contract: a rescue leg (below the task's floors) is for own routes that crawl or fail. A full gate that is
     # serving is neither, so the task waits its turn; one that answered nothing for the whole patience has failed,
     # and then the rescue leg is the way out (the bound config.GATE_PATIENCE_S exists for).
     # Regression: any later leg with room was an escape, so a code task left a serving gate for a general model; and
     # "served since last asked" let it go on the wake right after the reply, when nothing new had been answered yet.
-    own, rescue = "rank:gemini-3-8-flash", "rank:qwen3-8-27b:cerebras"
+    own, rescue = "rank:gemini-3-8-flash", "rank:qwen3-8-27b:groq"
     monkeypatch.setattr(config, "GATE_PATIENCE_S", 0.05)
     t, job = _task(monkeypatch, tmp_path, [own], max_cost_usd=1.0)
     monkeypatch.setattr(dispatch, "rescue_legs", lambda task, plan: [{"model": rescue, "benchmark_slug": rescue, "rescue": "general"}])

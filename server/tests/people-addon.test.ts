@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ownerRouterHooks } from '../src/climayte-owner-sync'
-import { MANAGER_TOOLS, managerTools } from '../src/mcp-managers'
 import { peopleAddonPresent } from '../src/people-addon'
 
 const FAKE = join(import.meta.dir, 'fixtures', 'fake-people-door.mjs')
@@ -39,11 +38,6 @@ test('the private checkout counts as the door when the settings file names none'
   expect(peopleAddonPresent(absent())).toBe(true)
 })
 
-test('manager tools are not listed without the add-on and are listed with it', () => {
-  expect(managerTools(absent())).toEqual([])
-  expect(managerTools(present())).toEqual(MANAGER_TOOLS)
-})
-
 test('owner router hooks are none without the add-on', () => {
   const ownerDir = join(home, 'owner')
   mkdirSync(ownerDir, { recursive: true })
@@ -57,6 +51,5 @@ test('owner router hooks are none without the add-on', () => {
       },
     }),
   )
-  expect(ownerRouterHooks(ownerDir, absent())).toEqual([])
-  expect(ownerRouterHooks(ownerDir, present()).length).toBeGreaterThan(0)
+  expect(ownerRouterHooks(ownerDir)).toEqual([])
 })

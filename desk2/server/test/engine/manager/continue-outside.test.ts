@@ -9,7 +9,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo, DeskSettings, ExternalSession, TranscriptItem } from '@shared/protocol'
-import { DEFAULT_ACCOUNT } from '../../../src/bridge/accounts'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatError, ChatManager, type ManagerBridge } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
@@ -163,15 +162,25 @@ test('two imports of one session at once (two windows) make one chat', async () 
   expect(t.m.list().map((c) => c.id)).toEqual([a.id])
 })
 
-test('unasked, an import never lands on the default login and says so; named, it does', async () => {
+test('an import with no account folder lands on an account with room, never the default login', async () => {
   const w = world()
   const t = boot(w, { settings: { defaultAccountId: 'auto' } })
   const req = { sessionId: '1a1a1a1a-1111-4222-8333-444455556666', cwd: w.cwd, title: 'From Desktop' }
-  const err = await refusal(t.m.importSession(req))
+  const unasked = await t.m.importSession(req)
+  expect([w.a.id, w.b.id]).toContain(unasked.account.id)
+  const noFolder = await t.m.importSession({ ...req, sessionId: '1c1c1c1c-1111-4222-8333-444455556666', configDir: null })
+  expect(noFolder.account.id).toBe(w.a.id)
+})
+
+test('an import with no account folder waits on a refusal when no account has room', async () => {
+  const w = world()
+  w.a.fiveHourPct = 99
+  w.b.fiveHourPct = 99
+  const t = boot(w, { settings: { defaultAccountId: 'auto' } })
+  const err = await refusal(t.m.importSession({ sessionId: '1d1d1d1d-1111-4222-8333-444455556666', cwd: w.cwd, title: 'From Desktop', configDir: null }))
   expect(err.status).toBe(409)
-  expect(err.message).toBe('Choose the account to continue this session on: Hydra Desk does not choose one.')
+  expect(err.message).toMatch(/no account has room/)
   expect(t.m.list()).toEqual([])
-  expect((await t.m.importSession({ ...req, configDir: null })).account.id).toBe(DEFAULT_ACCOUNT.id)
 })
 
 test("an import lands on Settings' default account; one under a named folder is that folder's", async () => {

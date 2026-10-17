@@ -27,7 +27,7 @@ const sid = (row: Pick<AhSessionRow, 'session_id'>) => encodeURIComponent(row.se
 export const ah = {
   /** The session's row; no source finds the newest session with that id. */
   session: (id: string, source?: string) => call<AhSessionRow>(`/sessions/${encodeURIComponent(id)}${source ? `?source=${encodeURIComponent(source)}` : ''}`),
-  usage: (row: AhSessionRow) => call<AhUsage>(`/sessions/${sid(row)}/usage${where(row)}`),
+  usage: (row: Pick<AhSessionRow, 'session_id' | 'source' | 'locator'>) => call<AhUsage>(`/sessions/${sid(row)}/usage${where(row)}`),
   secrets: (row: AhSessionRow) => call<AhSecrets>(`/sessions/${sid(row)}/secrets${where(row)}`),
   fileLocation: (row: AhSessionRow) => call<{ path: string }>(`/sessions/${sid(row)}/file-location${where(row)}`),
   /** Opens the transcript with the PC's own program for it. */

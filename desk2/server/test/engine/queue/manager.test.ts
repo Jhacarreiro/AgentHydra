@@ -100,12 +100,12 @@ test('a queued chat is in chats.json once createFromQueue answers, not after the
   expect(JSON.parse(readFileSync(join(home, 'chats.json'), 'utf8')).map((c: { id: string }) => c.id)).toEqual([made.chat.id])
 })
 
-test('a named account that is signed out is refused with 409; the default login and auto are not', async () => {
+test('a named account that is signed out is refused with 409; the default login and auto place on one with room', async () => {
   const t = setup([acct(1, 0), acct(2, 0, { signedIn: false })])
   await expect(t.m.create({ cwd: t.home, prompt: 'x', accountId: 'pro2' })).rejects.toMatchObject({ status: 409, message: '#2 user2@example.com (Pro) is signed out' })
   await expect(t.m.createFromQueue({ cwd: t.home, prompt: 'x', accountId: 'pro2' }, { waitForRoom: true })).rejects.toMatchObject({ status: 409 })
   const chat = await t.m.create({ cwd: t.home, accountId: 'pro1' })
   await expect(t.m.patch(chat.id, { accountId: 'pro2' })).rejects.toMatchObject({ status: 409 })
-  expect((await t.m.create({ cwd: t.home, accountId: 'default' })).account.id).toBe('default')
-  expect((await t.m.create({ cwd: t.home, accountId: 'auto' })).account.id).toBe('default')
+  expect((await t.m.create({ cwd: t.home, accountId: 'default' })).account.id).toBe('pro1')
+  expect((await t.m.create({ cwd: t.home, accountId: 'auto' })).account.id).toBe('pro1')
 })

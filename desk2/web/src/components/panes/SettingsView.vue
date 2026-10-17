@@ -1,19 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Check, Hourglass, ListChecks } from '@lucide/vue'
-import { routineCountLine, storeLine } from './routine-view'
+import { ArrowUpRight, Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
-import type { BabysitterStatus } from '@shared/babysitter'
-import type { InstanceManagerStatus } from '@shared/instance-manager'
-import type { RoutinesStatus } from '@shared/routines'
-import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
-import RoutineCard from './RoutineCard.vue'
-import RoutineDetails from './RoutineDetails.vue'
-import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
+import CommandPacksSettings from './CommandPacksSettings.vue'
 import PeopleSetup from '@/components/people/PeopleSetup.vue'
 import PeopleWhere from '@/components/people/PeopleWhere.vue'
 import { loadStatus as loadPeopleStore } from '@/components/people/where-api'
@@ -24,10 +17,10 @@ import { settingsIcons } from '@/lib/icons'
 import { canCollapse, inHost } from '@/lib/host-window'
 import { usePaneApi } from './api'
 import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
-import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
+import { SETTINGS_NAV, isNavLink, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
-import { ahUpdateDot, seeAhUpdateDot } from '@/components/hydra/api'
+import { ahUpdateDot, openToolInHydra, seeAhUpdateDot } from '@/components/hydra/api'
 import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
 import { useInstanceSettings } from './instances'
@@ -68,17 +61,6 @@ const models = shallowRef<ModelChoice[]>([])
 const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = shallowRef<{ up: boolean; url: string } | null>(null)
-const babysitter = shallowRef<BabysitterStatus | null>(null)
-const instanceManager = shallowRef<InstanceManagerStatus | null>(null)
-const routines = shallowRef<RoutinesStatus | null>(null)
-/** The routine whose details replace the list (its Details button), or null. */
-const detailsOf = ref<string | null>(null)
-const routineCount = computed(() => routineCountLine(routines.value?.routines ?? []))
-const routineStore = computed(() => storeLine(routines.value?.store, Date.now()))
-const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
-/** The custom model id being typed (the Custom choice of the orchestrator model's select). */
-const customModelOpen = ref(false)
-const customModelDraft = ref('')
 const loadError = ref<string | null>(null)
 const saveError = ref<string | null>(null)
 const showSaved = ref(false)
@@ -178,96 +160,6 @@ async function testNotification() {
   notifyNote.value = 'Sent.'
 }
 
-async function loadBabysitter() {
-  try {
-    babysitter.value = await api.babysitter()
-  } catch {
-    babysitter.value = null
-  }
-}
-
-async function loadInstanceManager() {
-  try {
-    instanceManager.value = await api.instanceManager()
-  } catch {
-    instanceManager.value = null
-  }
-}
-
-async function loadRoutines() {
-  try {
-    routines.value = await api.routines()
-  } catch {
-    routines.value = null
-  }
-}
-
-async function loadOrchestratorModel() {
-  try {
-    orchestratorModel.value = await api.orchestratorModel()
-  } catch {
-    orchestratorModel.value = null
-  }
-}
-
-const isAliasModel = (m: string | undefined) => (ORCHESTRATOR_MODEL_ALIASES as readonly string[]).includes(m ?? '')
-/** The select's choice: an alias, or Custom when the setting is a full id or the owner picked Custom. */
-const orchestratorModelChoice = computed(() => {
-  const m = local.value?.orchestratorModel
-  return customModelOpen.value || !isAliasModel(m) ? 'custom' : m!
-})
-/** Under the model's row: what the setting runs now (the model the SDK reported, once a judgment ran), or the alias. */
-const orchestratorModelNote = computed(() => {
-  const m = local.value?.orchestratorModel
-  if (customModelOpen.value && !isOrchestratorModel(customModelDraft.value.trim())) return 'Type a full model id, such as claude-opus-5-5.'
-  if (!m) return null
-  const s = orchestratorModel.value
-  if (s?.resolved && s.setting === m) return `Runs ${s.resolved}`
-  return isAliasModel(m) ? `Alias ${m}: the model it resolves to shows after the first judgment.` : `Runs ${m}`
-})
-function pickOrchestratorModel(v: string) {
-  if (v !== 'custom') {
-    customModelOpen.value = false
-    void save({ orchestratorModel: v })
-    return
-  }
-  const current = local.value?.orchestratorModel ?? ''
-  customModelOpen.value = true
-  customModelDraft.value = isAliasModel(current) ? '' : current
-}
-function commitOrchestratorModel() {
-  const id = customModelDraft.value.trim()
-  if (!isOrchestratorModel(id) || id === local.value?.orchestratorModel) return
-  void save({ orchestratorModel: id }).then(loadOrchestratorModel)
-}
-
-// A full model id in the setting shows in the custom box, ready to edit.
-watch(() => local.value?.orchestratorModel, (m) => {
-  if (m && !isAliasModel(m)) customModelDraft.value = m
-}, { immediate: true })
-
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-/** Under the Babysitter row: what a usage limit has stopped now, by account, and what it last continued. */
-const babysitterNote = computed(() => {
-  const s = babysitter.value
-  if (!s) return null
-  const stopped = s.accounts.length
-    ? `Stopped by a limit: ${s.accounts.map((a) => `${a.account} ${a.stopped} (${a.resetsAt === null ? 'reset unknown' : `resets ${clock(a.resetsAt)}`})`).join(', ')}.`
-    : 'Nothing is stopped by a limit.'
-  const last = s.acts.find((a) => a.did === 'resumed')
-  return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
-})
-
-/** Under the Instance manager row: how many apps it watches, and the last one that went down and what came of it. */
-const instanceManagerNote = computed(() => {
-  const s = instanceManager.value
-  if (!s) return null
-  const up = s.instances.filter((i) => i.running && i.signedIn).length
-  const r = s.recoveries[0]
-  const last = r ? `Last: #${r.from.num} ${r.from.name} went down at ${clock(r.at)}; ${r.detail}.` : 'No app has gone down with chats in it.'
-  return [`Watching ${s.instances.length} apps, ${up} up.`, last, s.error].filter(Boolean).join(' ')
-})
-
 // Each tick asks again; the status is written only when it changed, so an unchanged answer redraws nothing.
 function setBridge(next: { up: boolean; url: string }) {
   if (bridge.value?.up !== next.up || bridge.value?.url !== next.url) bridge.value = next
@@ -342,42 +234,6 @@ function onVisibility() {
 }
 document.addEventListener('visibilitychange', onVisibility)
 
-// The babysitter's status is read when its row comes on screen and when the window is shown again.
-const showsBabysitter = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'babysitter')))
-watch(showsBabysitter, (on) => {
-  if (on) void loadBabysitter()
-}, { immediate: true })
-document.addEventListener('visibilitychange', onBabysitterVisibility)
-function onBabysitterVisibility() {
-  if (showsBabysitter.value && !document.hidden) void loadBabysitter()
-}
-
-// The instance manager's the same way.
-const showsInstanceManager = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'instanceManager')))
-watch(showsInstanceManager, (on) => {
-  if (on) void loadInstanceManager()
-}, { immediate: true })
-document.addEventListener('visibilitychange', onInstanceManagerVisibility)
-function onInstanceManagerVisibility() {
-  if (showsInstanceManager.value && !document.hidden) void loadInstanceManager()
-}
-
-// The standing agents' status is read the same way, when its row comes on screen and when the window is shown again.
-const showsRoutines = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'routines')))
-watch(showsRoutines, (on) => {
-  if (on) void loadRoutines()
-}, { immediate: true })
-document.addEventListener('visibilitychange', onRoutinesVisibility)
-function onRoutinesVisibility() {
-  if (showsRoutines.value && !document.hidden) void loadRoutines()
-}
-
-// The orchestrator model's resolved id is read when its row comes on screen.
-const showsOrchestratorModel = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'orchestratorModel')))
-watch(showsOrchestratorModel, (on) => {
-  if (on) void loadOrchestratorModel()
-}, { immediate: true })
-
 // AgentHydra's update check asks its Git remote, so it runs when its row is first on screen.
 const showsUpdate = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahVersion')))
 watch(
@@ -422,7 +278,7 @@ window.addEventListener('focus', onFocus)
 // The People add-on is absent on most PCs; its section stays hidden until the store says it is here.
 const peopleOn = ref(false)
 void loadPeopleStore().then((st) => (peopleOn.value = st.available)).catch(() => {})
-const navSections = computed(() => SETTINGS_SECTIONS.filter((s) => s.id !== 'people' || peopleOn.value))
+const navSections = computed(() => SETTINGS_NAV.filter((s) => s.id !== 'people' || peopleOn.value))
 
 onMounted(async () => {
   syncBridgePoll()
@@ -455,9 +311,6 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
-  document.removeEventListener('visibilitychange', onBabysitterVisibility)
-  document.removeEventListener('visibilitychange', onInstanceManagerVisibility)
-  document.removeEventListener('visibilitychange', onRoutinesVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
@@ -494,7 +347,21 @@ onBeforeUnmount(() => {
           >
             {{ s.caption }}
           </div>
+          <!-- Managers opens AgentHydra's Tools tab (settings.ts SETTINGS_NAV): the small arrow says it leaves Settings. -->
           <button
+            v-if="isNavLink(s)"
+            type="button"
+            class="flex h-8 shrink-0 cursor-default items-center gap-2 rounded-full px-3 text-start text-ui leading-4.75 text-text-2 transition-colors duration-(--dur-fast) hover:bg-fill-hover hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none sm:rounded-(--radius-6) sm:px-2"
+            :aria-label="`${s.label}, opens AgentHydra's Tools tab`"
+            title="Opens AgentHydra's Tools tab"
+            @click="openToolInHydra()"
+          >
+            <component :is="settingsIcons[s.id]" class="size-4 shrink-0" />
+            <span class="min-w-0 flex-1 truncate">{{ s.label }}</span>
+            <ArrowUpRight class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
+          </button>
+          <button
+            v-else
             type="button"
             :data-section="s.id"
             :aria-current="!searching && section === s.id ? 'page' : undefined"
@@ -528,6 +395,8 @@ onBeforeUnmount(() => {
 
       <ConnectorsSettings v-else-if="section === 'connectors' && !searching" />
 
+      <CommandPacksSettings v-else-if="section === 'packs' && !searching" />
+
       <PeopleSetup v-else-if="section === 'people' && !searching && peopleOn" />
 
       <template v-else>
@@ -541,9 +410,6 @@ onBeforeUnmount(() => {
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.id === 'collapseMode' ? COLLAPSE_MODE_LABELS[local?.collapseMode ?? 'off'].sentence : r.description }}
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-ui-sm leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
-                <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ babysitterNote }}</div>
-                <div v-if="r.id === 'instanceManager' && instanceManagerNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ instanceManagerNote }}</div>
-                <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
@@ -651,61 +517,11 @@ onBeforeUnmount(() => {
                 </div>
 
                 <PaneSwitch
-                  v-else-if="r.id === 'babysitter'"
-                  label="Babysitter"
-                  :model-value="local.babysitter"
-                  @update:model-value="(v: boolean) => save({ babysitter: v })"
-                />
-
-                <PaneSwitch
                   v-else-if="r.id === 'coreEngine'"
                   label="New core"
                   :model-value="local.coreEngine"
                   @update:model-value="(v: boolean) => save({ coreEngine: v })"
                 />
-
-                <PaneSwitch
-                  v-else-if="r.id === 'routines'"
-                  label="Routines"
-                  :model-value="local.routines"
-                  @update:model-value="(v: boolean) => save({ routines: v })"
-                />
-
-                <PaneSwitch
-                  v-else-if="r.id === 'instanceManager'"
-                  label="Instance manager"
-                  :model-value="local.instanceManager"
-                  @update:model-value="(v: boolean) => save({ instanceManager: v })"
-                />
-
-                <PaneSwitch
-                  v-else-if="r.id === 'orchestrator'"
-                  label="Orchestrator"
-                  :model-value="local.orchestrator"
-                  @update:model-value="(v: boolean) => save({ orchestrator: v })"
-                />
-
-                <div v-else-if="r.id === 'orchestratorModel'" class="flex shrink-0 items-center gap-2">
-                  <input
-                    v-if="orchestratorModelChoice === 'custom'"
-                    v-model="customModelDraft"
-                    type="text"
-                    class="h-7 w-52 rounded-(--radius-6) bg-fill-5 px-2 font-mono text-ui text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-(--focus-ring)"
-                    aria-label="Custom model id"
-                    placeholder="claude-opus-5-5"
-                    @blur="commitOrchestratorModel"
-                    @keydown.enter="commitOrchestratorModel"
-                  />
-                  <Select :model-value="orchestratorModelChoice" @update:model-value="(v) => pickOrchestratorModel(String(v))">
-                    <SelectTrigger :class="TRIGGER" aria-label="Orchestrator model"><SelectValue /></SelectTrigger>
-                    <SelectContent :class="CONTENT" position="popper" align="end" :side-offset="4">
-                      <SelectItem :class="SELECT_ITEM" value="opus">Opus (newest)</SelectItem>
-                      <SelectItem :class="SELECT_ITEM" value="sonnet">Sonnet (newest)</SelectItem>
-                      <SelectItem :class="SELECT_ITEM" value="haiku">Haiku (newest)</SelectItem>
-                      <SelectItem :class="SELECT_ITEM" value="custom">Custom id</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
 
                 <PaneSwitch
                   v-else-if="r.id === 'delegate'"
@@ -724,35 +540,6 @@ onBeforeUnmount(() => {
                   {{ bridge === null ? 'Checking…' : bridge.up ? 'Connected' : 'Not running' }}
                 </span>
               </template>
-
-              <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
-                   centred down the list. -->
-              <div v-if="r.id === 'routines' && routines" class="basis-full">
-                <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
-                  No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
-                </div>
-                <div v-if="routineStore" class="wrap-break-word text-ui-sm leading-4.5" :class="routines.store?.error ? 'text-danger-text' : 'text-text-muted'">
-                  {{ routineStore }}
-                </div>
-                <RoutineDetails
-                  v-if="detailsOf && routines.routines.some((x) => x.id === detailsOf)"
-                  :id="detailsOf"
-                  :name="routines.routines.find((x) => x.id === detailsOf)!.name"
-                  @back="detailsOf = null"
-                />
-                <template v-else>
-                <template v-if="routines.proposals.length">
-                  <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
-                  <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
-                </template>
-                <template v-if="routines.routines.length">
-                  <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0">
-                    <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
-                  </h4>
-                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" @details="detailsOf = x.id" />
-                </template>
-                </template>
-              </div>
             </div>
           </div>
         </div>

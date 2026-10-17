@@ -11,7 +11,7 @@ import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatManager } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import type { ServerEvent } from '@shared/protocol'
-import { fakeBridge, fakeQueries } from './fakes'
+import { fakeBridge, fakeQueries, worker } from './fakes'
 
 const temps: string[] = []
 const managers: ChatManager[] = []
@@ -588,4 +588,42 @@ test('Stop on a CliMayte task stops its worker (a worker takes no control messag
   expect(item).toMatchObject({ taskId: 'b1', status: 'stopped' })
   expect(m.listItems(chat.id).find((i) => i.id === 'task:b1')).toMatchObject({ status: 'stopped' })
   expect(m.get(chat.id).backgroundActive).toBe(0)
+})
+
+test('a finished worker woken from outside the window (a ping when its job ends) shows working at the next poll, unopened', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const q = fakeQueries()
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  managers.push(m)
+
+  const chat = await m.create({ cwd: home, prompt: 'start the build and tell me when it lands' })
+  // The first message's send has settled (it marks the worker live, then shows the turn queued).
+  while (m.get(chat.id).activity !== 'Queued') await new Promise((r) => setTimeout(r, 5))
+  const row = b.state.rows[0]!
+  Object.assign(row, { status: 'done', accountId: 'cli-2', account: '#61 acct2' })
+  b.state.workerItems['worker-session-1'] = [
+    { kind: 'user', id: 'u-1', ts: 9, text: 'start the build and tell me when it lands' },
+    { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'The build is running; I will report when it lands.' },
+  ]
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).status).toBe('idle')
+
+  // The job it started ends and AgentHydra pings the chat's worker: a new turn no send from here began.
+  Object.assign(row, { status: 'running' })
+  b.state.workerItems['worker-session-1']!.push({ kind: 'assistant_text', id: 'a-2', ts: 20, text: 'The build landed.' })
+  await m.syncWorkers()
+  expect(m.get(chat.id).status).toBe('idle')
+  b.state.workers.push(worker({ id: 'w1', status: 'running', active: true, sessionId: 'worker-session-1', chat: true }))
+  await m.syncWorkers()
+  expect(m.get(chat.id).status).toBe('working')
+  expect(m.listItems(chat.id).find((i) => i.id === 'a-2')).toMatchObject({ text: 'The build landed.' })
+
+  // Its turn ends: the chat reads done again, and the list no longer brings it back.
+  Object.assign(row, { status: 'done' })
+  b.state.workers.splice(0)
+  await m.syncWorkers()
+  expect(m.get(chat.id)).toMatchObject({ status: 'idle', unread: true })
 })

@@ -27,14 +27,14 @@ import { climayteWorkerPids } from './climayte'
 import { BILL_GUARD_SESSION_PCT, BILL_GUARD_WEEK_PCT } from './climayte-lib'
 import { resolveAccount, resolveCliConfigDirToken, resolveInstanceTokens } from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
-import { listInstances } from './core/instances'
+import { listInstanceLogins, listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
-import { killProcessTree, listDesktopEngines } from './core/process'
+import { type DesktopEngine, killProcessTree, listDesktopEngines } from './core/process'
 import { deliverIncidentNotification, recordIncident } from './incidents'
 import { readLiveRegistryAsync } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { ExtraUsageOffResult, UsageLimit, UsageSnapshot } from './types'
-import { getCachedUsage } from './usage'
+import { allCachedUsage, getCachedUsage } from './usage'
 import { claudeUserAgent } from './usage-api'
 import { asReader } from './usage-reader'
 import { checkUsageForCliInstance, checkUsageForDesktop, cliKey, desktopKey } from './usage-service'
@@ -99,9 +99,53 @@ interface Store {
   configDir: string | null
 }
 
+/** How the guard lists desktop profiles and their Code engines. Tests swap in fakes. */
+interface DesktopListing {
+  /** Every profile with its app's pid: listInstances, whose process scan takes 1-1.5 s. */
+  instances: () => Promise<{ dir: string; num: number; name: string; pid: number | null }[]>
+  /** The profiles under the instances root, from the disk alone (no process scan). */
+  logins: () => { dir: string }[]
+  engines: () => Promise<DesktopEngine[] | null>
+}
+
+const realListing: DesktopListing = {
+  instances: listInstances,
+  logins: listInstanceLogins,
+  engines: listDesktopEngines,
+}
+let listing = realListing
+
+/** Tests point the guard at fake listings; null puts the real ones back. */
+export function setDesktopListingForTests(next: Partial<DesktopListing> | null): void {
+  listing = next ? { ...realListing, ...next } : realListing
+}
+
+/** Whether any store's cached reading says its account bills past its limit (billsPastLimit, the
+ *  first thing guardStore asks of every store). Asked afresh on every pass, never remembered, so
+ *  the full listing's process scan is paid only on a pass with something to guard (it was paid
+ *  every 30 s, ~2,880 scans a day, with nothing to do). Any doubt counts as yes.
+ *
+ *  The keys are the ones stores() forms: desktopKey of each profile under the instances root (the
+ *  same dirs listInstances lists) and cliKey of each CLI instance. A profile outside the root is
+ *  found only by the process scan, so every desktop reading in the cache is asked as well: a
+ *  billing reading there means a full pass, whichever profile it belongs to. */
+function anyMayBill(): boolean {
+  try {
+    const keys = new Set<string>()
+    for (const login of listing.logins()) keys.add(desktopKey(login.dir))
+    for (const key of Object.keys(allCachedUsage())) if (key.startsWith('desktop:')) keys.add(key)
+    for (const cli of listCliInstances()) keys.add(cliKey(cli.id))
+    for (const key of keys) if (billsPastLimit(getCachedUsage(key))) return true
+    return false
+  } catch (err) {
+    console.error('[extra-usage] cheap listing failed, scanning in full:', err)
+    return true
+  }
+}
+
 async function stores(): Promise<Store[]> {
   const out: Store[] = []
-  for (const inst of await listInstances()) {
+  for (const inst of await listing.instances()) {
     out.push({
       kind: 'desktop',
       id: inst.dir,
@@ -134,7 +178,7 @@ async function sessionsOn(store: Store, skip: Set<number>): Promise<number[] | n
       .filter((pid) => !skip.has(pid))
   }
   if (!store.running) return []
-  const engines = await listDesktopEngines()
+  const engines = await listing.engines()
   if (!engines) return null
   const dir = normalizeInstancePath(store.id)
   return engines
@@ -193,6 +237,8 @@ export async function guardExtraUsage(
   now = Date.now(),
 ): Promise<{ store: string; pids: number[] }[]> {
   if (allowed()) return []
+  // Nothing can bill: every store would end at guardStore's first check, so skip the listing.
+  if (!anyMayBill()) return []
   const stopped: { store: string; pids: number[] }[] = []
   const climayte = climayteWorkerPids()
   for (const store of await stores()) {

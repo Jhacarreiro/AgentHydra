@@ -1027,3 +1027,50 @@ def test_a_key_whose_plan_refuses_tool_calls_keeps_serving_chat_while_tool_calls
     only._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
     with pytest.raises(NoUsableKey):
         asyncio.run(only.chat(ask, model="deepseek-flash", tools=tools))
+
+
+# Contract: a model a key's plan does not include (Inworld's HTTP 400 "This model is currently not available on your plan")
+# goes to another key at once, later calls for that model skip the key, the key keeps serving its other models, and with
+# no key left whose plan includes the model the leg fails over unsent (NoUsableKey). Regression: 2026-10-16, 25 of
+# Inworld's 35 routes answered that 400 on every key, and the plain 400 failed the task instead of failing it over.
+def test_a_model_outside_a_keys_plan_goes_to_another_key_and_fails_over_unsent_when_no_plan_has_it(monkeypatch):
+    import httpx
+
+    from hswarm import client as client_mod
+    from hswarm.client import DeepSeekClient, NoUsableKey
+
+    monkeypatch.setattr(client_mod, "_PLAN_GATED", {}, raising=False)
+    free_plan, paid = "sk-freeplan00xxxx", "sk-paidplan00xxxx"
+    seen: list[tuple[str, str]] = []
+
+    def handler(request):
+        import json as _json
+
+        key, model = request.headers["Authorization"].removeprefix("Bearer "), _json.loads(request.content)["model"]
+        seen.append((key, model))
+        if key == free_plan and model == "deepseek-v4-pro":
+            return httpx.Response(400, json={"error": {"message": "This model is currently not available on your plan. Setup a "
+                                                                  "valid billing method (subscription or on-demand payment) and "
+                                                                  "add credits to unlock.", "type": "invalid_request_error"}})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                                         "usage": {"prompt_tokens": 10, "completion_tokens": 1}, "model": model})
+
+    c = DeepSeekClient(api_keys=[free_plan, paid])
+    c._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
+    ask = [{"role": "user", "content": "x"}]
+
+    async def go():
+        for _ in range(3):
+            assert (await c.chat(ask, model="deepseek-v4-pro")).message["content"] == "done"
+        for _ in range(4):
+            await c.chat(ask, model="deepseek-flash")
+
+    asyncio.run(go())
+    assert seen.count((free_plan, "deepseek-v4-pro")) == 1  # refused once, then skipped for that model
+    assert (free_plan, "deepseek-flash") in seen and c.pool.available() == 2  # neither rested nor disabled
+    only = DeepSeekClient(api_keys=[free_plan])
+    only._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
+    sent = len(seen)
+    with pytest.raises(NoUsableKey):
+        asyncio.run(only.chat(ask, model="deepseek-v4-pro"))
+    assert len(seen) == sent  # known refused: nothing is sent

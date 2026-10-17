@@ -150,7 +150,7 @@ const sample = (kind: string | null, minutes: number, tookMin: number, doneAt: n
 })
 
 describe('etaSamples and etaCalibration', () => {
-  test('settled estimates only, the past ones too, newest first', () => {
+  test("settled estimates only, the past ones too, newest first; never a chat's (a seat's)", () => {
     const got = etaSamples([
       {
         id: 'a',
@@ -160,6 +160,7 @@ describe('etaSamples and etaCalibration', () => {
       },
       { id: 'b', eta: { minutes: 4, at: 0, attempt: 0 } }, // still running
       { id: 'c', kind: 'docs', eta: { minutes: 3, at: 0, attempt: 0, tookS: 90, doneAt: 20 } },
+      { id: 'd', chat: true, eta: { minutes: 8, at: 0, attempt: 0, tookS: 480, doneAt: 40 } },
     ])
     expect(got.map((s) => [s.id, s.doneAt])).toEqual([
       ['a', 30],

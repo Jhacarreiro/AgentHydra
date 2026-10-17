@@ -21,6 +21,8 @@ export interface FakeState {
   chatsError?: string
   sessions: any[]
   instances: any[]
+  /** Set: GET /api/cli-instances answers this error with a 500 instead of `instances`. */
+  instancesError?: string
   workers: any[]
   detail: any
   tail: any
@@ -153,6 +155,13 @@ export function statsAnswers(): FakeState['stats'] {
       pricesAsOf: '2026-10-01',
       priceSource: 'bundled',
       coverage: { sessions: 50, total: 60, refreshing: true, bytes: 0 },
+      // Where each source's record begins; `newtool` has none.
+      kitCoverage: {
+        sources: {
+          desktop: { events: 500, firstTs: new Date(2026, 5, 30, 9).getTime(), lastTs: Date.now() },
+          climayte: { events: 300, firstTs: new Date(2026, 8, 30, 23).getTime(), lastTs: Date.now() },
+        },
+      },
       notes: [],
     },
     activity: { hours, tools: [], agentMinutes: 321, health: [], editSurvival: { sessions: 0, average: null, overdue: 0 } },
@@ -285,7 +294,7 @@ function plainGet(state: FakeState, p: string): Response | null {
     case '/api/sessions':
       return json(state.sessions)
     case '/api/cli-instances':
-      return json(state.instances)
+      return state.instancesError ? json({ error: state.instancesError }, 500) : json(state.instances)
     case '/api/analytics/spend':
       return stat(state.stats.spend)
     case '/api/analytics/activity':

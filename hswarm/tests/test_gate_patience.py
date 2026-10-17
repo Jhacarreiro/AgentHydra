@@ -49,7 +49,7 @@ def test_the_batch_waits_for_a_slow_pilot_only_its_patience(monkeypatch):
 def test_a_task_queued_past_its_patience_runs_on_the_next_leg(monkeypatch, tmp_path):
     monkeypatch.setattr(selection, "plan", lambda *a, **k: {"profile": "code", "candidates": [
         {"model": m, "reasoning_effort": "high", "thinking": True, "benchmark_slug": m}
-        for m in ("rank:gemini-3-8-flash", "rank:qwen3-8-27b:cerebras")]})
+        for m in ("rank:gemini-3-8-flash", "rank:qwen3-8-27b:groq")]})
     monkeypatch.setattr(dispatch, "rescue_legs", lambda task, plan: [])
     monkeypatch.setattr(dispatch, "_usable", lambda provider, wake=None: True)
     seen = []
@@ -82,5 +82,5 @@ def test_a_task_queued_past_its_patience_runs_on_the_next_leg(monkeypatch, tmp_p
     job = Job(id="j", tasks=[t])
     job.results[t.id] = Result(id=t.id, backend="api", model=t.model)
     res, _ = asyncio.run(dispatch.run_selected(Mgr(), job, t, None, True))
-    assert res.status == "ok" and res.model == "rank:qwen3-8-27b:cerebras" and seen == ["rank:qwen3-8-27b:cerebras"]
+    assert res.status == "ok" and res.model == "rank:qwen3-8-27b:groq" and seen == ["rank:qwen3-8-27b:groq"]
     assert res.selection["attempts"][0]["error"].startswith("GateQueued:")

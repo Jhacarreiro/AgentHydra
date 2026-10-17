@@ -1454,6 +1454,8 @@ interface ArchiveReassertConfig {
 /** The per-watcher mutable accounting, handed to every tick. */
 interface ArchiveReassertState {
   metaPath: string | null
+  /** The meta file's mtime and size as of our last look, so an untouched file is not re-read every tick. */
+  stamp: { mtimeMs: number; size: number } | null
   restores: number
   misses: number
 }
@@ -1504,7 +1506,7 @@ export async function reassertChatArchive(
   if (prior) prior.cancelled = true
   const handle = { cancelled: false }
   archiveReassertWatchers.set(key, handle)
-  const state: ArchiveReassertState = { metaPath: null, restores: 0, misses: 0 }
+  const state: ArchiveReassertState = { metaPath: null, stamp: null, restores: 0, misses: 0 }
   try {
     while (config.now() < deadline && state.restores < config.maxRestores) {
       await config.sleep(config.intervalMs)
@@ -1534,21 +1536,30 @@ function reassertChatArchiveTick(
   sessionId: string,
   config: ArchiveReassertConfig,
 ): ArchiveReassertTick {
-  if (!state.metaPath || !existsSync(state.metaPath))
+  if (!state.metaPath || !existsSync(state.metaPath)) {
     state.metaPath = findChatMetaPath(instanceDir, sessionId)
+    state.stamp = null
+  }
   if (!state.metaPath) {
     state.misses++
     return state.misses >= config.maxMisses ? 'stop' : 'continue'
   }
   state.misses = 0
   const metaPath = state.metaPath
+  // Stat before the read: a file that changed in between gets a stale stamp, so the next tick reads it again.
+  const st = statSync(metaPath)
+  if (state.stamp?.mtimeMs === st.mtimeMs && state.stamp.size === st.size) return 'continue'
   const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
+  state.stamp = { mtimeMs: st.mtimeMs, size: st.size }
   if (meta.isArchived === true) return 'continue'
   meta.isArchived = true
   writeFileSync(metaPath, JSON.stringify(meta))
   invalidateSessionMetaCache()
   state.restores++
   logArchiveReassert(sessionId, instanceDir, config)
+  // Our own write moved the stamp; take it fresh so the next tick does not re-read our own output.
+  const after = statSync(metaPath)
+  state.stamp = { mtimeMs: after.mtimeMs, size: after.size }
   return 'continue'
 }
 
@@ -1748,6 +1759,14 @@ export function restoreMigratedSettings(
  * found by a self-test on its first real run, in the same week the identical blindness was
  * fixed in the surface guard.
  */
+/**
+ * Stat-stamp cache for {@link findChatMetaPathInDir} (2026-10-16). A landing poll re-reads and
+ * re-parses the account's whole store on EVERY miss (~7 MB per poll), every 500 ms for 25 s.
+ * A rewritten file always has a new (mtime, size) - the same invariant chat-store-scan's StatStamp
+ * cache already relies on - so a hit here is fresh, and a first-seen record is still read at once.
+ */
+const dirSidSeen = new Map<string, { mtimeMs: number; size: number; sid: string | null }>()
+
 /** The imported-shape / created-in-app-shape check for one org/user leaf directory, split out of
  *  {@link findChatMetaPath}'s walk so that function's own complexity reflects only the walk, not
  *  this per-directory shape test too. Behaviour is unchanged. */
@@ -1756,11 +1775,25 @@ function findChatMetaPathInDir(dir: string, sessionId: string): string | null {
   const direct = join(dir, `local_${sessionId}.json`)
   if (existsSync(direct)) return direct
   // Then the created-in-app shape, which costs a directory read and a parse per file.
-  for (const f of readdirSync(dir)) {
-    if (!f.startsWith('local_') || !f.endsWith('.json')) continue
+  const paths = readdirSync(dir)
+    .filter((f) => f.startsWith('local_') && f.endsWith('.json'))
+    .map((f) => join(dir, f))
+  // Keep the cache bounded by the live store: drop entries for files the listing no longer has.
+  const listed = new Set(paths)
+  for (const key of dirSidSeen.keys())
+    if (key.startsWith(dir + sep) && !listed.has(key)) dirSidSeen.delete(key)
+  for (const path of paths) {
     try {
-      const meta = JSON.parse(readFileSync(join(dir, f), 'utf8')) as { cliSessionId?: string }
-      if (meta.cliSessionId === sessionId) return join(dir, f)
+      const st = statSync(path)
+      const seen = dirSidSeen.get(path)
+      if (seen && seen.mtimeMs === st.mtimeMs && seen.size === st.size) {
+        if (seen.sid === sessionId) return path
+        continue
+      }
+      const meta = JSON.parse(readFileSync(path, 'utf8')) as { cliSessionId?: string }
+      // null sid = known non-match; a parse failure is never cached (retry next poll stands)
+      dirSidSeen.set(path, { mtimeMs: st.mtimeMs, size: st.size, sid: meta.cliSessionId ?? null })
+      if (meta.cliSessionId === sessionId) return path
     } catch {
       // one unreadable metadata file says nothing about the others
     }

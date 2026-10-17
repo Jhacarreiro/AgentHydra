@@ -1,0 +1,50 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "json-stringify-for-equality",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {
+    "desk2/hydra/src/composables/useFreeStats.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/hydra/src/composables/useNotifications.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/hydra/src/composables/useTokenWindow.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/server/src/devservers/manager.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/server/src/engine/chat-runtime.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/web/src/components/connectors/ConnectorsSettings.vue": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/web/src/components/dashboard/DashboardPage.vue": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/web/src/components/external/ExternalSessionView.vue": {
+      "json-stringify-for-equality/stringify-compare": 2
+    },
+    "desk2/web/src/components/panes/ChangesPane.vue": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "desk2/web/src/components/servers/ServersPane.vue": {
+      "json-stringify-for-equality/stringify-compare": 2
+    },
+    "server/src/climayte-owner-sync.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "server/src/core/desktop-chat-sync.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "server/src/mcp-hub.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    },
+    "server/src/status-hooks.ts": {
+      "json-stringify-for-equality/stringify-compare": 1
+    }
+  }
+}

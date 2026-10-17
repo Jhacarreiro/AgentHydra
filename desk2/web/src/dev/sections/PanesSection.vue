@@ -7,8 +7,7 @@ import SettingsView from '@/components/panes/SettingsView.vue'
 import AccountsList from '@/components/accounts/AccountsList.vue'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { PANE_API, type PaneApi } from '@/components/panes/api'
-import { accountFixtures, routinesFixtures, settingsFixtures } from '../fixtures'
-import { routineDetailsFixture } from '../routine-details-fixture'
+import { accountFixtures, settingsFixtures } from '../fixtures'
 
 // Fixture answers for every call the panes make, so the gallery needs no server.
 const REPO = 'C:/Users/me/Desktop/Project/Agent Hydra/desk'
@@ -75,12 +74,6 @@ const fixtureApi: PaneApi = {
   ],
   health: async () => ({ ok: true, version: '0.1.0' }),
   bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
-  babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
-  instanceManager: async () => ({ enabled: true, everyMs: 20_000, checkedAt: null, nextCheckAt: null, instances: [], recoveries: [], error: null }),
-  routines: async () => routinesFixtures,
-  routinesAct: async () => routinesFixtures,
-  routineDetails: async (_id, before = null, limit = 50) => routineDetailsFixture(before, limit),
-  orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
   getSettings: async () => ({ ...settingsFixtures, defaultModel: 'claude-opus-5-5' }),
   putSettings: async (patch) => ({ ...settingsFixtures, ...patch }),
   accounts: async () => [

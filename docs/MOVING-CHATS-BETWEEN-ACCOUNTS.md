@@ -188,16 +188,19 @@ tray icon and the fair share first), then reading two working chats' pids out of
   order); without one it is reported, never killed. By hand: kill the source row's `livePid`,
   then `migrate_reconcile --finish <mutationId>`. The id `--finish` takes is the MUTATION id from
   `migrate_reconcile --json`, not the session id.
-- **A detached batch's report does not survive a daemon RESTART, and the batch may not either.**
-  Operation records live in the daemon process that ran them. On 2026-09-12 a batch's child
-  outlived a restart and finished orphaned, so the chats moved and the report vanished; on
-  2026-10-08 one died with the daemon 23 minutes into a 9-chat drain, leaving two chats on both
-  accounts and seven never tried. A poll answers `reason: 'daemon-restarted'` and names when the
-  daemon started. ⛔ On that answer do NOT re-fire the move: run `migrate_reconcile` (below) and
-  `migrate_reconcile --finish <id>` for each half-move it lists, then check `list_chats`. Since
-  2026-10-08 `POST /api/daemon/restart` answers 409 while a `migrate_batch` or `migrate_chat`
-  runs through the toolbox, naming it; `force: true` restarts past it, and then the reconcile is
-  yours to run.
+- **A move and its report outlive a daemon RESTART (since 2026-10-17).** A `migrate_batch` or
+  `migrate_chat` run through the daemon runs under a runner outside it
+  (`server/src/orchestrator-runner.ts`), and its operation record is kept in
+  `<data dir>/orchestrator-runs/`, so `POST /api/daemon/restart` and the auto-updater no longer
+  wait for it: the next daemon takes the run on and answers its operation id with the result. The
+  move's own daemon calls wait out the handover (`server/src/toolbox-calls.ts`: the old daemon
+  turns new ones away with a 503 that hydralib sends again for up to 120 s, and lets one already
+  under way finish, up to 60 s). Before that a restart killed the move: on 2026-10-08 one died 23
+  minutes into a 9-chat drain, leaving two chats on both accounts and seven never tried. A poll
+  that still answers `reason: 'daemon-restarted'` means a move started on an older daemon or one
+  that ended over an hour ago. ⛔ On that answer do NOT re-fire the move: run `migrate_reconcile`
+  (below) and `migrate_reconcile --finish <id>` for each half-move it lists, then check
+  `list_chats`.
 - **Check the account first with `list_chats`**, not `list_sessions` (which missed one of
   Martin's four chats behind its 7-day default) and not a dry-run move. If `list_chats` answers
   with an HTML-instead-of-JSON error, the running daemon is older than the tool: rebuild and

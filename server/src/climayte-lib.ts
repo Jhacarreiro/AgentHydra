@@ -8,10 +8,11 @@
 // own API-error events, an errored terminal `result`, or stderr are evidence of a wall. Model prose
 // and tool output never are, or a worker that merely TALKS about a session limit gets walled.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DoingKind, doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
+import { firstRequestFromFile } from './climayte-first-request'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
 import type { CliMayteOrigin } from './climayte-ping'
 import {
@@ -38,7 +39,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
-import { contextOf, parseUsageLine, readTurnUsage } from './usage-tokens'
+import { contextOf, readTurnUsage } from './usage-tokens'
 
 export type CliMayteStatus =
   | 'queued'
@@ -83,6 +84,11 @@ export interface CliMayteAttempt {
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
+  /** Native runner only: the loopback port file and the delivered log of messages written into the
+   *  live CLI's stdin mid-turn (climayteSend). `deliveries` lists them in order; `accepted` is set once
+   *  the runner answered 200. Whether the CLI read one is told by its echo on the stdout log. */
+  deliver?: { token: string; portFile: string; delivered: string }
+  deliveries?: { requestId: string; text: string; accepted: boolean; read?: true }[]
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
    *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading
@@ -206,6 +212,18 @@ export function roleOf(w: {
   return w.desk?.manager ? 'seat' : 'prime'
 }
 
+/** A Hydra Core seat: a chat sat as a catalog persona under a Prime (climayte.ts seatTask), whose Prime sums it up
+ *  with the time left, so it estimates each message (SEAT_ETA_INSTRUCTION). A Desk chat pinned to a manager is a
+ *  seat by roleOf too, but has no persona and no Prime above it to show an estimate. */
+export function isCoreSeat(w: {
+  role?: CliMayteRole
+  chat?: boolean
+  desk?: { manager?: string }
+  persona?: string
+}): boolean {
+  return w.chat === true && !!w.persona && roleOf(w) === 'seat'
+}
+
 export const DRONE_REFUSAL =
   'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
 
@@ -232,6 +250,12 @@ export function verdictCoversNewestWork(w: {
 }): boolean {
   const at = w.verdicts?.at(-1)?.at
   return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
+}
+
+/** A message request id a worker took (CliMayteWorker.sendIds) and when (epoch ms). */
+export interface CliMayteSendId {
+  id: string
+  at: number
 }
 
 export interface CliMayteWorker {
@@ -300,9 +324,10 @@ export interface CliMayteWorker {
    *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
    *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */
   requestId?: string
-  /** The newest message request ids it took (climayteSend `requestId`, at most SEND_IDS_KEPT): the
-   *  same message sent again is answered as taken and queued once. */
-  sendIds?: string[]
+  /** The message request ids it took within SEND_ID_WINDOW_MS (climayteSend `requestId`), each with
+   *  when it was taken: the same message sent again is answered as taken and queued once. A bare
+   *  string is an id saved before they carried their time (climayte.ts keptSendIds). */
+  sendIds?: (CliMayteSendId | string)[]
   /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
    *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
   sealed?: CliMayteSealed
@@ -1023,15 +1048,27 @@ function windDownCause(why: WindDownWhy): string {
   return `this account is at ${Math.round(why.pct)}% of its ${why.week ? 'weekly' : '5-hour'} usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once that window resets)`
 }
 
+/** The first words of a chat's windDownMessage. A chat's turn that ends stays ended (withStops keeps
+ *  it 'done'), so nothing here may read as the session handing its work over now. */
+function chatWindDownCause(why: WindDownWhy): string {
+  if (why.reason === 'usage')
+    return `this account is at ${Math.round(why.pct)}% of its ${why.week ? 'weekly' : '5-hour'} usage; if it reaches CliMayte's stop line before this chat's work is done, AgentHydra moves the work to a fresh session on another account, which starts from a handoff`
+  if (why.reason === 'context')
+    return `this chat's conversation has grown to about ${Math.round(why.tokens / 1000)}k tokens, so the owner's next message will start a fresh, smaller session from a handoff`
+  return "the orchestrator asked that the owner's next message start a fresh session from a handoff"
+}
+
 /** What a winding-down worker is told after its next tool call (a PostToolUse hook shows it). The
  *  session that has the whole context writes the handoff, while its own cache is warm; the next
  *  account then starts a small fresh session from it instead of re-reading the whole conversation
  *  (a move re-reads it all uncached: 219k tokens cost $1.77 on one live move, 2026-09-30). */
 export function windDownMessage(why: WindDownWhy, path: string, chat = false): string {
   // A chat's owner reads every reply, and the handoff is AgentHydra's bookkeeping: the reply never
-  // mentions it, and the turn goes on with the owner's request.
+  // mentions it, and the turn goes on with the owner's request. Told the task "goes to a fresh
+  // session", 51 of 97 chats wound down for size in a day ended their turn within 150 s on a
+  // progress report, and sat done until the owner asked why they stopped (2026-10-16).
   if (chat)
-    return `AgentHydra: ${windDownCause(why)}. This is bookkeeping for AgentHydra, not something to tell the owner: write the handoff now, silently, with the Write tool to ${path}, for the session that continues this task. Do not mention the handoff, the file or this note in anything you say. Then carry on with the owner's request and end your turn with your normal reply. The handoff holds, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results.`
+    return `AgentHydra: ${chatWindDownCause(why)}. This is bookkeeping for AgentHydra, not something to tell the owner: write the handoff now, silently, with the Write tool to ${path}. Then go straight back to the owner's request and keep working until it is fully done, as you would have without this note. This note is no reason to stop, wrap up or end your turn early with a progress report: the owner reads a turn that ends as the work being finished, and nothing picks it up again until they write. Just before your final reply, update the handoff with whatever changed since you wrote it. Do not mention the handoff, the file or this note in anything you say. The handoff holds, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results.`
   // The handoff comes FIRST: the hard stop at 90% is a few points away, about 30 seconds of heavy
   // work, and a session stopped before its note is written moves by re-reading everything cold
   // (stress review, 2026-10-02). A task two or three calls from done finishes instead.
@@ -1057,9 +1094,10 @@ export function transcriptHandoff(jsonl: string, cap = 4_000): string {
       continue
     }
     if (ev?.parent_tool_use_id) continue
-    if (ev?.type === 'user' && typeof ev.message?.content === 'string') {
+    const owner = ev?.type === 'user' ? plainUserText(ev.message?.content) : null
+    if (owner !== null) {
       flush()
-      turns.push(`Owner: ${ev.message.content.slice(0, 1_500)}`)
+      turns.push(`Owner: ${owner.slice(0, 1_500)}`)
     } else if (ev?.type === 'assistant') {
       const text = (ev.message?.content ?? [])
         .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
@@ -1240,8 +1278,23 @@ function noteTurnText(scan: AttemptScan, ev: any): void {
       }
   } else if (ev?.type === 'user') {
     if (scan.said.length && isStopHookFeedback(ev)) scan.turnTexts.push(scan.said.join('\n\n'))
+    else if (isMessageEcho(ev)) return
     scan.said = []
   }
+}
+
+/** The text of a user line that is a message (a string, or text blocks only); a tool's result is a
+ *  tool_result block, so it is null. */
+export function plainUserText(content: unknown): string | null {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || content.length === 0) return null
+  if (!content.every((b: any) => b?.type === 'text' && typeof b.text === 'string')) return null
+  return content.map((b: any) => b.text).join('\n')
+}
+
+/** A message the CLI read from its stdin mid-turn, echoed back by --replay-user-messages. */
+function isMessageEcho(ev: any): boolean {
+  return plainUserText(ev.message?.content) !== null
 }
 
 /** The wall a rejected `rate_limit_event` names: when it ends and which window it is. */
@@ -1458,8 +1511,10 @@ export const RECAP_HEADER = '## What I did'
 export function statusTurns(w: Pick<CliMayteWorker, 'result' | 'results' | 'reports'>): string[] {
   const now = w.results?.length ? w.results : w.result ? [w.result] : []
   if (now.some((t) => t.includes(RECAP_HEADER))) return now
-  for (const r of [...(w.reports ?? [])].reverse()) {
-    const turn = [...r.results].reverse().find((t) => t.includes(RECAP_HEADER))
+  const reports = w.reports ?? []
+  for (let i = reports.length - 1; i >= 0; i--) {
+    const r = reports[i]!
+    const turn = r.results.findLast((t) => t.includes(RECAP_HEADER))
     if (turn)
       return [
         `[Earlier report, for: ${r.message}]
@@ -1578,7 +1633,7 @@ export function attemptSpend(
   // The kit has no per-call read, so the first request is the one thing still read from the file.
   let first: CliMayteTokens | null = null
   try {
-    first = firstRequest(readFileSync(files[0] as string, 'utf8'), startedAt, endedAt)
+    first = firstRequestFromFile(files[0] as string, startedAt, endedAt)
   } catch {
     // unreadable: no first request
   }
@@ -1625,17 +1680,6 @@ export interface AttemptSpend {
   settled: boolean
 }
 
-/** The first assistant request's usage in [startedAt, endedAt] of a transcript, or null. */
-function firstRequest(text: string, startedAt: number, endedAt: number): CliMayteTokens | null {
-  for (const line of text.split('\n')) {
-    const turn = parseUsageLine(line)
-    if (!turn || !(turn.ts >= startedAt && turn.ts <= endedAt)) continue
-    const u = turn.usage
-    return { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheCreation }
-  }
-  return null
-}
-
 /** Every `*.jsonl` under `dir`, at most `depth` folders down; none when it does not exist. */
 function jsonlUnder(dir: string, depth: number): string[] {
   let entries: import('node:fs').Dirent[]
@@ -1655,7 +1699,18 @@ function jsonlUnder(dir: string, depth: number): string[] {
   )
 }
 
-const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)
+function oneLine(s: string, n: number): string {
+  if (s.length <= 65_536) return s.replace(/\s+/g, ' ').trim().slice(0, n)
+  const text = s.trim()
+  if (!text) return ''
+  const k = Math.max(n * 8, 4096)
+  const head = text.slice(0, k).replace(/\s+/g, ' ')
+  // An extra normalized character proves the requested prefix is complete, even at a space.
+  // Sparse text falls back after one small probe instead of repeatedly rescanning long gaps.
+  const normalized = head.length >= n + 1 || text.length <= k ? head : text.replace(/\s+/g, ' ')
+  // Copy only the retained UTF-16 units, so a tiny stored summary cannot keep the body alive.
+  return normalized.slice(0, n).split('').join('')
+}
 
 export function summarizeEvent(raw: unknown): string | null {
   const ev = raw as any
@@ -1667,8 +1722,9 @@ export function summarizeEvent(raw: unknown): string | null {
   if (ev?.type === 'system' && ev.subtype === 'init') return `started (${ev.model ?? 'unknown'})`
   if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) return null
   for (const b of ev.message.content) {
-    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-      return `said: ${oneLine(b.text, 140)}`
+    if (b?.type === 'text' && typeof b.text === 'string') {
+      const preview = oneLine(b.text, 140)
+      if (preview) return `said: ${preview}`
     }
     if (b?.type === 'tool_use') {
       const i = b.input ?? {}
@@ -2267,9 +2323,14 @@ export function leanText(w: CliMayteWorker): CliMayteLeanText {
 }
 
 /** Copy ordinary list fields without invoking any packed-text accessor. */
-function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+function withoutWorkerText(
+  w: CliMayteWorker,
+  text: CliMayteLeanText,
+  omit?: ReadonlySet<string>,
+): CliMayteWorker {
   const row: Record<string, unknown> = {}
   for (const key of Object.keys(w)) {
+    if (omit?.has(key)) continue
     if (key === 'prompt') row.prompt = text.prompt
     else if (key === 'result') row.result = null
     else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
@@ -2293,13 +2354,68 @@ export function toView(
   lookup?: OriginLookup,
   text?: CliMayteLeanText,
 ): CliMayteWorkerView {
-  const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
+  return projectWorkerView(w, now, FULL_VIEW_PROJECTION, lookup, text)
+}
+
+/** A list chooses its final attempt/verdict rows before they are built. Common fields stay on the
+ *  same fresh view, including older or unknown worker fields copied from the record. */
+export interface WorkerViewProjection<A, V> {
+  attempts(w: CliMayteWorker): A[]
+  verdicts(w: CliMayteWorker): V[] | undefined
+  /** Opt-in list contracts can leave unused raw fields unread; common derived fields stay fresh. */
+  omitWorkerFields?: ReadonlySet<string>
+}
+
+type ProjectedWorkerView<A, V> = Omit<CliMayteWorkerView, 'attempts' | 'verdicts'> & {
+  attempts: A[]
+  verdicts?: V[]
+}
+
+const FULL_VIEW_PROJECTION: WorkerViewProjection<
+  CliMayteWorkerView['attempts'][number],
+  NonNullable<CliMayteWorkerView['verdicts']>[number]
+> = {
+  verdicts: (w) =>
+    w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+    })),
+  attempts: (w) =>
+    w.attempts.map((a, i) => {
+      const because = attemptCause(w, i)
+      return {
+        account: { id: a.account.id, num: a.account.num, name: a.account.name },
+        outcome: a.outcome,
+        notice: a.notice,
+        requested: a.requested,
+        model: a.model,
+        ...(a.ceiling ? { ceiling: true } : {}),
+        tokens: a.tokens,
+        costUsd: a.spend ? a.spend.costUsd : null,
+        turns: a.spend ? a.spend.turns : null,
+        pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
+        rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
+        ...(because ? { because } : {}),
+        ...(a.left?.length ? { left: a.left } : {}),
+        ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
+      }
+    }),
+}
+
+export function projectWorkerView<A, V>(
+  w: CliMayteWorker,
+  now: number,
+  projection: WorkerViewProjection<A, V>,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): ProjectedWorkerView<A, V> {
+  const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...(text ? withoutWorkerText(w, text) : w),
+    ...(text ? withoutWorkerText(w, text, projection.omitWorkerFields) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
-    // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
+    // Bookkeeping for repeated sends, ten minutes of ids: no view reads it.
     sendIds: undefined,
     prompt: text ? text.prompt : w.prompt.slice(0, 300),
     ...(text ? undefined : keptReport(w)),
@@ -2315,27 +2431,9 @@ export function toView(
     saidLine: undefined,
     saidAt: undefined,
     stateAt: undefined,
-    reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
-    verdicts: w.verdicts?.map(({ units, ...v }) => ({
-      ...v,
-      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
-    })),
-    attempts: w.attempts.map((a, i) => ({
-      account: { id: a.account.id, num: a.account.num, name: a.account.name },
-      outcome: a.outcome,
-      notice: a.notice,
-      requested: a.requested,
-      model: a.model,
-      ...(a.ceiling ? { ceiling: true } : {}),
-      tokens: a.tokens,
-      costUsd: a.spend ? a.spend.costUsd : null,
-      turns: a.spend ? a.spend.turns : null,
-      pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
-      rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
-      ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
-      ...(a.left?.length ? { left: a.left } : {}),
-      ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
-    })),
+    reportedModel: w.attempts.findLast((a) => a.model)?.model ?? null,
+    verdicts: projection.verdicts(w),
+    attempts: projection.attempts(w),
     used: (() => {
       const all = w.attempts.reduce(
         (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),

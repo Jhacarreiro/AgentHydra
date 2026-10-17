@@ -821,11 +821,15 @@ function queuedNotification(rec: Loose): string {
 /**
  * What the person sent while a turn ran: Claude Code files it as a queued_command attachment only, never a user record,
  * its prompt a string or the message's blocks (text and pictures). 2026-10-14: every one was dropped, 2,771 in this PC's
- * transcripts, 17 of them in one session, 11 with pictures. Its content, or null.
+ * transcripts, 17 of them in one session, 11 with pictures. A CliMayte worker's (entrypoint sdk-cli) carries no origin:
+ * 2026-10-15, its 46 on this PC were still dropped, so the chat's stand-in never met its copy and sat "Queued" under the
+ * newest reply hours after it was answered. Another program's (origin peer) and a task's notice are not the person's.
+ * Its content, or null.
  */
 function queuedPrompt(rec: Loose): string | Block[] | null {
   const a = (rec.attachment ?? {}) as Loose
-  if (a.type !== 'queued_command' || a.commandMode !== 'prompt' || (a.origin as Loose | undefined)?.kind !== 'human') return null
+  const from = (a.origin as Loose | null | undefined)?.kind
+  if (a.type !== 'queued_command' || a.commandMode !== 'prompt' || (from !== undefined && from !== 'human')) return null
   if (typeof a.prompt === 'string') return a.prompt.trim() ? a.prompt : null
   return Array.isArray(a.prompt) && a.prompt.length ? (a.prompt as Block[]) : null
 }

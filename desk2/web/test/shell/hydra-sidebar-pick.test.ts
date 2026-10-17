@@ -39,6 +39,10 @@ describe('the tab the pane will open on', () => {
     expect(resolvePaneView(null, 'instances')).toBe('desktop')
   })
 
+  it('maps the old Routines tab to Tools, so a saved window lands there', () => {
+    expect(resolvePaneView(null, 'routines')).toBe('tools')
+  })
+
   it('takes sessionStorage over the durable value', () => {
     expect(resolvePaneView('hswarm', 'instances-home')).toBe('hswarm')
     expect(resolvePaneView(null, 'hswarm')).toBe('hswarm')

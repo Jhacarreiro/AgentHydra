@@ -44,8 +44,10 @@ keys only when nothing cheaper can do the job).
 
 1. **Free accounts** take tool-free work at no cost. HSwarm tries them first when `route_via_free` is on and the
    task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step. A task
-   whose tools only read goes to CliMayte first (step 2) and then to a Free thread before any key
-   (`route_via_free_tool_profiles`, `route_via_free_tool_asks`; hswarm/README.md, "Free accounts first").
+   whose tools only read (or read the web) goes to a Free thread first, then CliMayte (step 2), before any key
+   (`route_via_free_tool_profiles`, `route_via_free_tool_asks`; hswarm/README.md, "Free accounts first"). So does an
+   edit or all task of a profile in `route_via_free_edit_profiles` / `route_via_free_shell_profiles`: its Free leg
+   works in a scratch copy of the folder, and only an accepted answer's changes land in the real one.
 2. **CliMayte** takes every task with tools that an idle account can start now: HSwarm reads `GET /api/corch/capacity`
    (idle accounts, less the workers queued there and its own sends of the last 2 s) and asks no price question
    (`hswarm/climayte_route.py`). With no account idle the task runs on its API route at once, never queued here. Until
@@ -415,6 +417,10 @@ compressed. The count includes the earlier recap retained by `statusTurns`; read
 packed text field discards the summary and restores ordinary fields. Full detail and report requests
 continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
 
+Brief lists use the same cached text projection, including explicit history and waiting reads.
+They retain the exact recap-aware `resultChars` count without decompressing prompts or reports
+that the brief contract omits; detail and report reads still restore the original text.
+
 Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
 projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
 chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
@@ -422,6 +428,13 @@ verdict and launch details. Older daemons ignore the flag; ordinary lean/full li
 routes keep their shapes, and brief/report reads take precedence. Packed history remains packed.
 Finished workers skip running-attempt access, and spend settlement collects only open attempts
 instead of allocating intermediate arrays for every historical worker.
+
+Store checkpoints still inspect current worker statuses and serialize before yielding. Revived
+workers come from that pass's hot rows; tracked Map removals identify deleted filed records,
+avoiding a second walk through unchanged finished history. Done-file writes still precede
+`workers.json`, and removals follow it. No checkpoint is deferred or combined by this optimization.
+Cancellation releases the attempt's parsed-log cache even if spend calculation throws; its
+existing error handling and bounded recent summary cache remain intact.
 
 Default Claude parent lookups find only the first two slash/backslash positions rather than
 splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain
@@ -909,6 +922,12 @@ sub-agents for estimating time until they can actually estimate time properly."
   `ETA: 1h 20m` (80), `ETA: 5-10 min` (7.5, a range is its middle) and a bare number as minutes;
   only the amounts right after `ETA` count; 0 or over a day is no estimate. `etaOfEvent` looks only
   at an assistant event's text blocks, never a tool result or the prompt.
+- **Seats estimate too, for their Prime only.** A Hydra Core seat (`isCoreSeat`: a chat with a catalog
+  persona, climayte.ts `seatTask`) gets `SEAT_ETA_INSTRUCTION` in its prompt and its `ETA:` line is kept on
+  `eta` like a worker's, so its Prime's view can show the time left (owner, 2026-10-16: "Expected timeline,
+  X amount of hours"; desk2 `tasks/seats.ts`). It is never a sample: no ledger row, `etaSamples` leaves
+  chats out, and the Stop hook never asks a chat to review. Any other chat, a manager-pinned one included,
+  is not asked for an estimate.
 - **Recording.** `applyLogEvent` (climayte-core.ts) keeps the first estimate of an attempt's log in
   `LogRead.eta` with its event time; `noteActivity` copies it once per message to
   `worker.eta { minutes, at, attempt }` (chat workers are skipped: they get no `WORKER_BRIEF`). A
@@ -1575,17 +1594,36 @@ same logins signed in; a refresh on one reaches the other within a pass.
   (`cloudflare_worker_deploy`, value-blind).
 - On a PC: `<CONFIG_DIR>/login-sync.json` holds the address, the DPAPI-sealed token and 32-byte key,
   the on switch, the logins left out, and per login the store version and credential hash this PC
-  last agreed on. Every 30 s (`startLoginSync`) and on Sync now: a login changed here since that
+  last agreed on (for a CLI login also its sign-in, `signIn`, below). Every 30 s (`startLoginSync`) and on Sync now: a login changed here since that
   agreement goes up (even while a session runs: the file is what that CLI last wrote); when the
   store moved on, the copy whose access token expires later wins (a refresh pushes the expiry out);
   a newer copy lands through `landLogin` (the import's guards); a login only the store holds gets an
   instance here with the same id and number. A landed login is recorded by what was landed, so a
   refresh its sign-in check makes still goes up.
+- A logout reaches every PC (owner, 2026-10-02): a login this PC held and shared that is gone here
+  turns its row into a signed-out marker, and each other PC signs out of it once no session runs on
+  it there, unless its copy is a new sign-in made after the logout. A running session's refresh is
+  not one. The CLI rotates the refresh token on every refresh but writes `refreshTokenExpiresAt` again
+  as the same moment (397 ms apart across one refresh measured 2026-10-16), so every agreement records
+  that sign-in (`credentialSignIn`) and a file within 5 minutes of it is the same login, refreshed.
+  Before, a refresh written after the logout read as a new sign-in and signed the other PC back in.
 - Each login is AES-256-GCM encrypted under the key with its instance id as associated data. The
   pairing code (`ahsync1:` + base64url of address, token, key) is the only way the key leaves a PC:
   the dialog's copy button, for the other PC's Join.
-- Left out on a PC (`excluded`): the dialog's per-login switch, a Log out there, a move away. Neither
-  uploaded nor landed there.
+- Left out on a PC (`excluded`): a CLI login's switch in the dialog, a Log out there, a move away.
+  Neither uploaded nor landed there. A desktop login is never left out (owner, 2026-10-16: "If the PC
+  desktop logins are set to stop syncing, I don't want that"): its row has no switch, and the desktop
+  half ignores `excluded`.
+- A delete reaches every PC (owner, 2026-10-16: "we should also cross-remove ... leave a note").
+  Every instance delete asks why (`server/src/core/delete-note.ts`: at least 3 characters, in place
+  of typing the name). The delete routes then call `removeLoginEverywhere(row, {note})`; the next
+  pass turns that row into the removal marker (`meta.signedOut` and `meta.removed`, the note sealed
+  in the blob, `config.removals` keeping it until the store takes it). A row an instance here still
+  uses (a follower on the same account, a second profile of it) gets no marker. Each other PC that
+  shared the row deletes its instance once nothing runs on it (a CLI session, an open desktop app),
+  notes `removed` with "Deleted on <PC> ... Their note: ..." and notifies once per pass
+  (`removalMessage`). An instance holding the row after that PC took the removal is a new sign-in
+  and goes up as one.
 - A pass that makes an instance this PC did not have (a CLI login or a desktop profile from the other
   PC) says so once, at the end of the pass, over the OS notification channel when notifications are on
   (`server/src/login-sync-arrivals.ts`; owner, 2026-10-09: "if his finds a new account, add a
@@ -1600,7 +1638,8 @@ same logins signed in; a refresh on one reaches the other within a pass.
   `claude auth status` passed for each; both sides' next passes found all 10 unchanged.
 - The test (`server/tests/cli-login-sync.test.ts`) runs the real Worker on bun:sqlite behind D1's
   API and plays the other PC through the store: a refresh there lands here, one here goes up, one
-  made by the sign-in check goes up, an older copy never wins, a left-out login stays put.
+  made by the sign-in check goes up, an older copy never wins, a left-out login stays put, and a
+  refresh here after a logout on the other PC signs out here while a new sign-in goes up.
 
 ### Two PCs: the shared queue, `server/src/core/climayte-queue-sync.ts` (owner, 2026-10-02)
 
@@ -1711,7 +1750,26 @@ Desktop account signed in on one PC is signed in on the other without the browse
   separate sign-ins of one account each keep their own tokens and both stay signed in, and tying
   them together would let either PC's refresh sign the other out. A PC joins the store's copy only
   where it has none: a signed-out profile of the same folder name, else a new profile with that
-  name (or `<name>-synced`) and number. From then on the later expiry among the grants wins.
+  name (or `<name>-synced`) and number. From then on the copy whose session grant
+  (`user:sessions:claude_code`, the app's own sign-in) expires later wins, else the later expiry
+  among all its grants. The latest expiry alone is the year-long grant where a profile has one, minted
+  at or after a sign-in but not always anew at the next (seen 2026-10-16), so an older copy holding
+  one beat a newer sign-in without it.
+- A grant Anthropic revoked (2026-10-16, `server/src/core/revoked-grants.ts`) never lands and does
+  not count toward either expiry, and each login carries the account's revoked-grant digests so
+  the other PC drops them too. The rules, and why a re-login does not replace such a grant, are in
+  REFERENCE.md, "A 429 can be a revoked login". Its prune writes config.json only when the file is
+  unchanged since it read it, so it never undoes a login a pass landed meanwhile; the
+  credential-writer ratchet (`scripts/checks/credential-writer-ratchet.mjs`) lists it as a login
+  writer with that reason.
+- Known hazard, cause unproven (measured 2026-10-16): a profile that joined the store's copy holds
+  the same claude.ai session cookie and the same rotating refresh-token family as the PC it came
+  from, so a refresh by either PC's app can leave the other's tokens dead; separate sign-ins (above)
+  avoid exactly that. Three accounts' desktop grants were revoked within a day of each other in
+  mid-October, and for one the other PC's copy showed a refresh 24 minutes before the last good read
+  here. Revocations of the same shape also happened in September, before login sync existed, so it
+  is not proven to be the cause. Sending only the sign-in cookies, so each PC makes its own grants,
+  would remove the hazard; that change waits on the owner.
 - Cookies are read only while the profile is closed (Chromium locks the database); a pass while it
   runs uploads the new tokens with the cookies the store already has, and the profile's own cookies
   follow once it closes (an upload only when they differ from the store's). The same tokens with
@@ -1724,13 +1782,23 @@ Desktop account signed in on one PC is signed in on the other without the browse
   were open, so their cookies follow), and two landed logins answered live from Anthropic. The run
   found both gaps above (no cookies on a PC with no profile; later cookies ignored), each now
   pinned by the test.
-- A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one.
+- A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one, and
+  reaches every PC (2026-10-02): the account's store row turns into a signed-out marker, and each
+  other PC signs its profile out once that profile's app is closed, unless its claude.ai sign-in was
+  made after the logout: the earliest creation time of its `sessionKey*` cookies, which claude.ai
+  keeps when it sets the same key again and a token refresh never touches. A running app refreshes
+  its grants and rewrites config.json on its own, so neither counts as a sign-in; a real one on a
+  profile left open goes up once it closes. A Log out only edits files on each PC; it never asks
+  Anthropic to end the login.
 - Windows only (elsewhere the profile key is in the Keychain or a keyring).
 - The test (`server/tests/desktop-login-sync.test.ts`, Windows) proves the key round trip, a
   store-only account landing in a new profile under its own key with the cookie in Chromium's
-  format, the later expiry winning both ways, a separate sign-in left alone, and a left-out login
-  staying put. Not proven by a test: that Claude Desktop itself accepts a landed profile; that
-  takes opening one, which only the owner does.
+  format, the newer copy winning both ways (the later session grant over a year-long one), a
+  refresh after a logout on the other PC signing out while a sign-in after it goes up, a separate
+  sign-in left alone, and a left-out login staying put. `server/tests/revoked-grants.test.ts`
+  (Windows) proves a usage check taking the revoked grants out of a closed profile while keeping the
+  live one, and a prune leaving alone a login that landed while it waited. Not proven by a test: that
+  Claude Desktop itself accepts a landed profile; that takes opening one, which only the owner does.
 
 ### One sign-in for desktop and CLI: `server/src/core/desktop-cli-feed.ts` (owner, 2026-10-01)
 
@@ -1778,6 +1846,16 @@ desktop? ... to save me from having to do both individually."
 - A Log out of a fed CLI instance cuts the link (`logoutCliInstance`), so it stays out.
 - A fed login never goes to the login sync store (it has no refresh token); the desktop login
   syncs, and each PC feeds its own CLI instance. The sync dialog says so on that row.
+- A closed desktop profile's grant is renewed in place before it runs out (`core/desktop-cli-renew.ts`).
+  A desktop login the sync shares is renewed by ONE PC (owner, 2026-10-16: "my Max/desktop accounts
+  always need to sync"): before the 2026-10-16 fix every PC holding it refreshed the same refresh token
+  within a minute of the others, the token rotated, and the PC that went second walled its fed login
+  as "open its desktop app once". Now a PC refreshes only once the store has taken its claim on the
+  row (`claimDesktopRenewal`: the row rewritten unchanged with `renewBy` / `renewUntil`, compare-and-swap
+  on the version; a claim lapses after 10 minutes). A PC behind the store, or facing another PC's live
+  claim, waits and gets the renewed copy with the next pass. A row sent from a running app
+  (`meta.open`) is left to that app, which refreshes its own grant, until the grant has run out.
+  `GET /api/cli-instances/renewals` lists each linked profile's last outcome and why it waits.
 - CliMayte sees a fed instance as any signed-in CLI account.
 
 ## Tasks that arrive from HSwarm (owner, 2026-10-05)

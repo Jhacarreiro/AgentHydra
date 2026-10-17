@@ -18,14 +18,15 @@ let rotatedAt = Date.now()
 
 /** The table's copy of `s`, which becomes the copy when there is none. */
 export function intern(s: string): string {
-  const hit = current.get(s)
-  if (hit !== undefined) return hit
+  // Hits must advance the windows too, and a long idle gap expires both tables.
   const now = Date.now()
   if (now - rotatedAt >= ROTATE_MS) {
-    previous = current
+    previous = now - rotatedAt >= 2 * ROTATE_MS ? new Map() : current
     current = new Map()
     rotatedAt = now
   }
+  const hit = current.get(s)
+  if (hit !== undefined) return hit
   const kept = previous.get(s) ?? s
   current.set(kept, kept)
   return kept

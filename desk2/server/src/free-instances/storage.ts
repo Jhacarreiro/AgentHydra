@@ -79,8 +79,8 @@ export class FreeStorage {
       catch (error) { if (!this.restore('damaged')) throw error }
     }
   }
-  create(provider: FreeProvider, name?: string): FreeInstance {
-    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
+  create(provider: FreeProvider, name?: string, pool?: Pick<FreeInstance, 'poolState' | 'poolAdmission'>): FreeInstance {
+    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null, ...pool }
     return this.insert(instance)
   }
   /** An account another PC shares (free-instances/sync.ts): its id and name, and its number unless one here has it. */
@@ -125,6 +125,15 @@ export class FreeStorage {
     if (Date.now() - this.backedUpAt < BACKUP_EVERY_MS) return
     this.backedUpAt = Date.now()
     void this.backupWriter.write(json)
+  }
+  /** Admissions need an acknowledged atomic snapshot, rather than a fire-and-forget save. */
+  async saveDurable(timeoutMs = 10_000): Promise<boolean> {
+    const json = JSON.stringify(this.data)
+    const saved = this.writer.write(json)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([saved, new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) })])
+    } finally { clearTimeout(timer) }
   }
   /** Server shutdown: what is queued but not on disk yet is written now. Call it after the service's last save. */
   flushSync(): void {

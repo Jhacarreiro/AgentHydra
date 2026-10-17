@@ -42,7 +42,9 @@ import { sharedKitStore, type UsageRow, usageQueryAsync } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf } from './pricing'
+import { isAbsoluteCwd, type RepoRef, reposOf } from './project-repo'
 import { anyDiscount, atYourRate, type Discounts, readRoutingSettings } from './routing-cost'
+import { defaultCwdSources, learnedSessionCwds, learnSessionCwdsInBackground } from './session-cwds'
 import { streamLines } from './session-search'
 import { decodeProjectKey, ensureTranscriptIndex, type TranscriptFile } from './transcript'
 import type {
@@ -1346,11 +1348,13 @@ export function storedModelSpend(json: string | null): Record<string, ModelSpend
  * folder. Grouping on the raw string put one project on the chart twice, which is exactly the kind
  * of mistake a chart makes look authoritative. Caught on real data, not in review.
  */
-function projectKeyOf(display: Map<string, string>, path: string): string {
+function projectKeyOf(display: Map<string, ProjectShown>, path: string, label?: string): string {
   const key = path.toLowerCase()
-  if (!display.has(key)) display.set(key, path)
+  if (!display.has(key)) display.set(key, label ? { key: path, label } : { key: path })
   return key
 }
+/** A project row's key as first spelt, and the name to show for a repository. */
+type ProjectShown = { key: string; label?: string }
 
 /** The four categories, zeroed. */
 export function emptyTokens(): TokenBreakdown {
@@ -1380,18 +1384,38 @@ const KIT_PROVIDER: Record<string, SessionSource> = {
   dsh: 'dsh',
   hermes: 'hermes',
   hswarm: 'zswarm',
+  // VS Code Copilot is one of the tools foreign-sessions.ts reads.
+  'vscode-copilot': 'foreign',
 }
 
-/** cwd (else the decoded store folder) of every session either stored table knows, by session id. */
-async function sessionProjects(): Promise<Map<string, string>> {
+/** cwd (else the decoded store folder) of every session either stored table knows, by session id, and
+ *  of the sessions session-cwds.ts learned from the sources' own files. `learnFrom` is the ledger whose
+ *  sessions a background pass may look up (the shared one; a test's own store reads only the tables). */
+async function sessionProjects(learnFrom: KitStore | null = null): Promise<Map<string, string>> {
   // Sessions change slowly and reading the scan cache costs ~100 us a row, so a minute's answer is kept.
-  if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) return projectsCache.map
+  if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) {
+    if (learnFrom) learnBehind(learnFrom, projectsCache.map)
+    return projectsCache.map
+  }
   if (!projectsInflight) {
     projectsInflight = readSessionProjects().finally(() => {
       projectsInflight = null
     })
   }
-  return projectsInflight
+  const map = await projectsInflight
+  if (learnFrom) learnBehind(learnFrom, map)
+  return map
+}
+
+/** Look up the sessions `map` cannot place, without waiting: what a pass finds is in the next read. */
+function learnBehind(kit: KitStore, map: Map<string, string>): void {
+  learnSessionCwdsInBackground(
+    defaultCwdSources(kit),
+    () => new Set(map.keys()),
+    () => {
+      projectsCache = null
+    },
+  )
 }
 const PROJECTS_TTL_MS = 60_000
 let projectsCache: { at: number; map: Map<string, string> } | null = null
@@ -1415,7 +1439,9 @@ async function readSessionProjects(): Promise<Map<string, string>> {
         (rows) => {
           for (const r of rows) {
             const path = r.cwd || (r.project ? decodeProjectKey(r.project) : '')
-            if (r.session_id && path) out.set(r.session_id, path)
+            // A decoded store key with no real cwd ("codex" on every Codex session) places nothing:
+            // the session is looked up in its own files instead (session-cwds.ts).
+            if (r.session_id && isAbsoluteCwd(path)) out.set(r.session_id, path)
           }
         },
       )
@@ -1425,6 +1451,12 @@ async function readSessionProjects(): Promise<Map<string, string>> {
   }
   await read('session_stats', '1')
   await read('session_scan_cache', 'analytics_at is not null')
+  try {
+    for (const [session, cwd] of await learnedSessionCwds())
+      if (!out.has(session)) out.set(session, cwd)
+  } catch {
+    // a store from before session_cwd_seen: the tables alone place what they place
+  }
   projectsCache = { at: Date.now(), map: out }
   return out
 }
@@ -1552,7 +1584,8 @@ export async function spendReport(opts: SpendReportOptions = {}): Promise<SpendR
   // Too old to show while a rebuild runs: a card opened after a long pause waits once rather than draw old spend.
   if (kept.report && clock - kept.at >= SPEND_STALE_MAX_MS) kept.report = null
   const entry = kept
-  entry.rebuild ??= buildSpendReport({ ...opts, store })
+  // Only the daemon's own ledger looks up sessions in their files; a store passed in is a test's.
+  entry.rebuild ??= buildSpendReport({ ...opts, store }, opts.store ? null : store)
     .then((report) => {
       entry.report = report
       entry.at = clock
@@ -1629,7 +1662,9 @@ interface SpendTally {
   /** The session ledger's share of the totals. */
   attributed: SpendTotals
   projects: Map<string, string>
-  projectDisplay: Map<string, string>
+  /** The repository each project cwd is in (project-repo.ts); null for a folder in none. */
+  repos: Map<string, RepoRef | null>
+  projectDisplay: Map<string, ProjectShown>
 }
 
 function sumTokens(into: TokenBreakdown, t: TokenBreakdown): void {
@@ -1690,7 +1725,12 @@ function foldSessions(rows: UsageRow[], t: SpendTally): void {
       t.sessions.add(session)
     }
     const path = (session && t.projects.get(session)) || 'unknown'
-    t.byProject.add(projectKeyOf(t.projectDisplay, path), x.r, session)
+    // A cwd in a repository (a worktree or subfolder included) counts as that repository.
+    const repo = t.repos.get(path)
+    const key = repo
+      ? projectKeyOf(t.projectDisplay, repo.key, repo.label)
+      : projectKeyOf(t.projectDisplay, path)
+    t.byProject.add(key, x.r, session)
     addSpend(t.attributed, x.r)
   }
 }
@@ -1744,7 +1784,10 @@ function spendFilter(sources: readonly string[] | null, pc: SpendReportOptions['
     : undefined
 }
 
-async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> {
+async function buildSpendReport(
+  opts: SpendReportOptions,
+  learnFrom: KitStore | null = null,
+): Promise<SpendReport> {
   const sources = opts.sources ?? null
   const measures = [
     'tokens',
@@ -1781,7 +1824,8 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   const hourRes = hourly
     ? await usageQueryAsync({ window, filter, groupBy: ['hour'], measures: [...measures] }, qopts)
     : null
-  const projects = await sessionProjects()
+  const projects = await sessionProjects(learnFrom)
+  const repos = await reposOf(new Set(projects.values()))
   const t: SpendTally = {
     byModel: new BucketSet(),
     byProject: new BucketSet(),
@@ -1796,6 +1840,7 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     discounts: readRoutingSettings().discounts,
     attributed: { weighted: 0, cost: null, calls: 0, tokens: emptyTokens() },
     projects,
+    repos,
     projectDisplay: new Map(),
   }
   const { byModel, byProject, byDay, byAccount, bySource, byProvider, totals, discounts } = t
@@ -1839,11 +1884,15 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
       ...b,
       costAtRateUsd: b.costUsd === null ? null : atYourRate(b.key, b.costUsd, discounts),
     })),
-    // Re-labelled with the spelling the reader will recognise, now that grouping is done.
+    // Re-labelled with the spelling the reader will recognise, now that grouping is done. A repository
+    // is keyed `owner/name` (its root folder without a remote) and carries the name to show.
     byProject: byProject
       .list()
       .slice(0, 25)
-      .map((b) => ({ ...b, key: t.projectDisplay.get(b.key) ?? b.key })),
+      .map((b) => {
+        const shown = t.projectDisplay.get(b.key)
+        return { ...b, key: shown?.key ?? b.key, ...(shown?.label ? { label: shown.label } : {}) }
+      }),
     byDay: days,
     ...(byHour ? { byHour } : {}),
     byAccount: byAccount.list(),

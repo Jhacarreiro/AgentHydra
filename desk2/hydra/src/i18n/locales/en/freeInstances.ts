@@ -12,7 +12,6 @@ export default {
   logoutDialogDescription: "This removes the saved login from this PC. The account's private chat list stays, and you can sign in again later.",
   delete: 'Delete', deleteDialogTitle: 'Delete Free account',
   deleteDialogDescription: 'This removes the account from this list and its saved login on this PC and your other PCs. Its chats stay at Claude or ChatGPT.',
-  deleteDialogPlaceholder: 'Account name', deleteDialogMismatch: "Name doesn't match.",
   deleteDialogSubmit: 'Delete account', deleteDialogDeleting: 'Deleting…',
   toastDeleted: 'Deleted {name}', deleteFailed: 'Could not delete. Try again.',
   // The Tokens column: neither site reports tokens, so Desk estimates them (server/src/free-instances/tokens.ts).
@@ -65,14 +64,13 @@ export default {
   // Forget: takes a thread off Desk's list; the token count stays.
   forgetThread: 'Forget', forgetThreadHint: 'Removes it from this list. It was a private chat, so it is not in the site\'s history either.',
   toastForgotten: 'Forgot {name}', forgetFailed: 'Could not forget this chat. Try again.',
-  // The Usage history card's Free part (components/FreeSummary.vue): tokens follow the table's Tokens window, messages
-  // and success come from Desk's daily record over the card's period ({span}: "today", "in the last 7 days", ...).
+  // The Usage history card's Free part (components/FreeSummary.vue): tokens, messages and success come from Desk's daily
+  // record over the card's period ({span}: "today", "in the last 7 days", ...).
   stats: {
     title: 'Free accounts',
     headerLine: 'Free: {tokens} tokens, {answered} answered {span}',
     allFree: 'All Free',
-    window5h: 'this 5-hour window', windowWeek: 'this week', windowTotal: 'all time',
-    tokensIn: 'tokens, {window}',
+    tokensIn: 'tokens {span}',
     tokens: 'tokens',
     answeredOf: 'answered of {sent} messages {span}',
     ofSent: 'of {sent}',

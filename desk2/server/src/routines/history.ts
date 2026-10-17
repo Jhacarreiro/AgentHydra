@@ -2,7 +2,7 @@
 // couple"). routines.json keeps only the last RUNS_KEPT runs for the judge; this file keeps every one, append-only, at
 // <home>/routines/history/<id>.jsonl. A line is a run (keyed by startedAt) or a later `{ startedAt, description }` row for
 // the same run; the reader folds the last row of a key over the first. Pure helpers here; the plugin does the calls.
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { RoutineDetailsStats, RoutineRun, RunDescription } from '@shared/routines'
 
@@ -35,10 +35,21 @@ export function foldHistory(rows: HistoryRow[]): RoutineRun[] {
     .sort((a, b) => b.startedAt - a.startedAt)
 }
 
+// The folded runs of each history file, keyed on its size and mtime: the file only grows (appendRows is its one writer and
+// drops the entry), so a matching stamp means the same runs and a request pays a stat, not a parse. One entry per routine
+// file; a file that is gone drops its entry. Callers only read the runs.
+const memo = new Map<string, { size: number; mtimeMs: number; runs: RoutineRun[] }>()
+
 export function readHistory(file: string): RoutineRun[] {
   try {
-    return foldHistory(parseHistory(readFileSync(file, 'utf8')))
+    const { size, mtimeMs } = statSync(file)
+    const hit = memo.get(file)
+    if (hit && hit.size === size && hit.mtimeMs === mtimeMs) return hit.runs
+    const runs = foldHistory(parseHistory(readFileSync(file, 'utf8')))
+    memo.set(file, { size, mtimeMs, runs })
+    return runs
   } catch {
+    memo.delete(file)
     return []
   }
 }
@@ -47,6 +58,7 @@ export function appendRows(file: string, rows: HistoryRow[]): void {
   if (rows.length === 0) return
   mkdirSync(dirname(file), { recursive: true })
   appendFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  memo.delete(file)
 }
 
 /** The rows `kept` adds to `have`: a run the history lacks (oldest first), or a finished description it lacks. */
@@ -61,11 +73,13 @@ export function missingRows(have: RoutineRun[], kept: RoutineRun[]): HistoryRow[
   return rows
 }
 
-/** Backfills (and syncs descriptions of) a routine's history file from its memory's runs. Returns whether it wrote. */
-export function syncHistory(file: string, kept: RoutineRun[]): boolean {
-  const rows = missingRows(existsSync(file) ? readHistory(file) : [], kept)
+/** Backfills (and syncs descriptions of) a routine's history file from its memory's runs. Returns the file's folded
+ *  run count, so the caller need not re-read the (append-only, ever-growing) file just to count. */
+export function syncHistory(file: string, kept: RoutineRun[]): number {
+  const onDisk = existsSync(file) ? readHistory(file) : []
+  const rows = missingRows(onDisk, kept)
   appendRows(file, rows)
-  return rows.length > 0
+  return onDisk.length + rows.filter((r) => typeof r.endedAt === 'number' && typeof r.outcome === 'string').length
 }
 
 export function descriptionRow(startedAt: number, description: RunDescription): HistoryRow {

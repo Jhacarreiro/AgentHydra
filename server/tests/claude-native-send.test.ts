@@ -11,7 +11,14 @@ const PID = 4242
 const appPath = path.resolve('/example-app/resources/app')
 const profileDir = path.resolve('/Users/me/.claude-instances/example')
 
-function desktop(session: Record<string, unknown>, reply: { delivery: string; reason?: string }) {
+function desktop(
+  session: Record<string, unknown>,
+  reply: { delivery: string; reason?: string },
+  losableWorkKind: (
+    id: string,
+    opts?: { ignoreBackgroundTasks?: boolean },
+  ) => string | undefined = () => undefined,
+) {
   const calls: { id: string; text: string; opts: any }[] = []
   const manager = {
     sessions: new Map([
@@ -23,7 +30,7 @@ function desktop(session: Record<string, unknown>, reply: { delivery: string; re
     waitForInitialization: async () => {},
     getSessionList: async () => [],
     archiveCascadeClosureOf: () => [],
-    losableWorkKind: () => null,
+    losableWorkKind,
     startingSessionIds: new Set<string>(),
     archiveSession: async () => {},
     hasPendingUserInput: () => false,
@@ -140,4 +147,23 @@ test("a native send goes in as another session's message through the app's own p
     expect(await refused.send('Continue.')).toMatchObject({ ok: false, dispatch: 'not-sent' })
     expect(refused.calls).toEqual([])
   }
+})
+
+test('a chat whose only work in flight is a background command takes the send; other losable work still holds it', async () => {
+  // The app's losableWorkKind as Claude 2.42304.0 answers it for an idle chat: its background task,
+  // unless asked to skip background tasks. A usage limit stopped such a chat mid-command on
+  // 2026-10-17, and every continue was held until the command ended.
+  const background = desktop({ isRunning: false }, { delivery: 'delivered' }, (_id, opts) =>
+    opts?.ignoreBackgroundTasks ? undefined : 'background_task',
+  )
+  expect(await background.send('Continue.')).toMatchObject({ ok: true, delivery: 'delivered' })
+  expect(background.calls).toHaveLength(1)
+
+  const held = desktop({ isRunning: false }, { delivery: 'delivered' }, () => 'held_input')
+  expect(await held.send('Continue.')).toMatchObject({
+    ok: false,
+    dispatch: 'not-sent',
+    busy: true,
+  })
+  expect(held.calls).toEqual([])
 })

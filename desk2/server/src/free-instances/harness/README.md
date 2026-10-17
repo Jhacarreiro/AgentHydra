@@ -11,6 +11,12 @@ closes after 60 idle seconds. Standalone CLI sends use a disposable headless bro
 The shared JavaScript cache is selected with `CLAUDFREE_CACHE_DIR`; each account uses a separate
 `CLAUDFREE_STATE_DIR`. The package can still be used through Python, its CLI, or MCP.
 
+Every chat is private, with no option for a regular one. A new Claude chat is created on its own
+first (no model, so a model the account may not use is refused by the message, where the model
+fallback reads it), and nothing is sent unless claude.ai's create answer says `is_temporary: true`;
+the chat registry keeps that answer. A ChatGPT request must carry Temporary Chat before it is sent.
+A chat that is not private is never continued.
+
 Dependencies are installed into Desk's data home. No credentials, runtime caches, virtual environments, diagnostics or recorded chats belong here.
 ChatGPT's Node dependencies are local copies: setup rejects links into an external package store so
 the restricted preparation process can read its dependencies without broader filesystem permissions.

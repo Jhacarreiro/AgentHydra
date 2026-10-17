@@ -281,7 +281,9 @@ describe('efficient origin title warming', () => {
   test('a timed-out lookup remains a miss, ignores late resolution and retries only after its original deadline', async () => {
     const delays: number[] = []
     globalThis.setTimeout = ((callback: () => void, ms?: number) => {
-      if (ms !== undefined) delays.push(ms)
+      // Only deadlines: other code in the process yields with zero-delay timers meanwhile (three of
+      // them on a Windows CI runner, 2026-10-16), and those are not the lookup's.
+      if (ms) delays.push(ms)
       return realSetTimeout(callback, ms === 2000 ? 0 : ms)
     }) as typeof setTimeout
     const id = 'efficient-timeout'

@@ -2,7 +2,7 @@
 // AgentHydra starts it hidden, logs to the dashboard's backend.log, waits for its health path and restarts it with
 // backoff when it exits. The dashboard host proxies /_hydra/api/* to it (see dashboards.ts).
 import { type ChildProcess, spawn } from 'node:child_process'
-import { closeSync, openSync, writeSync } from 'node:fs'
+import { closeSync, createWriteStream, openSync, writeSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 export interface DashboardBackend {
@@ -63,18 +63,41 @@ function scheduleRestart(run: Run): void {
   }, delay)
 }
 
+/** Appends the backend's output to its log; a log that cannot be written is said once, never thrown into the daemon. */
+function pipeToLog(child: ChildProcess, logPath: string): void {
+  const out = createWriteStream(logPath, { flags: 'a' })
+  out.once('error', (err) =>
+    console.error(`[dashboard-backend] ${logPath} could not be written: ${err.message}`),
+  )
+  child.stdout?.pipe(out, { end: false })
+  child.stderr?.pipe(out, { end: false })
+  child.once('close', () => out.end())
+}
+
 function spawnBackend(run: Run): ChildProcess {
   const { backend } = run
   const [exe = '', ...args] = backend.command
   const log = openSync(run.logPath, 'a')
   try {
     writeSync(log, `\n[${new Date().toISOString()}] starting ${backend.command.join(' ')}\n`)
-    return spawn(resolve(backend.cwd, exe), args, {
+    if (process.platform !== 'win32')
+      return spawn(resolve(backend.cwd, exe), args, {
+        cwd: backend.cwd,
+        detached: true,
+        stdio: ['ignore', log, log],
+      })
+    // Windows: not detached, and no file handle as stdio, so libuv adds CREATE_NO_WINDOW. The backend then owns
+    // a console without a window, and every console program it starts shares it. Detached, it had no console,
+    // so the first program it started got one of its own and Windows Terminal showed it (a venv's python.exe
+    // is a launcher that starts the real python: a window per start, 2026-10-16). A handed-down log handle
+    // also drops CREATE_NO_WINDOW, so the output comes back over pipes and is written to the log here.
+    const child = spawn(resolve(backend.cwd, exe), args, {
       cwd: backend.cwd,
       windowsHide: true,
-      detached: true,
-      stdio: ['ignore', log, log],
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
+    pipeToLog(child, run.logPath)
+    return child
   } finally {
     closeSync(log)
   }
