@@ -450,7 +450,12 @@ sidebar on the left stays put, and only the pane on the right changes.
   Environment (the folder, which opens on a click; the account; the model and effort), Context (how full the context
   window is, amber from 75% and red from 90%, and what the chat has cost; for an outside session, "84.3K tokens in context"
   from its last reply's usage in its .jsonl, with no share, since the file never names the window, and for an outside Codex
-  chat the share and "51K of 258K", from its rollout's last `token_count`), To-dos (the session's checklist, TodoWrite's or
+  chat the share and "51K of 258K", from its rollout's last `token_count`; then the session's tokens and cost as a total
+  total, its own and every HSwarm call and CliMayte worker it started, directly, through HSwarm or through a worker of its
+  own, with the parts in its tooltip, AgentHydra's `GET /api/sessions/:id/usage` `grand`; and how long it was active, its
+  turns and not the time since it began: each from its prompt to its last step, its tools' runs included and any quiet
+  stretch over 10 minutes left out, or a Desk turn's own result durations; owner, 2026-10-16: "I just want the total
+  total"), To-dos (the session's checklist, TodoWrite's or
   Claude Desktop's update_plan), Connectors (the ones a chat gets, or for an outside session the MCP servers its tools
   called, as letter tiles, three and Show more, each with how often its tools were called, the most first), Tools (every
   tool the session called, the most first, five and Show all: its name, a bar against the most called with its failed share

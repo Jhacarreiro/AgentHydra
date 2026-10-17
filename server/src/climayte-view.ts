@@ -179,10 +179,13 @@ function hasSession(w: CliMayteWorker, want: ReadonlySet<string>): boolean {
  * dispatched (through any depth, cycle-safe), and each task of a wave whose manager is theirs (a wave's
  * tasks carry no origin, only their `wave`). A chat that is itself a worker (the session is that worker's,
  * current or earlier) counts the workers that worker dispatched, never the worker itself.
+ * `trace`: a worker with no ping origin is also placed by its trace (climayte-trace.ts), as the From column
+ * places it: a CliMayte-routed HSwarm task's worker names the chat that called HSwarm only there.
  */
 export function dispatchedFrom(
   all: Iterable<CliMayteWorker>,
   sessions: readonly string[],
+  opts: { trace?: boolean } = {},
 ): Set<string> {
   const want = new Set(sessions)
   const list = [...all]
@@ -191,18 +194,22 @@ export function dispatchedFrom(
   const children = new Map<string, string[]>()
   const seeds: string[] = []
   for (const w of list) {
+    const traced = opts.trace && !w.origin ? w.trace : undefined
     const up =
       w.origin?.kind === 'worker'
         ? w.origin.workerId
-        : !w.origin && w.wave && w.kind !== 'manage'
-          ? managers.get(w.wave)
-          : undefined
+        : traced?.workerId
+          ? traced.workerId
+          : !w.origin && w.wave && w.kind !== 'manage'
+            ? managers.get(w.wave)
+            : undefined
     if (up && up !== w.id) {
       const list = children.get(up)
       if (list) list.push(w.id)
       else children.set(up, [w.id])
     }
     if (w.origin?.kind === 'chat' && want.has(w.origin.sessionId)) seeds.push(w.id)
+    else if (traced?.sessionId && want.has(traced.sessionId)) seeds.push(w.id)
   }
   for (const w of list) if (hasSession(w, want)) seeds.push(...(children.get(w.id) ?? []))
   const mine = new Set<string>()
@@ -216,6 +223,13 @@ export function dispatchedFrom(
     queue = next
   }
   return mine
+}
+
+/** Every worker on record, the store read first: where a session's delegated tokens find the workers it
+ *  started (session-usage.ts). */
+export function climayteWorkers(): Iterable<CliMayteWorker> {
+  load()
+  return workers.values()
 }
 
 /** `limit`: keep every active worker and only the `limit` most recently finished ones

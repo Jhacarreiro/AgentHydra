@@ -344,6 +344,9 @@ export interface TranscriptIndex {
   contextWindow?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
+  /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,
+   *  not the time since it began. */
+  activeMs?: number
 }
 
 /** One tool's calls in a transcript (a tool_use item each) and how many of them failed. */

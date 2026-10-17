@@ -1334,6 +1334,23 @@ export interface SessionUsage {
   /** The day the prices in force were last known good (ISO date) — the download date when a
    *  catalog is in force, this build's own constant otherwise. A stale figure must read stale. */
   pricesAsOf: string
+  /** What the work this session handed off spent, on top of `tokens` (session-usage.ts delegatedUsage):
+   *  the HSwarm tasks it called on API models, and the CliMayte workers it started, directly, through
+   *  HSwarm or through a worker of its own. Zero for a source that answers no usage. */
+  delegated: {
+    hswarm: DelegatedUsage & { calls: number }
+    climayte: DelegatedUsage & { workers: number }
+  }
+  /** The session's total total: its own tokens and cost plus both delegated parts. `costUsd` is null
+   *  only when no part was priced. */
+  grand: { tokens: number; costUsd: number | null }
+}
+
+/** One kind of delegated work's spend: the four token kinds summed as `SessionUsage.tokens.total`
+ *  counts them, and its cost at list price (null when none of it was priced). */
+export interface DelegatedUsage {
+  tokens: number
+  costUsd: number | null
 }
 
 /** How much to trust a token-derived number. */
