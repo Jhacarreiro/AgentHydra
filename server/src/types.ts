@@ -400,6 +400,9 @@ export interface SpendBucket {
   turns: number
   /** Only populated where the split is meaningful (per model, per provider). */
   tokens?: TokenBreakdown
+  /** The name to show, set on a project that is a git repository (`owner/name`, or its folder's name
+   *  without a remote); a project without one is the folder in `key`. */
+  label?: string
 }
 
 /**

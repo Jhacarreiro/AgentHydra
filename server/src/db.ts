@@ -439,6 +439,25 @@ create table if not exists session_edits (
 create index if not exists idx_session_edits_key on session_edits(cache_key);
 `)
 
+// Where the sessions the two tables above never saw ran (session-cwds.ts): one row per source file a
+// cwd was read from (a Claude transcript, a Codex rollout or zip entry), or per HSwarm caller session
+// and cwd with how many jobs it ran there (n). cwd '' marks a file read that names none, so it is not
+// read again. session_cwd_mark keeps how far a source's own table was read (HSwarm's rowid).
+db.exec(`
+create table if not exists session_cwd_seen (
+  source     text not null,
+  key        text not null,
+  session_id text not null,
+  cwd        text not null,
+  n          integer not null default 1,
+  primary key (source, key)
+);
+create table if not exists session_cwd_mark (
+  source text primary key,
+  value  integer not null
+);
+`)
+
 // The skill listings Claude Code injected into sessions, stored ONCE per distinct listing. A
 // listing is ~140 skill names; storing it per session would multiply the analytics tier's size
 // several times over, while a machine sees only a handful of distinct listings. Sessions keep the
