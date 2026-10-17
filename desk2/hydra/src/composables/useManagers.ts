@@ -1,12 +1,13 @@
 // The managers' state, read from Desk's server: GET /api/babysitter, GET /api/diagnostics/orchestrator (the
 // orchestrator's plan) and GET /api/routines. One poll at the CliMayte node's cadence (WARM_MS), and only while
 // the Managers node or one of its pages is on screen (`shown`). A 404 means this window runs without Desk, where
-// these routes do not answer: `available` is false and nothing errors.
+// these routes do not answer: `available` is false and nothing errors. The paths are relative, as routines-api.ts's
+// are: they are Desk's own routes, never API_BASE's (/ah, the daemon's), where every read answered 404 until 2026-10-16.
 import type { RoutinesRequest, RoutinesStatus } from '@desk/shared/routines'
 import type { BabysitterStatus } from '@desk/shared/babysitter'
 import type { OrchestratorPlan } from '@desk/shared/orchestrator'
 import { onBeforeUnmount, reactive, shallowRef, watch } from 'vue'
-import { API_BASE } from '@/lib/api'
+import { postRoutines } from '@/lib/routines-api'
 import { WARM_MS } from '@/lib/warm-data'
 
 export function useManagers(shown: { readonly value: boolean }) {
@@ -22,7 +23,7 @@ export function useManagers(shown: { readonly value: boolean }) {
 
   // Null when the route is not there (404): this window runs without Desk.
   async function read<T>(path: string): Promise<T | null> {
-    const res = await fetch(API_BASE + path)
+    const res = await fetch(path, { headers: { accept: 'application/json' } })
     if (res.status === 404) return null
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return (await res.json()) as T
@@ -45,18 +46,12 @@ export function useManagers(shown: { readonly value: boolean }) {
     }
   }
 
-  // One action on one routine (POST /api/routines); the answer is the whole status again.
+  // One action on one routine (POST /api/routines, through the Routines tab's call, which carries the owner header
+  // Desk asks of every action but `meta`); the answer is the whole status again.
   async function act(body: RoutinesRequest, id: string): Promise<void> {
     busy.value = id
     try {
-      const res = await fetch(`${API_BASE}/api/routines`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const answer = await res.json().catch(() => null)
-      if (!res.ok) throw new Error((answer as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`)
-      routines.value = answer as RoutinesStatus
+      routines.value = await postRoutines(body)
     } finally {
       busy.value = null
     }
