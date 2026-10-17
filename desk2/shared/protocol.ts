@@ -397,6 +397,9 @@ export interface ExternalSession {
   parentId?: string
   /** Set while a usage limit stopped it and nothing has followed (AgentHydra's `limit_stop`, pending): the babysitter's. */
   limit?: ExternalLimit
+  /** Its background tasks still running (bridge/background-tasks.ts), as ChatSummary.backgroundActive: a finished turn
+   *  with one running is drawn running, never idle. Left out when none runs. */
+  backgroundActive?: number
   // Hydra Desk's own marks (its session-meta overlay; the session's files are never touched). The title above is the overlay's when renamed.
   pinned: boolean
   archived: boolean

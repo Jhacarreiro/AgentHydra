@@ -10,7 +10,10 @@
 // only once the hooks are installed (POST /api/agent-status/hooks; on 2026-10-03 they were not, and the
 // list was empty). Without a hook row we fall back to the transcript: written in the last 30 s means
 // working, else idle, else stale after 2 h. That fallback never claims needs_you, which only a hook
-// can know. CliMayte workers use their own status (running/checking = working).
+// can know. CliMayte workers use their own status (running/checking = working). A session whose turn
+// ended while its background tasks run is idle by both, and the transcript is quiet until a task ends:
+// backgroundActive (background-tasks.ts, the tasks its transcript opened since its live engine started)
+// is what keeps it from reading idle (owner, 2026-10-16).
 //
 // WHICH SESSIONS. The union, deduplicated by session id, in this order of precedence: active CliMayte
 // workers, this PC's unarchived Claude Desktop chats (/api/chats), running or not (owner, 2026-10-08: with the
@@ -33,6 +36,7 @@ import { isActiveWorkerStatus, workerAccountLabel } from './climayte'
 import { canResume, configRootOf, type ResumeQuery } from './resume'
 import { classifyUserText, taskItemFrom, userTurns } from '../engine/system-text'
 import { mediaCache } from '../media/cache'
+import { runningTasks, type OpenTask } from './background-tasks'
 
 /** A transcript written this recently is working (when no hook says otherwise). */
 export const WORKING_WINDOW_MS = 30_000
@@ -56,6 +60,9 @@ export interface ExternalInputs {
   /** Whether a Codex thread's last turn is open, read from its rollout (codex-rollout.ts codexTurnOpen), for the threads
    *  active lately; a thread missing here goes by how recently it wrote. */
   codexTurns?: ReadonlyMap<string, boolean>
+  /** Each live engine's background tasks its transcript says are open (background-tasks.ts), by session id; counted
+   *  against the live registry's engine start (runningTasks). */
+  background?: ReadonlyMap<string, readonly OpenTask[]>
 }
 
 const STATUS_ORDER: Record<ExternalSession['status'], number> = { needs_you: 0, working: 1, idle: 2, stale: 3 }
@@ -272,6 +279,22 @@ function addLiveSessions(st: MapState): void {
 }
 
 /**
+ * Marks each session whose live engine still runs background tasks (background-tasks.ts): backgroundActive, and when no
+ * hook says what it does, an activity line naming them. Its status stays its turn's: a finished turn is idle, and the
+ * sidebar draws an idle row with background work as running (logic.ts externalGlyph), as Desk's own chats.
+ */
+function withBackground(sessions: Iterable<ExternalSession>, inp: ExternalInputs): void {
+  if (!inp.background?.size) return
+  const engines = new Map(inp.live.map((l) => [l.sessionId, l]))
+  for (const s of sessions) {
+    const n = runningTasks(inp.background.get(s.id), engines.get(s.id)).length
+    if (!n) continue
+    s.backgroundActive = n
+    s.activity ??= `${n} background task${n === 1 ? '' : 's'} running`
+  }
+}
+
+/**
  * `resume` names the CLI instance whose folder already holds a session (resume.ts resumeAccount), or
  * null: an idle Claude Code session then continues as a copy under the account the window lands it on.
  */
@@ -301,6 +324,7 @@ export function mapExternal(
   for (const s of inp.sessions)
     if (inp.wanted?.has(s.session_id) || (s.source !== 'zswarm' && now - s.last_activity_at <= LISTED_AFTER_WRITE_MS))
       fromIndex(st, s.session_id, sessionSource(s.source), {})
+  withBackground(out.values(), inp)
 
   return [...out.values()].sort(
     (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),
