@@ -3,6 +3,7 @@ import {
   type AdvisorChat,
   type AdvisorDeps,
   buildTldr,
+  composeBody,
   createAdvisor,
   type Memory,
 } from '../src/urgency-advisor'
@@ -190,5 +191,32 @@ describe('urgency advisor', () => {
       text: 'x'.repeat(5000),
     }))
     expect(buildTldr('T', items).length).toBeLessThanOrEqual(4001)
+  })
+})
+
+describe('compose body', () => {
+  const chat = { id: 'chat-1', title: 'T' } as AdvisorChat
+
+  test('a worker-backed chat sends the config folder of the account its worker runs on', () => {
+    const body = composeBody({ ...chat, workerId: 'w1' }, 'S', 'P', (w) =>
+      w === 'w1' ? 'C:/acc' : null,
+    )
+    expect(body).toEqual({ chatId: 'chat-1', system: 'S', prompt: 'P', configDir: 'C:/acc' })
+  })
+
+  test('a plain chat sends no config folder and does not look up a worker', () => {
+    let asked = false
+    const body = composeBody(chat, 'S', 'P', () => {
+      asked = true
+      return 'C:/acc'
+    })
+    expect(body).toEqual({ chatId: 'chat-1', system: 'S', prompt: 'P' })
+    expect(asked).toBe(false)
+  })
+
+  test('a worker whose account is unknown sends no config folder', () => {
+    const body = composeBody({ ...chat, workerId: 'w1' }, 'S', 'P', () => null)
+    expect(body).toEqual({ chatId: 'chat-1', system: 'S', prompt: 'P' })
+    expect('configDir' in body).toBe(false)
   })
 })

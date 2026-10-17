@@ -16,7 +16,8 @@ claude.ai account. Default ON. A look runs each minute and measures every chat's
   (or answers SKIP when the answer is good), at most 2 replies per visit.
 - **Text:** every message is `[Urgency Advisor · <Name>] Sent on the owner's behalf.`, a blank line, then the words.
 - **Model route:** Desk 2's `POST /api/advisor/compose` (`desk2/server/src/engine/advisor-compose.ts`): the same route
-  as Desk's chat titles, Haiku 5.5 on the chat's own login, no tools. Never HSwarm or another provider for chat text.
+  as Desk's chat titles, Haiku 5.5, no tools, on the account the chat's worker runs on (or the chat's own login). If that
+  fails, one other idle account with room is tried; a failure is logged with its reason. Never HSwarm or another provider for chat text.
 - **Delivery:** Desk 2's `POST /api/chats/:id/messages`, the way the owner's own message goes (`manager.send` with
   `now: true`). A plain Desk chat takes it on its open input stream at the CLI's next tool boundary; a worker-backed
   chat has its turn stopped cleanly and the session continues with the message first. Not the ping route (it holds a

@@ -9,22 +9,26 @@ import { pinHaikuModel } from './haiku-pin'
 
 export const COMPOSE_TIMEOUT_MS = 45_000
 export const COMPOSE_PROMPT_CHARS = 9000
+const REASON_CHARS = 300
 
 export interface ComposeRequest {
   system: string
   prompt: string
   cwd: string
-  /** The chat's account config folder (null = the default login). */
+  /** The account's config folder (null = the default login). */
   configDir: string | null
 }
 
-/** The model's text, or null on any failure or timeout. Never throws. */
-export type Composer = (req: ComposeRequest) => Promise<string | null>
+export type ComposeResult = { text: string } | { reason: string }
+
+/** The model's text, or why there is none. Never throws. */
+export type Composer = (req: ComposeRequest) => Promise<ComposeResult>
 
 export function sdkComposer(queryImpl: QueryImpl, env: Record<string, string | undefined> | undefined, binaryPath: () => string | null): Composer {
   return async (req) => {
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), COMPOSE_TIMEOUT_MS)
+    let reason = 'the CLI ended without a result'
     try {
       const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
       if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
@@ -49,7 +53,13 @@ export function sdkComposer(queryImpl: QueryImpl, env: Record<string, string | u
       const run = (async () => {
         for await (const m of q) {
           if (m.type !== 'result') continue
-          if (m.subtype === 'success' && !m.is_error && m.result.trim()) text = m.result.trim()
+          const said = ('result' in m ? m.result : m.errors.join('; ')).trim()
+          if (m.subtype === 'success' && !m.is_error) {
+            if (said) text = said
+            else reason = 'the model replied with empty text'
+          } else {
+            reason = `${m.subtype}${m.is_error ? ' with an error' : ''}: ${said}`.slice(0, REASON_CHARS)
+          }
           return
         }
       })()
@@ -57,13 +67,29 @@ export function sdkComposer(queryImpl: QueryImpl, env: Record<string, string | u
       await Promise.race([run, timedOut])
       if (abort.signal.aborted) {
         void run.catch(() => {})
-        return null
+        return { reason: `no answer within ${COMPOSE_TIMEOUT_MS / 1000} s` }
       }
-      return text
-    } catch {
-      return null
+      return text ? { text } : { reason }
+    } catch (err) {
+      return { reason: `the CLI failed: ${String((err as Error)?.message ?? err).slice(0, REASON_CHARS)}` }
     } finally {
       clearTimeout(timer)
     }
   }
+}
+
+/** The chosen account's call first; when it fails, one other account the picker names (never the same folder again). */
+export async function composeWithFallback(
+  compose: Composer,
+  req: Omit<ComposeRequest, 'configDir'>,
+  first: string | null,
+  pick: () => Promise<string | null>,
+): Promise<ComposeResult> {
+  const one = await compose({ ...req, configDir: first })
+  if ('text' in one) return one
+  const other = await pick()
+  if (!other || other === first) return one
+  const two = await compose({ ...req, configDir: other })
+  if ('text' in two) return two
+  return { reason: `${one.reason}; then another account: ${two.reason}` }
 }

@@ -9,7 +9,9 @@
 // boundary; a worker-backed chat has its turn stopped cleanly and the session continues with the message first.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { climayteGet } from './climayte-view'
 import { DATA_DIR } from './config'
+import { canonicalConfigDir, getCliInstance } from './core/cli-instances'
 import { getSetting, setSetting } from './db'
 import { type DeskChat, deskChats, deskPost, transcriptItems } from './desk-client'
 import { managerFile } from './manager-folders'
@@ -267,6 +269,26 @@ export function buildTldr(title: string, items: Item[]): string {
 const stateFile = () => join(DATA_DIR, 'urgency-advisor.json')
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/** The config folder of the account a CliMayte worker runs on now (null when the worker or its account is unknown). */
+export function workerAccountDir(workerId: string): string | null {
+  const accountId = climayteGet(workerId)?.accountId
+  if (!accountId) return null
+  const rec = getCliInstance(accountId)
+  return rec ? canonicalConfigDir(rec) : null
+}
+
+export function composeBody(
+  chat: AdvisorChat,
+  system: string,
+  prompt: string,
+  accountDirOf: (workerId: string) => string | null = workerAccountDir,
+): { chatId: string; system: string; prompt: string; configDir?: string } {
+  const configDir = chat.workerId ? accountDirOf(chat.workerId) : null
+  return configDir
+    ? { chatId: chat.id, system, prompt, configDir }
+    : { chatId: chat.id, system, prompt }
+}
+
 function realDeps(): AdvisorDeps {
   const replies = async (id: string): Promise<Item[]> =>
     ((await transcriptItems(id)) as Item[]).filter((i) => i.kind === 'assistant_text')
@@ -282,7 +304,7 @@ function realDeps(): AdvisorDeps {
     tldr: async (chat) => buildTldr(chat.title ?? '', (await transcriptItems(chat.id)) as Item[]),
     compose: async (chat, system, prompt) => {
       const r = await Promise.race([
-        deskPost('/api/advisor/compose', { chatId: chat.id, system, prompt }),
+        deskPost('/api/advisor/compose', composeBody(chat, system, prompt)),
         sleep(60_000).then(() => null),
       ])
       return typeof r?.text === 'string' ? r.text : null
