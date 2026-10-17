@@ -34,6 +34,7 @@ import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import { runnerHandoffsSettled } from './climayte-runner'
 import { flushCliMayteStore } from './climayte-store-writer'
+import { startCloudSessions, stopCloudSessions } from './cloud-sessions'
 import { startCommandPacks } from './command-packs'
 import {
   APP_ROOT,
@@ -1251,6 +1252,7 @@ function stopBackgroundTimers(): void {
   stopIdleSweep()
   stopClaudeNativePrewarm()
   stopExtraUsageGuard()
+  stopCloudSessions()
   stopStallSentinel()
   stopCliMaytePing()
   peopleAddon()?.stop?.()
@@ -1710,6 +1712,10 @@ startCommandPacks()
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).
 startExtraUsageGuard()
+
+// Claude Code cloud sessions and claude.ai Project threads: off unless AGENTHYDRA_CLOUD_SESSIONS=1
+// (server/src/cloud-sessions.ts). With the flag unset this starts nothing.
+startCloudSessions()
 
 // --- one-time repair: CLI config dirs still naming the pre-rebrand config root ------------------
 // See migrateCliInstanceConfigDirs. A no-op on every install except one carried across the

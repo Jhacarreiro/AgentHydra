@@ -404,6 +404,8 @@ export interface ExternalSession {
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
   fromPc: string | null
+  /** The app a session belongs to when its `source` does not say (a claude-cloud session is 'claude' under source 'other'). Absent: read `source`. */
+  app?: string
   /** The ExternalSession id of the chat whose chip started this one, when that chat is in the list; the sidebar nests it under that chat. Left out when the parent is not known. */
   parentId?: string
   /** Set while a usage limit stopped it and nothing has followed (AgentHydra's `limit_stop`, pending): the babysitter's. */

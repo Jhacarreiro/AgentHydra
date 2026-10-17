@@ -34,6 +34,7 @@ import { type Dirent, existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { cloudSessionsEnabled, cloudSessionsRoot } from './cloud-sessions-root'
 import { fsSlot } from './core/fs-slots'
 import type { AgentPresence, SessionSource } from './types'
 
@@ -449,6 +450,16 @@ export const AGENT_TOOLS: AgentTool[] = [
     format: 'foreign',
   },
   {
+    // Written only when AGENTHYDRA_CLOUD_SESSIONS=1 (cloud-sessions.ts). Its one root is cloudSessionsRoot,
+    // the folder the poller writes, so rootsFor never splits its override.
+    id: 'claude-cloud',
+    name: 'Claude Code cloud',
+    vendor: 'Anthropic',
+    envVar: 'AGENTHYDRA_CLOUD_SESSIONS_DIR',
+    dirs: ['.agenthydra/cloud-sessions'],
+    format: 'foreign',
+  },
+  {
     id: 'goose',
     name: 'Goose',
     vendor: 'Block',
@@ -796,16 +807,20 @@ function rootExists(target: string): boolean {
  */
 export function rootsFor(tool: AgentTool, home: string = HOME): AgentRoot[] {
   const override = tool.envVar ? process.env[tool.envVar]?.trim() : ''
-  const candidates: Array<{ path: string; archived: boolean }> = override
-    ? override
-        .split(process.platform === 'win32' ? ';' : ':')
-        .map((p) => p.trim())
-        .filter(Boolean)
-        .map((path) => ({ path, archived: false }))
-    : tool.dirs.map((rel) => ({
-        path: join(home, ...rel.split('/')),
-        archived: tool.archivedDirs?.includes(rel) ?? false,
-      }))
+  // The cloud folder is the poller's own root, never split: a ';' or ':' in an override is part of the name.
+  const candidates: Array<{ path: string; archived: boolean }> =
+    tool.id === 'claude-cloud'
+      ? [{ path: cloudSessionsRoot(process.env, home), archived: false }]
+      : override
+        ? override
+            .split(process.platform === 'win32' ? ';' : ':')
+            .map((p) => p.trim())
+            .filter(Boolean)
+            .map((path) => ({ path, archived: false }))
+        : tool.dirs.map((rel) => ({
+            path: join(home, ...rel.split('/')),
+            archived: tool.archivedDirs?.includes(rel) ?? false,
+          }))
 
   const out: AgentRoot[] = []
   const held = home === HOME && !override
@@ -909,6 +924,8 @@ async function walkCount(
 export async function detectAgentTools(home: string = HOME): Promise<AgentPresence[]> {
   const out: AgentPresence[] = []
   for (const tool of AGENT_TOOLS) {
+    // The cloud folder exists only when the opt-in poller runs, so its row is listed only then.
+    if (tool.id === 'claude-cloud' && !cloudSessionsEnabled()) continue
     const roots = rootsFor(tool, home)
     if (roots.length === 0) continue
     const state = { files: 0, newest: null as number | null }

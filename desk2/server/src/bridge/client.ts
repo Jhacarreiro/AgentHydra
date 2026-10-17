@@ -117,6 +117,8 @@ export interface AhCodexUsage {
 export interface AhSessionRow {
   session_id: string
   source: string // claude, codex, opencode, hermes, dsh, zswarm, foreign
+  /** The foreign store's tool id when source is foreign (e.g. claude-cloud); absent otherwise. */
+  tool?: string
   title: string
   cwd: string
   last_activity_at: number

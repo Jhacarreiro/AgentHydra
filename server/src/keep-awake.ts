@@ -65,12 +65,16 @@ export function shouldHoldAwake(enabled: boolean, c: KeepAwakeCounts): boolean {
   return enabled && c.sessions + c.workers > 0
 }
 
-/** Live working sessions: heard by this process (not restored) within the lease. */
+/**
+ * Live working sessions on this PC: heard by this process (not restored) within the lease. A
+ * claude-cloud row is a turn running on Anthropic's servers or another machine, so it never holds
+ * this PC awake.
+ */
 export function countWorkingSessions(now = Date.now()): number {
   const cutoff = new Date(now - KEEP_AWAKE_LEASE_MS).toISOString()
   const row = db
     .query<{ n: number }, [string]>(
-      "select count(*) as n from agent_status where state = 'working' and restored_unconfirmed = 0 and at >= ?",
+      "select count(*) as n from agent_status where state = 'working' and restored_unconfirmed = 0 and source != 'claude-cloud' and at >= ?",
     )
     .get(cutoff)
   return row?.n ?? 0

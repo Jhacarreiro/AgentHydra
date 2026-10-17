@@ -171,6 +171,24 @@ describe('external sessions', () => {
     expect(row(false)).toMatchObject({ source: 'desktop', status: 'idle', unread: false })
   })
 
+  // A claude-cloud session's store is foreign, but it is a Claude chat: the Apps filter and the "on this PC" label read app.
+  test('a claude-cloud session carries app claude under its foreign source; another foreign session does not', () => {
+    const foreign = (id: number, tool: string) => ({
+      session_id: sid(id),
+      source: 'foreign',
+      tool,
+      title: 'Example cloud chat',
+      cwd: '',
+      last_activity_at: NOW - 60_000,
+      last_role: 'assistant' as const,
+      instance: null,
+      instance_num: null,
+    })
+    const out = mapExternal({ ...inputs, sessions: [foreign(880, 'claude-cloud'), foreign(881, 'grok')] }, new Set(), NOW)
+    expect(out.find((x) => x.id === sid(880))).toMatchObject({ source: 'other', app: 'claude' })
+    expect(out.find((x) => x.id === sid(881))?.app).toBeUndefined()
+  })
+
   // Owner, 2026-10-16: a Desktop chat whose turn had ended while its background shell ran for 18 minutes was drawn idle.
   test('a Desktop chat whose live engine runs a background task after its turn ended carries it; one its engine did not start does not', () => {
     const started = NOW - 20 * 60_000

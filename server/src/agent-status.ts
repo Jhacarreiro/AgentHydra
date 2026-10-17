@@ -124,6 +124,23 @@ export function nextAgentStatus(prev: Row | null, e: AgentStatusEvent): Row | nu
       main = 'done'
       waiting = 'rate-limit'
       break
+    // A cloud session has no hooks: its poll says whether a turn runs, or what it waits on. It has no
+    // sub-agents the poll can see, so none are counted.
+    case 'cloud-working':
+      main = 'working'
+      waiting = null
+      subagents = 0
+      break
+    case 'cloud-blocked':
+      main = 'done'
+      waiting = e.notificationType || 'input'
+      subagents = 0
+      break
+    case 'cloud-done':
+      main = 'done'
+      waiting = null
+      subagents = 0
+      break
     default:
       return null
   }
@@ -207,6 +224,27 @@ export function releaseRateLimitStatus(stillAtWall: Iterable<string>): number {
   const drop = db.query("delete from agent_status where session_id = ? and source = 'rate-limit'")
   for (const r of stale) drop.run(r.session_id)
   return stale.length
+}
+
+/**
+ * The cloud poll's clearing half, for one account. `previouslyListed` is the ids that account's last
+ * clean snapshot named; `stillListed` is what its clean list answers now. A claude-cloud row for an
+ * id that was listed and no longer is (archived, finished, moved) is withdrawn, or it would read
+ * "waiting on you" for ever. Rows of other producers, and ids this account never listed, are not
+ * touched. Only a clean pass may call this, so a failed or refused account keeps its rows.
+ */
+export function releaseCloudStatus(
+  previouslyListed: Iterable<string>,
+  stillListed: Iterable<string>,
+): number {
+  const keep = new Set(stillListed)
+  const drop = db.query("delete from agent_status where session_id = ? and source = 'claude-cloud'")
+  let released = 0
+  for (const id of new Set(previouslyListed)) {
+    if (keep.has(id)) continue
+    released += drop.run(id).changes
+  }
+  return released
 }
 
 export function getAgentStatus(sessionId: string): AgentStatus | null {

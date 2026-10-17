@@ -958,6 +958,9 @@ export function saveSettings(dir: string, settings: object): void {
   // Its fixtures live in the dedicated describe block at the end of this file. Repeating them here
   // would run the same contracts twice, so this entry registers the check without restating them.
   'sqlite-fixture-autocommits.mjs': { broken: [], fixed: [] },
+  // A rule about a chain of files, not one text, so its fixtures are planted trees in the dedicated
+  // describe block at the end of this file. This entry registers the check without restating them.
+  'mcp-server-opens-no-database.mjs': { broken: [], fixed: [] },
 }
 
 // Checks that deliberately do NOT export findViolations, and why, asserted explicitly below rather
@@ -1329,4 +1332,91 @@ describe('raw-control-bytes-in-source.mjs — planted backspace', () => {
     expect(result.failed).toBe(true)
     expect(result.findings).toHaveLength(1)
   }, 30_000)
+})
+
+// mcp-server-opens-no-database.mjs: the rule is about a chain of files, so each fixture is a planted
+// tree. The entry is the MCP server, a.ts stands between it and the database module, and db.ts is
+// the module that opens SQLite on import. The MCP server must never reach db.ts by a static import.
+describe('mcp-server-opens-no-database.mjs — planted import chain', () => {
+  const load = () =>
+    import(pathToFileURL(join(CHECKS_DIR, 'mcp-server-opens-no-database.mjs')).href)
+  const ENTRY = 'server/src/mcp.ts'
+  const DB = 'server/src/db.ts'
+  const tree = (entry: string, middle: string) => ({
+    [ENTRY]: entry,
+    'server/src/a.ts': middle,
+    [DB]: 'export const db = {}\n',
+  })
+
+  test('an entry that imports a module which imports db.ts fires, and names the chain', async () => {
+    const { findViolations } = await load()
+    const found = findViolations(
+      tree("import { a } from './a'\n", "import { db } from './db'\nexport const a = db\n"),
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0].message).toContain(
+      'server/src/mcp.ts:1 -> server/src/a.ts:1 -> server/src/db.ts',
+    )
+  })
+
+  test('an export ... from re-export of db.ts fires too', async () => {
+    const { findViolations } = await load()
+    expect(findViolations(tree("export { db } from './db'\n", ''))).toHaveLength(1)
+  })
+
+  test('the same chain with import type is quiet, since type imports are erased', async () => {
+    const { findViolations } = await load()
+    expect(
+      findViolations(tree("import { a } from './a'\n", "import type { Db } from './db'\n")),
+    ).toHaveLength(0)
+  })
+
+  test('the same chain with a dynamic await import() is quiet, since the MCP server loads it lazily', async () => {
+    const { findViolations } = await load()
+    expect(
+      findViolations(
+        tree(
+          "import { a } from './a'\n",
+          "export async function open() {\n  return import('./db')\n}\n",
+        ),
+      ),
+    ).toHaveLength(0)
+  })
+
+  test('a commented-out import of db.ts is quiet', async () => {
+    const { findViolations } = await load()
+    expect(
+      findViolations(tree("import { a } from './a'\n", "// import { db } from './db'\n")),
+    ).toHaveLength(0)
+  })
+
+  test('a braced import whose every specifier is a type is quiet, since TypeScript and Bun elide it', async () => {
+    const { findViolations } = await load()
+    expect(
+      findViolations(tree("import { a } from './a'\n", "import { type Db } from './db'\n")),
+    ).toHaveLength(0)
+    expect(
+      findViolations(tree("import { a } from './a'\n", "export { type Db } from './db'\n")),
+    ).toHaveLength(0)
+  })
+
+  test('a braced import that mixes a type with a value still fires, since the value loads db.ts', async () => {
+    const { findViolations } = await load()
+    expect(
+      findViolations(tree("import { a } from './a'\n", "import { type Db, db } from './db'\n")),
+    ).toHaveLength(1)
+  })
+
+  test('a string argument throws a TypeError naming the expected map, rather than reading as no file', async () => {
+    const { findViolations } = await load()
+    expect(() => findViolations("import { db } from './db'\n")).toThrow(TypeError)
+    expect(() => findViolations("import { db } from './db'\n")).toThrow(/map of repo-relative path/)
+  })
+
+  test('a tree with no entry file says it checked nothing rather than passing', async () => {
+    const { findViolations } = await load()
+    const found = findViolations({ [DB]: 'export const db = {}\n' })
+    expect(found).toHaveLength(1)
+    expect(found[0].message).toContain('not found')
+  })
 })

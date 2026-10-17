@@ -240,6 +240,11 @@ jobs:
       - name: Guardrail (no raw control bytes in source)
         run: bun scripts/checks/raw-control-bytes-in-source.mjs
 
+      # The stdio MCP server opens no database: it must not reach db.ts, which opens SQLite on import,
+      # by a static import. It does not race the daemon for that file. See the check's header.
+      - name: Guardrail (the stdio MCP server must not reach the database module)
+        run: bun scripts/checks/mcp-server-opens-no-database.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.

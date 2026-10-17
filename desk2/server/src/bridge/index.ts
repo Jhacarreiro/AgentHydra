@@ -549,14 +549,23 @@ export function createBridge(opts: BridgeOptions = {}) {
     // A pinned session stays listed however old: the index answer is only the last 24 h, so a pinned id
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
     // An Unassigned one too: its account's app archived it, so /api/chats no longer lists it.
+    // A not-done claude-cloud status the 24 h answer missed (the cloud poll writes these) is read by id too, so its
+    // row has its title. Local status rows are not: with the cloud source off there are none, and origin/main reads
+    // none. A restored status is no evidence it still runs. `wanted` stays pinned-only.
     const pinned = pinnedIds()
-    const pinnedSet = new Set(pinned)
-    for (const old of pinnedRows.keys()) if (!pinnedSet.has(old)) pinnedRows.delete(old)
+    const statusIds = inp.agentStatus
+      .filter((a) => a.source === 'claude-cloud' && a.state !== 'done' && !a.restoredUnconfirmed)
+      .map((a) => a.sessionId)
+    const readIds = new Set([...pinned, ...statusIds])
+    for (const old of pinnedRows.keys()) if (!readIds.has(old)) pinnedRows.delete(old)
     const known = new Set(inp.sessions.map((s) => s.session_id))
-    const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => pinnedRow(id)))).filter(
+    const extra = (await Promise.all([...readIds].filter((id) => !known.has(id)).map((id) => pinnedRow(id)))).filter(
       (r): r is NonNullable<typeof r> => r !== null,
     )
-    const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
+    const withPinned: ExternalInputs =
+      pinned.length || extra.length
+        ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: pinned.length ? new Set(pinned) : inp.wanted }
+        : inp
     const mapped = withDesktopAccounts(mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who)), who)
     const list = o.throwaway ? mapped : mapped.filter((s) => !isThrowawayCwd(s.cwd))
     rememberTitles(list)

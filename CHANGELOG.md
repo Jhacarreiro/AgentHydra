@@ -50,6 +50,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The window can sit behind your own sign-in proxy.** Reach it from a phone through a proxy that signs you in first, by listing that proxy's https address in an environment variable. Only that exact address can use it: another site, or another name on the same domain, can at most open its start page, and nothing changes unless you set it.
 - **A CliMayte dispatch retried with its request ids answers with its workers' own group.** A dispatch that names no group and carries an earlier dispatch's request ids now answers in the group holding those workers, and a task it adds joins them, so status, cancel and wait reach every one. Dispatches that name their group are unchanged.
 - **The tray icon says which version is running.** Hover it to see AgentHydra's version and whether it is a release or a source checkout.
+- **Claude Code cloud sessions and Project threads can be listed.** With `AGENTHYDRA_CLOUD_SESSIONS=1`, AgentHydra lists your claude.ai Claude Code cloud sessions and Project threads beside local ones, as working, needs you or idle, read with the logins it already has. It is off unless you set that variable. Remote Control sessions are not taken from claude.ai; one running on this PC still shows from its local transcript. A login whose sign-in has expired is skipped until Claude Code refreshes it.
 
 ## [2.0.5] - 2026-10-16
 

@@ -140,6 +140,47 @@ describe('detection', () => {
     )
   })
 
+  test('the claude-cloud row is listed only with the opt-in flag on, even when its folder exists', async () => {
+    // Before, the row was listed whenever its folder existed, so an install that never opted in still counted files.
+    mkdirSync(join(home, '.agenthydra', 'cloud-sessions'), { recursive: true })
+    const before = process.env.AGENTHYDRA_CLOUD_SESSIONS
+    try {
+      delete process.env.AGENTHYDRA_CLOUD_SESSIONS
+      expect((await detectAgentTools(home)).find((t) => t.id === 'claude-cloud')).toBeUndefined()
+      process.env.AGENTHYDRA_CLOUD_SESSIONS = '1'
+      expect((await detectAgentTools(home)).find((t) => t.id === 'claude-cloud')).toBeDefined()
+    } finally {
+      if (before === undefined) delete process.env.AGENTHYDRA_CLOUD_SESSIONS
+      else process.env.AGENTHYDRA_CLOUD_SESSIONS = before
+    }
+  })
+
+  test('the claude-cloud override is one root, even at a drive-letter path', async () => {
+    // A Windows temp folder starts with a drive letter, as a real override does.
+    const dir = mkdtempSync(join(tmpdir(), 'agenthydra-cloud-root-'))
+    const before = {
+      flag: process.env.AGENTHYDRA_CLOUD_SESSIONS,
+      dir: process.env.AGENTHYDRA_CLOUD_SESSIONS_DIR,
+    }
+    try {
+      process.env.AGENTHYDRA_CLOUD_SESSIONS = '1'
+      process.env.AGENTHYDRA_CLOUD_SESSIONS_DIR = dir
+      const tool = agentTool('claude-cloud')
+      expect(tool).toBeDefined()
+      expect(rootsFor(tool!, home).map((r) => r.root)).toEqual([dir])
+      // A ';' is part of the one folder name, as cloudSessionsRoot keeps it, not a second root.
+      const semi = join(dir, 'a;b')
+      mkdirSync(semi)
+      process.env.AGENTHYDRA_CLOUD_SESSIONS_DIR = semi
+      expect(rootsFor(tool!, home).map((r) => r.root)).toEqual([semi])
+    } finally {
+      if (before.flag === undefined) delete process.env.AGENTHYDRA_CLOUD_SESSIONS
+      else process.env.AGENTHYDRA_CLOUD_SESSIONS = before.flag
+      if (before.dir === undefined) delete process.env.AGENTHYDRA_CLOUD_SESSIONS_DIR
+      else process.env.AGENTHYDRA_CLOUD_SESSIONS_DIR = before.dir
+    }
+  })
+
   test('a tool with no parser reports null, which the UI shows as "not read yet"', async () => {
     mkdirSync(join(home, '.qwen', 'projects'), { recursive: true })
     writeFileSync(join(home, '.qwen', 'projects', 'a.jsonl'), '{}')

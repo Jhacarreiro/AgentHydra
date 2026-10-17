@@ -21,6 +21,12 @@
 import { Database } from 'bun:sqlite'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import {
+  cloudSessionsEnabled,
+  isListedCloudRow,
+  readAccountIndex,
+  readCloudSnapshot,
+} from './cloud-sessions-root'
 import { timeSlice } from './core/loop-yield'
 import type { TailEvent } from './types'
 
@@ -971,6 +977,58 @@ const pi: Adapter = {
   },
 }
 
+/**
+ * The claude-cloud store: one folder per account, each holding the snapshot the poller wrote
+ * (cloud-sessions.ts). A virtual path is `<account>/sessions.json#<session id>`, as zed's is
+ * `threads.db#<id>`. The session's own transcript is on claude.ai, so read() says so instead of
+ * replaying anything.
+ */
+const claudeCloud: Adapter = {
+  list(root) {
+    // Off means nothing is listed, even a snapshot an earlier opt-in run left behind. A folder counts
+    // only while the last poll named its account in the index, so a removed login's sessions drop out.
+    if (!cloudSessionsEnabled()) return []
+    const live = new Set(readAccountIndex(root))
+    return dirs(root)
+      .filter((account) => live.has(account))
+      .flatMap((account) => {
+        const dir = join(root, account)
+        const path = join(dir, 'sessions.json')
+        return readCloudSnapshot(dir)
+          .filter(isListedCloudRow)
+          .map((r) => {
+            // isListedCloudRow guarantees last_event_at parses, so no mtime fallback is needed.
+            const updated = Date.parse(r.last_event_at)
+            const created = r.created_at ? Date.parse(r.created_at) : Number.NaN
+            return {
+              session_id: r.id,
+              path: `${path}#${r.id}`,
+              title: r.title,
+              cwd: '',
+              project: 'claude-cloud',
+              created_at: Number.isFinite(created) ? created : null,
+              last_activity_at: updated,
+              size_bytes: 0,
+              archived: false,
+            }
+          })
+      })
+  },
+  read(virtualPath) {
+    const hash = virtualPath.lastIndexOf('#')
+    if (hash <= 0) return []
+    return [
+      {
+        role: 'assistant',
+        kind: 'text',
+        text: `This session runs in Claude Code's cloud, so its transcript is on claude.ai (session ${virtualPath.slice(hash + 1)}).`,
+        tool_name: null,
+        timestamp: null,
+      },
+    ]
+  },
+}
+
 /** Adapter per catalog tool id. A tool with `format: 'foreign'` and no entry here reads as empty,
  *  which is the same bounded failure as a path that does not exist. */
 const ADAPTERS: Record<string, Adapter> = {
@@ -980,6 +1038,7 @@ const ADAPTERS: Record<string, Adapter> = {
   copilot: copilotCli,
   zed,
   pi,
+  'claude-cloud': claudeCloud,
 }
 
 export function foreignAdapter(toolId: string): Adapter | undefined {
