@@ -506,7 +506,8 @@ export HSWARM_HOME=/custom/path
 export HSWARM_PORT=7793
 ```
 
-Run the tests with `python -m pytest hswarm/tests -q` from the repository root. Tests that call real providers are
+Run the tests with `python -m pytest hswarm/tests -q` from the repository root. CI runs the same command in its
+`hswarm` job on Windows with Python 3.14. Tests that call real providers are
 marked `live` and skipped by default (`addopts` in `pyproject.toml`): on Windows a hung network call made
 pytest-timeout end the whole run. Run them with `-m live`; each call is bounded at 90 s.
 

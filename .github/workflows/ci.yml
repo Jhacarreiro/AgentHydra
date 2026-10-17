@@ -302,6 +302,38 @@ jobs:
         working-directory: orchestrator
         run: python -m unittest discover -s scripts/tests -p "test_[${{ matrix.shard }}]*.py"
 
+  # hswarm/ (HydraSwarm) ran only by hand: its ~1,550 tests (`python -m pytest hswarm/tests -q`) were no
+  # CI job's command, so a change that broke HSwarm still landed green. Windows, because that is where
+  # HSwarm runs and where its Windows-only tests (test_blobs.py, test_shared_http.py) live. Python 3.14
+  # is the version this PC runs. Python 3.13+ strips docstring indentation, which keeps the served
+  # hswarm_run description under test_mcp_surface's 3,000-character cap; on 3.12 it goes over.
+  hswarm:
+    needs: already
+    if: needs.already.outputs.verified != '1'
+    timeout-minutes: 20
+    name: hswarm tests (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Python (HSwarm, 3.14 as on this PC)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: hswarm/pyproject.toml
+
+      # The live-checkout install; the test extra carries pytest, pytest-asyncio and pytest-timeout.
+      - name: Install HSwarm and its test tools
+        run: pip install -e "./hswarm[test]"
+
+      # Same TEMP/TMP as the desk2 job, so the runner's 8.3 short TEMP (C:\Users\RUNNER~1) never reaches the suite.
+      - name: Test (hswarm)
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: python -m pytest hswarm/tests -q
+
   # desk2/ (AgentHydra 2.0's window) is its own bun workspace with its own lockfile and suite, and
   # the root `bun test` skips it (bunfig.toml), so without this job a change that breaks Desk 2
   # lands green. Windows only: its suite is developed and passes there, PowerShell launcher tests
