@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,13 +55,20 @@ function fixture() {
     async (_config, request): Promise<RunOutput> => {
       commands.push({ id: request.instanceId, command: request.command })
       const custom = await handler?.(request)
-      if (custom) return custom
       const row = service.allInstances().find((i) => i.id === request.instanceId)!
+      const authProof = () => createHash('sha256').update(readFileSync(join(_config.stateDir, 'chatgpt', 'session.dpapi'))).digest('hex')
+      if (custom) {
+        if (request.command !== 'auth' || row.provider !== 'chatgpt') return custom
+        const body = JSON.parse(custom.stdout)
+        if (body.ok && body.authenticated && !Object.hasOwn(body, 'login_fingerprint')) body.login_fingerprint = authProof()
+        return { ...custom, stdout: JSON.stringify(body) }
+      }
       if (request.command === 'auth')
         return output({
           ok: true,
           authenticated: true,
           account_email: row.poolAdmission?.email ?? row.email,
+          ...(row.provider === 'chatgpt' ? { login_fingerprint: authProof() } : {}),
         })
       if (request.command === 'usage')
         return output({
@@ -442,7 +449,7 @@ native(
 )
 
 native(
-  'state rotation after usage cannot silently change the committed identity or cookie proof',
+  'pool accepts same-account usage and final-auth cookie rotation with a bound saved-login proof',
   async () => {
     const f = fixture()
     const victim = f.account('old@example.test')
@@ -455,12 +462,72 @@ native(
       } else if (r.command === 'auth' && rotated) f.login(a.instance, 'second-rotation')
       return undefined
     })
-    await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_changed' })
-    expect(victim.poolState).toBeUndefined()
-    expect(a.instance.poolState).toBe('pending')
+    await expect(f.service.commitPool(a.requestId)).resolves.toMatchObject({ ok: true })
+    expect(victim.poolState).toBe('retired')
+    expect(a.instance.poolState).toBeUndefined()
     expect(f.commands.map((c) => c.command)).toEqual(['auth', 'usage', 'auth'])
   },
 )
+
+native('pool refuses missing, malformed or mismatched saved-login auth proofs', async () => {
+  const f = fixture()
+  const victim = f.account('old@example.test')
+  const a = await f.stage('incoming@example.test', 'go', 1)
+  for (const proof of [null, '', 'not-a-digest', '0'.repeat(64)]) {
+    f.handle(async r => r.command === 'auth' ? output({ ok: true, authenticated: true,
+      account_email: a.body.email, login_fingerprint: proof }) : undefined)
+    await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({
+      code: proof === '0'.repeat(64) ? 'pool_changed' : 'pool_verification_failed',
+    })
+    expect(victim.poolState).toBeUndefined()
+    expect(a.instance.poolState).toBe('pending')
+  }
+})
+
+native('pool refuses another identity after usage rotates its login', async () => {
+  const f = fixture()
+  const victim = f.account('old@example.test')
+  const a = await f.stage('incoming@example.test', 'go', 1)
+  let rotated = false
+  f.handle(async r => {
+    if (r.command === 'usage') { f.login(a.instance, 'rotated'); rotated = true }
+    if (r.command === 'auth' && rotated) return output({ ok: true, authenticated: true, account_email: 'other@example.test' })
+    return undefined
+  })
+  await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_verification_failed' })
+  expect(victim.poolState).toBeUndefined()
+  expect(a.instance.poolState).toBe('pending')
+})
+
+native('pool refuses an external write between locked auth proof and commit', async () => {
+  const f = fixture()
+  const victim = f.account('old@example.test')
+  const a = await f.stage('incoming@example.test', 'go', 1)
+  f.handle(async r => {
+    if (r.command !== 'auth') return undefined
+    const proof = createHash('sha256').update(readFileSync(f.file(a.instance))).digest('hex')
+    f.login(a.instance, 'external-login-write')
+    return output({ ok: true, authenticated: true, account_email: a.body.email, login_fingerprint: proof })
+  })
+  await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_changed' })
+  expect(victim.poolState).toBeUndefined()
+  expect(a.instance.poolState).toBe('pending')
+})
+
+native('pool refuses a login replaced after auth proof while entering the serialized commit', async () => {
+  const f = fixture()
+  const victim = f.account('old@example.test')
+  const a = await f.stage('incoming@example.test', 'go', 1)
+  const serial = f.service as unknown as { poolSerial<T>(work: () => Promise<T>): Promise<T> }
+  const original = serial.poolSerial.bind(serial)
+  spies.push(spyOn(serial, 'poolSerial').mockImplementation(<T>(work: () => Promise<T>): Promise<T> => {
+    f.login(a.instance, 'post-proof-external-change')
+    return original(work)
+  }))
+  await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_changed' })
+  expect(victim.poolState).toBeUndefined()
+  expect(a.instance.poolState).toBe('pending')
+})
 
 native(
   'fresh Claude plan proof is independent of unavailable or cached quota counters',

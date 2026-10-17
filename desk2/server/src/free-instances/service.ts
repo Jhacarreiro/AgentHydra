@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreePoolAdmission, type FreePoolCommit, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
@@ -253,16 +254,25 @@ export class FreeInstances {
     const login = readLogin(file, instance.provider)
     if (!login || (instance.provider === 'chatgpt' && !login.fresh))
       throw new FreeError('The imported login is missing a complete browser sign-in. Keep this account pending.', 503, 'pool_verification_failed')
-    return createHash('sha256').update(JSON.stringify(login.cookies)).digest('hex')
+    // GPT's locked auth result proves the exact post-save file, including rotations.
+    return createHash('sha256').update(instance.provider === 'chatgpt' ? readFileSync(file) : JSON.stringify(login.cookies)).digest('hex')
   }
   private async verifyPool(instance: FreeInstance, a: FreePoolAdmission, signal: AbortSignal): Promise<FreePoolCommit> {
     await this.runtime.ensure(instance.provider)
     const config = this.runtime.config(instance.id)
     let planCheckedAt: string | undefined
+    let authLoginProof: string | undefined
     const read = async (command: 'auth' | 'usage'): Promise<FreeResult> => {
       signal.throwIfAborted()
       const output = await this.runner(config, { requestId: randomUUID(), instanceId: instance.id, provider: instance.provider, command }, signal)
       const result = parseResult(command, output)
+      if (command === 'auth' && instance.provider === 'chatgpt') {
+        authLoginProof = undefined
+        try {
+          const raw = JSON.parse(output.stdout)
+          if (typeof raw.login_fingerprint === 'string' && /^[a-f0-9]{64}$/.test(raw.login_fingerprint)) authLoginProof = raw.login_fingerprint
+        } catch { /* Missing or malformed auth proof fails closed below. */ }
+      }
       if (command === 'usage' && instance.provider === 'claude') {
         try { const raw = JSON.parse(output.stdout); planCheckedAt = typeof raw.checked_at === 'string' ? raw.checked_at : undefined } catch { /* parseResult fails closed */ }
       }
@@ -274,6 +284,10 @@ export class FreeInstances {
       const result = await read('auth')
       if (!result.authenticated || result.account_email?.toLowerCase() !== a.email)
         throw new FreeError('The imported login did not verify the expected account email.', 503, 'pool_verification_failed')
+      if (instance.provider === 'chatgpt') {
+        if (!authLoginProof) throw new FreeError('The ChatGPT runtime did not return its saved-login proof. Update its runtime before resolving this import.', 503, 'pool_verification_failed')
+        if (this.poolLogin(instance) !== authLoginProof) throw new FreeError('The saved login changed after authentication. Resolve this pending admission again.', 409, 'pool_changed')
+      }
     }
     this.poolLogin(instance)
     await auth()
@@ -287,11 +301,12 @@ export class FreeInstances {
       Date.parse(observed) > Date.now() + 60_000 || !Number.isFinite(Date.parse(observed)) ||
       usage.plan?.toLowerCase() !== a.plan)
       throw new FreeError('A fresh matching Free/Go plan reading was not available. No account was replaced.', 503, 'pool_verification_failed')
-    const verified = this.poolLogin(instance)
+    let verified = this.poolLogin(instance)
     // Auth may legitimately rotate cookies. Reconfirm identity if the usage read rotated them again.
     if (verified !== authenticated) {
       await auth()
-      if (this.poolLogin(instance) !== verified) throw new FreeError('The saved login changed during verification. Resolve this pending admission again.', 409, 'pool_changed')
+      if (instance.provider === 'chatgpt') verified = authLoginProof!
+      else if (this.poolLogin(instance) !== verified) throw new FreeError('The saved login changed during verification. Resolve this pending admission again.', 409, 'pool_changed')
     }
     return this.poolSerial(async () => {
       signal.throwIfAborted()
