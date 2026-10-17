@@ -1,11 +1,13 @@
 // The session rail's last-seen numbers, kept per session so a revisit paints at once and the fresh read replaces them a moment
 // later (stale-while-revalidate; owner, 2026-10-17: the rail's cards "pop in slowly"). In memory, and in this browser's
 // localStorage under a versioned key so a reload keeps them too. Only numbers and labels are kept (the tokens summary, the
-// turn count, the delegation stats, the connectors' names and states): never transcript text, a prompt or a secret. The newest RAIL_KEPT
+// transcript index's numbers and tool names, the delegation stats, the connectors' names and states): never transcript text, a
+// prompt or a secret. The newest RAIL_KEPT
 // sessions stay; the least recently used go first. Nothing here is sent anywhere.
 import type { ServiceStats } from './delegation'
 import type { AhUsage } from '@/components/session-header/logic'
 import type { ConnectorView } from '@shared/connectors'
+import type { TranscriptIndex } from '@shared/protocol'
 
 const STORE_KEY = 'hydra-desk.rail-cache.v1'
 export const RAIL_KEPT = 200
@@ -15,9 +17,17 @@ export type CachedConnector = Pick<ConnectorView, 'id' | 'name' | 'givesChats'> 
 
 export interface RailFacts {
   usage?: AhUsage
-  /** An outside Codex chat's turns over its whole thread (the index's sessionTurns), shown until the index arrives. */
-  codexTurns?: number
+  /** The numbers of the session's transcript index, shown until the index arrives. */
+  index?: IndexFacts
   delegation?: ServiceStats[]
+}
+
+/** What the rail draws from the server's transcript index, none of its text: the context, an outside Codex thread's tokens and
+ *  turns, the active time and the tool tally. */
+export type IndexFacts = Pick<TranscriptIndex, 'total' | 'contextTokens' | 'contextWindow' | 'sessionTokens' | 'sessionTurns' | 'activeMs' | 'tools'>
+
+export function indexFacts(i: TranscriptIndex): IndexFacts {
+  return { total: i.total, contextTokens: i.contextTokens, contextWindow: i.contextWindow, sessionTokens: i.sessionTokens, sessionTurns: i.sessionTurns, activeMs: i.activeMs, tools: i.tools }
 }
 
 interface Store {

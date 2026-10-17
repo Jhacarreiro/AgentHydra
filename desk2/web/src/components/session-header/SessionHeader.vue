@@ -172,17 +172,11 @@ const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
 const shortId = computed(() => props.sessionId.slice(0, 8))
 // Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file); for an outside Codex
 // chat, whose usage AgentHydra does not count, its thread's turns from the index (its rollout's, the server's count), shown
-// from the rail cache until the index arrives; else the prompts in the transcript shown: Desk reads only a long session file's
-// last 8 MB. A Codex chat counted its loaded page's prompts until 2026-10-17, "0 turns" while it loaded and then 15 of 124.
+// from the rail cache until the index arrives (the rail keeps it); else the prompts in the transcript shown: Desk reads only a
+// long session file's last 8 MB. A Codex chat counted its loaded page's prompts until 2026-10-17, "0 turns" while it loaded and
+// then 15 of 124.
 const prompts = computed(() => turnCount(props.items))
-const codexTurns = computed(() => props.index?.sessionTurns ?? railFacts(props.sessionId)?.codexTurns ?? null)
-watch(
-  () => props.index?.sessionTurns,
-  (n) => {
-    if (n != null && props.sessionId) keepRailFacts(props.sessionId, { codexTurns: n })
-  },
-  { immediate: true }
-)
+const codexTurns = computed(() => props.index?.sessionTurns ?? railFacts(props.sessionId)?.index?.sessionTurns ?? null)
 const sessionTurns = computed(() => (usage.value?.status === 'ok' ? usage.value.tokens.turns : null))
 const turns = computed(() => sessionTurns.value ?? codexTurns.value ?? prompts.value)
 const turnsTip = computed(() => {
