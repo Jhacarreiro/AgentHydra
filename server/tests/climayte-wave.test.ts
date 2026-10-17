@@ -19,6 +19,7 @@ import {
   killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteQuietTickForTests,
   startCliMayte,
 } from '../src/climayte'
 import { workers as liveWorkers, setSpendKit } from '../src/climayte-core'
@@ -59,6 +60,15 @@ function forgetManagers(): void {
 function forgetGroups(groups: string[]): void {
   for (const [id, w] of liveWorkers) if (groups.includes(w.group)) liveWorkers.delete(id)
 }
+
+// The quiet waits (3 s queued, 15 s idle, the 5 s wave reconcile) run at 1 s here, the pace the daemon
+// ticks at while a worker runs. Put back after the file.
+const quietTicksWas = setCliMayteQuietTickForTests({
+  queuedMs: 1_000,
+  idleMs: 1_000,
+  reconcileMs: 1_000,
+})
+afterAll(() => setCliMayteQuietTickForTests(quietTicksWas))
 
 describe('wave store', () => {
   let tempDir: string

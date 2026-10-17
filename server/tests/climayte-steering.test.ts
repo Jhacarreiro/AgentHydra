@@ -25,6 +25,7 @@ import {
   SENT_NOW_PREFIX,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteQuietTickForTests,
   startCliMayte,
   VERDICT_NOTE_MAX,
 } from '../src/climayte'
@@ -35,12 +36,24 @@ import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 setSpendKit(harnessKit)
 
+// The quiet waits (3 s queued, 15 s idle, the 5 s wave reconcile) run at 1 s here, the pace the daemon
+// ticks at while a worker runs. Put back after the file.
+const quietTicksWas = setCliMayteQuietTickForTests({
+  queuedMs: 1_000,
+  idleMs: 1_000,
+  reconcileMs: 1_000,
+})
+afterAll(() => setCliMayteQuietTickForTests(quietTicksWas))
+
 describe('integration: steering a running worker (field notes 10 and 11)', () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-steer-'))
   const cwd = join(root, 'work')
   const slowDir = join(root, 'acct-slow')
-  for (const d of [cwd, slowDir]) mkdirSync(d, { recursive: true })
+  // Its turn never stops, so it runs 10 s rather than the fake's 30 s.
+  const shortDir = join(root, 'acct-short')
+  for (const d of [cwd, slowDir, shortDir]) mkdirSync(d, { recursive: true })
   writeFileSync(join(slowDir, 'fake-slow'), '')
+  writeFileSync(join(shortDir, 'fake-slow'), '10')
   const groups: string[] = []
 
   afterAll(async () => {
@@ -51,10 +64,10 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     rmSync(root, { recursive: true, force: true })
   })
 
-  const start = async (title: string, account: string) => {
+  const start = async (title: string, account: string, configDir = slowDir) => {
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     setCliMayteAccountsProvider(() => [
-      { id: account, num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
+      { id: account, num: 7, name: 'slow', configDir, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
     // One known setting, so a follow-up's switch shows against it (auto may try Haiku).
@@ -128,7 +141,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
   test(
     'cancel a held message: it is taken back, is never run, and a second cancel finds nothing',
     async () => {
-      const id = await start('cancel-held', 'slow-1')
+      const id = await start('cancel-held', 'short-1', shortDir)
       withoutLiveInput(id)
       climayteSend(id, 'first held')
       climayteSend(id, 'taken back')

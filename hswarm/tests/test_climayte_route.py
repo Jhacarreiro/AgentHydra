@@ -93,7 +93,8 @@ class _Fake:
                 self._send(404, {})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        # A short poll, so shutdown() does not wait out serve_forever's 0.5 s default.
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
 
     @property
     def url(self):

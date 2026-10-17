@@ -1195,7 +1195,15 @@ export function orchestratorChildEnv(
 
 /** After a kill - or after the child has EXITED on its own - how long an unclosed pipe is waited
  *  on before the drain is abandoned. */
-const DRAIN_GRACE_MS = 5_000
+let DRAIN_GRACE_MS = 5_000
+
+/** Test seam: shorten the drain grace, so a test does not wait out 5 s for an unclosed pipe. Returns
+ *  the previous value. */
+export function setDrainGraceMsForTests(ms: number): number {
+  const was = DRAIN_GRACE_MS
+  DRAIN_GRACE_MS = ms
+  return was
+}
 
 /** How long past a run's own `timeoutMs` this adapter will keep waiting for ANYTHING before it
  *  stops waiting and answers with what it has. Covers the kill, the drain grace, and the salvage
