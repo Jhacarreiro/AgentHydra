@@ -75,7 +75,7 @@ import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
 import { chatFace } from './core-lead'
 import { coreDir } from './hydra-core-mode'
 import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
-import { type CodexDirectory, codexAccount, isRelayAccount, notConnected, pickCodexAccount } from './codex/accounts'
+import { type CodexDirectory, codexAccount, isRelayAccount, NOT_ANSWERING, notConnected, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
 import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
@@ -417,7 +417,7 @@ export class ChatManager {
         label: SERVICE_LABEL.codex,
         ready: !!codex,
         accounts: codex ?? 0,
-        ...(codex ? {} : { why: codex === null ? 'AgentHydra is not answering, so Desk cannot see the Codex accounts.' : 'No Codex account is signed in.' }),
+        ...(codex ? {} : { why: codex === null ? NOT_ANSWERING : 'No Codex account is signed in.' }),
       },
       this.chatgptService(),
     ]
@@ -2042,7 +2042,9 @@ export class ChatManager {
       open: this.openCodex,
       pickAccount: (avoid) => (dir ? pickCodexAccount(dir, avoid, this.codexHeld, this.now()) : Promise.resolve({ why: 'Codex is not set up in this Desk.' })),
       findAccount: async (id) => {
-        const found = (await dir?.instances().catch(() => []))?.find((i) => i.id === id && i.loggedIn)
+        // AgentHydra not answering is said as such, never taken for an account gone or another PC off.
+        const list = dir ? await dir.instances().catch(() => Promise.reject(new Error(NOT_ANSWERING))) : []
+        const found = list.find((i) => i.id === id && i.loggedIn)
         return found ? codexAccount(found) : null
       },
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'codex', fresh, sentId, movedFrom),
