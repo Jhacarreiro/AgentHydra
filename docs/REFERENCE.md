@@ -861,6 +861,28 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `desk2/hydra/src/lib/instance-appearance.ts`.
 
+### How the Instances tab stays live
+
+Live means a watcher, a change event, or a short poll while something is in flight, never only a manual Refresh
+(owner, 2026-10-16). While the tab is on screen it runs three watches beside the two-minute list refresh:
+
+| Watch | Every | Asks | Acts when |
+|---|---|---|---|
+| Logins | 5 s | `GET /api/instances/logins` (config.json, no process scan) | a profile's login moved: the old identity is dropped and resolved again |
+| Unconfirmed logins | on the login watch | the account resolve, for a running app whose login could not be confirmed (the yellow mark) | its last resolve is 10 s old (`desk2/hydra/src/lib/account-resolve.ts`); a closed app keeps the 15-minute re-check |
+| Exits | 3 s, only while a row reads open | `GET /api/instances/alive?pids=...`: a signal-0 probe of each Desktop pid, Codex `desktopPid` and CLI `livePids`, no process scan | a pid is gone: the daemon drops both scan caches and the tab lists that kind again at once |
+
+`GET /api/cli-instances` gives each login's `livePids` (its live sessions' pids) beside `liveSessions`. The filter's
+facets act on every row kind: a CLI login's plan is its own or its linked desktop's and it is open while a session
+runs; a Free login's plan is the one its site reports ("Free" on the Free plan) and it is open while a chat or check
+of it is in flight; a DeepSeek harness row's plan is "API key" and it is open while it runs. An unknown fact never
+sets a row aside.
+
+A process scan that fails (a timed-out WMI query) is not "nothing runs": the Desktop list and the Codex list each read
+the last scan that answered, if it is under five minutes old (`lastGoodClaudeProcessScan` in `server/src/core/process.ts`,
+`listCodexDesktopProcesses` in `server/src/core/codex-desktop.ts`). A `fresh` read, which launch and stop use to act,
+never takes that snapshot.
+
 ### The usage numbers on a row
 
 The 5-hour and weekly columns of the Instances, CLI and Codex tables come from three stores in the

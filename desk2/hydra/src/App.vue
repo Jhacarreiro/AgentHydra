@@ -388,7 +388,7 @@ onUnmounted(stopAvailabilityPolling)
       :class="EMBEDDED ? 'bg-background' : 'bg-sidebar'"
     >
       <!-- view tabs (no logo or title: Desk's pane already says where you are, owner 2026-10-05) -->
-      <nav class="flex items-start gap-1" :aria-label="$t('app.navLabel')">
+      <nav class="scroll-fade-x flex min-w-0 items-start gap-1" :aria-label="$t('app.navLabel')">
         <Button
           v-for="n in nav"
           :key="n.id"

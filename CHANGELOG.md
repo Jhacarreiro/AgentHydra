@@ -11,6 +11,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
 - **Connectors is a compact table.** Settings → Connectors lists each connector on one line with its type, status, action and switch; details open under it. A connector that is not installed can no longer be switched on.
 - **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
+- **A Routines tab.** Every routine is listed in the sidebar in folders with its state at a glance, and each one opens on the same page: its schedule in words, next run, Run now, Pause or Resume, Edit, key numbers, run history and details.
+- **Routines show the campaigns they work for.** A routine names its campaigns, and its page shows each one's sent, replied, bounced and ready counts, its last run, and what is happening now and next.
+- **The Instances filter applies to every row.** CLI, Free and DeepSeek harness rows now follow the plan and status filters, and the plan list offers their plans too.
+- **A login warning clears itself after you sign in.** A running app whose login could not be confirmed is checked again every few seconds, so its warning goes away soon after you sign back in.
+- **A closed app shows as closed within seconds.** Closing a Claude, Codex or CLI session outside AgentHydra now shows on its row in a few seconds instead of at the next refresh. A process check that times out no longer shows every Codex app as closed.
 
 ## [2.0.5] - 2026-10-16
 

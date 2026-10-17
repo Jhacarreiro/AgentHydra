@@ -906,8 +906,9 @@ const claudeProcessCache = createScanCache<ClaudeProcessScan>(
       return { ok: false, reason: err instanceof Error ? err.message : String(err) }
     }
   },
-  // 3s fresh: comfortably inside the UI's 4s poll, so a tick that lands early costs nothing, and
-  // the tick that does refresh takes the cached answer while the scan runs behind it. 30s stale:
+  // 3s fresh: the Instances tab's watches ask a few seconds apart (its exit watch is a pid probe
+  // that skips the scan and drops this cache when a pid is gone), so a read that lands early costs
+  // nothing, and one that does refresh takes the cached answer while the scan runs behind it. 30s stale:
   // past that the app has effectively been idle (nothing polling), and a caller coming back
   // deserves a real answer rather than a snapshot from whenever it last had focus.
   { freshMs: 3_000, staleMs: 30_000 },
