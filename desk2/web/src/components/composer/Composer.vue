@@ -111,7 +111,7 @@ interface PendingFile {
   blob?: Blob
 }
 
-type MenuName = 'plus' | 'mode' | 'model' | 'effort'
+type MenuName = 'plus' | 'model'
 
 const props = defineProps<{
   chat: ChatSummary | null

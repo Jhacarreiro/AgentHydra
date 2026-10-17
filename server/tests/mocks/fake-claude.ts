@@ -343,9 +343,11 @@ if (existsSync(join(configDir, 'fake-winddown'))) {
   process.exit(0)
 }
 
-// `fake-slow`: a first turn that runs 30 s (long enough to be steered or cancelled mid-run); a
-// resumed turn answers at once, saying whether it was given the steering message.
+// `fake-slow`: a first turn that runs 30 s, or the seconds its marker names (long enough to be steered or
+// cancelled mid-run); a resumed turn answers at once, saying whether it was given the steering message.
 if (existsSync(join(configDir, 'fake-slow'))) {
+  const slowMs =
+    (Number(/\d+/.exec(readFileSync(join(configDir, 'fake-slow'), 'utf8'))?.[0]) || 30) * 1000
   let file = findTranscript()
   if (!file) {
     const dir = join(configDir, 'projects', 'fake-proj')
@@ -356,7 +358,7 @@ if (existsSync(join(configDir, 'fake-slow'))) {
   init()
   if (!resume) {
     emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Working slowly.' }] } })
-    await Bun.sleep(30_000)
+    await Bun.sleep(slowMs)
   }
   const answer = prompt.includes('STEER NOW') ? 'STEERED' : 'SLOW DONE'
   emit({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sessionId, total_cost_usd: 0.01, num_turns: 1 })

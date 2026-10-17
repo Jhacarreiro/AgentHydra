@@ -32,6 +32,9 @@ from hswarm.livecode import serve_committed
 if (code := serve_committed(sys.argv[1:])) is not None:
     sys.exit(code)
 pathlib.Path(sys.argv[-1]).write_text(f"{__file__}\\n{os.getpid()}", encoding="utf-8")
+if report := os.environ.get("TEST_REPORT"):  # the clone this copy's server says it follows (its /health package)
+    from hswarm.livecode import running
+    pathlib.Path(report).write_text(running()["source"], encoding="utf-8")
 time.sleep(float(os.environ.get("TEST_SERVE_S", "0")))
 sys.exit(3)
 """
@@ -62,6 +65,8 @@ def clone(tmp_path, monkeypatch):
     monkeypatch.setattr(livecode, "HEAD_FRESH_S", 0.0)
     monkeypatch.setattr(livecode, "source", lambda: repo)
     monkeypatch.delenv("TEST_HOPS", raising=False)
+    monkeypatch.delenv("TEST_REPORT", raising=False)
+    monkeypatch.delenv(livecode.SOURCE_ENV, raising=False)  # a pytest run under a copy's server inherits its clone
     return repo
 
 
@@ -110,10 +115,10 @@ class _Exec(BaseException):
 
 
 def test_the_daemons_start_serves_the_committed_copy_and_a_hand_start_serves_its_own(clone, monkeypatch, tmp_path):
-    def execv(exe, cmd):
-        raise _Exec(subprocess.run(cmd).returncode)
+    def execve(exe, cmd, env):
+        raise _Exec(subprocess.run(cmd, env=env).returncode)
 
-    monkeypatch.setattr(livecode.os, "execv", execv)
+    monkeypatch.setattr(livecode.os, "execve", execve)
     out = tmp_path / "ran-from.txt"
     monkeypatch.delenv("HSWARM_SUPERVISED", raising=False)
     assert livecode.serve_committed(["mcp", "--http", str(out)]) is None  # by hand: this process serves its own code
@@ -124,6 +129,32 @@ def test_the_daemons_start_serves_the_committed_copy_and_a_hand_start_serves_its
         code = e.args[0]
     assert code == 3  # the copy's server ran (itself, not a further copy), and its exit is the start's
     assert Path(out.read_text(encoding="utf-8").splitlines()[0]).parent.parent == livecode.target()
+
+
+# Regression (2026-10-17): two clones on one PC (a dev checkout and an auto-updating worktree) commit the same hswarm
+# tree, so they share one copy, whose marker names the clone that exported it first. The daemon's start from the other
+# clone served it as the first clone's: /health's package named the wrong clone, the daemon replaced that "foreign"
+# server on every boot, and the server followed the other clone's commits instead of its own.
+def test_a_copy_two_clones_share_reports_the_clone_its_start_followed(clone, monkeypatch, tmp_path):
+    other = tmp_path / "worktree"
+    _git(tmp_path, "clone", "-q", str(clone), str(other))
+    first = livecode.target()  # the fixture's clone exports the shared tree first
+
+    def execve(exe, cmd, env):
+        raise _Exec(subprocess.run(cmd, env=env).returncode)
+
+    monkeypatch.setattr(livecode.os, "execve", execve)
+    monkeypatch.setattr(livecode, "source", lambda: other)
+    report = tmp_path / "source.txt"
+    monkeypatch.setenv("HSWARM_SUPERVISED", "1")
+    monkeypatch.setenv("TEST_REPORT", str(report))
+    try:
+        code = livecode.serve_committed(["mcp", "--http", str(tmp_path / "ran-from.txt")])
+    except _Exec as e:
+        code = e.args[0]
+    assert code == 3 and livecode.target() == first  # one copy serves both clones
+    assert json.loads((first / livecode.MARKER).read_text(encoding="utf-8"))["source"] == str(clone)
+    assert report.read_text(encoding="utf-8") == str(other)  # yet the server says, and follows, the clone it started from
 
 
 # Contract: ending the start the daemon supervises ends the server it started (Windows: a kill-on-close job; POSIX: exec,

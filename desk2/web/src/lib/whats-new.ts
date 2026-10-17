@@ -147,10 +147,10 @@ function restartedSince(marker: WhatsNewMarker, read: Running): boolean {
  * The update row's click, before its steps run: the marker is written at once from what the window has read, and
  * refreshed from the server only when it answers within a moment.
  */
-export async function rememberForUpdate(): Promise<void> {
+export async function rememberForUpdate(waitMs = REFRESH_MS): Promise<void> {
   const version = seenVersion()
   if (version) writeMarker(markerFor(version, running?.sections ?? null, Date.now(), running?.startedAt ?? null))
-  const read = await readRunning(REFRESH_MS)
+  const read = await readRunning(waitMs)
   if (!read) return
   noteRunning(read)
   writeMarker(markerFor(read.version, read.sections, Date.now(), read.startedAt))

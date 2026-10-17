@@ -75,7 +75,8 @@ class StubDaemon:
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._server.server_port}"
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        # A short poll, so shutdown() does not wait out serve_forever's 0.5 s default.
+        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
         hydralib.INPROC[self.url] = self.dispatch
 

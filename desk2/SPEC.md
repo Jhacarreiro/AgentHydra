@@ -560,7 +560,18 @@ picks the account and moves the worker when that account hits its limit or its l
   (`resumeSessionAt`, server-internal `forkAt`), so the source's later turns never reach the fork.
 - **Local server guard:** the server answers 403 to any request whose Host or Origin is not loopback
   (`127.0.0.1`, `localhost`, `[::1]`, any port), whose Origin is `null`, or whose `Sec-Fetch-Site` is
-  `cross-site`, on every route and on `/ws`; UNC and device paths are refused (400) wherever a route
+  `cross-site`, on every route and on `/ws`. The opt-in exception is only when `HYDRA_DESK_PUBLIC_ORIGINS` (a sign-in
+  proxy's origins, comma-separated, https only) is set. On a listed Host the Origin must be that host's own listed
+  origin: a loopback Origin, or another listed origin, is refused, and a sibling subdomain's origin is refused there.
+  On a loopback Host the Origin rule is unchanged, listed or not. On a listed host a `same-site` request is refused
+  too. The first page after the proxy's sign-in is the exception: a GET or HEAD with `Sec-Fetch-Mode: navigate` and
+  `Sec-Fetch-Dest: document` to one of five start pages, `/`, `/index.html`, `/ah`, `/ah/` or `/ah/index.html`. Any
+  other path is refused, including a route added later. Another site, a sibling subdomain included, can at most open
+  the start page; its API calls, fetches, frames and socket are refused. Still refused:
+  an Origin of `null`; any other cross-site or same-site request to a listed host (a fetch, a POST, a `/ws` upgrade, a
+  navigation to `/api`); and every cross-site request to a loopback host. A listed host's window pages also send
+  `frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN` and `Cross-Origin-Opener-Policy: same-origin`.
+  Unset, nothing changes. UNC and device paths are refused (400) wherever a route
   takes a folder. `GET /api/external/sessions/:id` answers one outside session of any age (the list
   holds the last 24 hours), which is how a search hit for an older session opens with its composer.
 
@@ -744,10 +755,12 @@ bottom: the repository strip (`nav` "Repository and pull request controls": 768x
 white 5%; project button, branch button, `+13,658 -4,852` counts button, "Create PR" split button with a "More
 PR options" chevron, "Dismiss" X), 6px gap, the box (background `#20201f`, radius 12px, padding 8px, 1px inset
 ring white 10%, shadow `0 4px 20px #00000009`, textbox 14px/20px, caret `#f0efec`, auto-grows to max-h 384px
-(`max-h-96`), send button 24x24 at its bottom right), then the toolbar row (20px high, 12px `#c3c2b7`, margin-top
-6px, padding 0 10px 0 7px): left `+` (aria "Add"), mic ("Press and hold to record"), "Dictation settings" chevron,
-the permission-mode button; right model ("Model: ..."), effort ("Effort: ..."), "Fast mode", the usage ring
-(aria "Usage: Context ..."). The real placeholder on a new session is "Describe a task or ask a question".
+(`max-h-96`); its bottom row holds `+` (aria "Add", the plus menu) at the left, then the textbox, the send button 24x24,
+and the mic at the right end (aria "Press and hold to record", or "Recording, release to stop" while it records). A
+"Queue" label sits before the send button while a send would queue (`(busy || enterQueues) && hasContent`), then the toolbar row (20px high,
+12px `#c3c2b7`, margin-top 6px, padding 0 10px 0 7px): a spacer, then, right-aligned, the Sus menu ("Sus level: ...
+Change it"), the model chip ("Model: ..."), whose menu holds an Effort submenu and a More models submenu, then the
+account circle (aria "Account: ...") with its context ring. The real placeholder on a new session is "Describe a task or ask a question".
 Menus: 10px radius, `#20201f`, ring white 10%, shadow `0 8px 24px #00000052, 0 2px 6px #0003`, padding 4px, item
 24px (40.5px with a description line), radius 6px, padding 2.5px 8px. Exact labels and orders: DESIGN.md.
 

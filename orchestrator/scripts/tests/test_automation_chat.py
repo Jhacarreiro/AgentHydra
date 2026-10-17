@@ -282,9 +282,7 @@ class FleetEnforceTest(unittest.TestCase):
         # bypass + high with ultracode off; the owner's chats still get ultracode + xhigh.
         from lib import configlib
 
-        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
-        configlib._CACHE = {**configlib.defaults(), "doctrine.automation_ultracode": False,
-                            "doctrine.automation_effort": "high"}
+        configlib.write({"doctrine.automation_ultracode": False, "doctrine.automation_effort": "high"})
         store = self.unstamped.parent
         launched = store / "local_d.json"
         launched.write_text(json.dumps({"cliSessionId": "d" * 8, "title": "Fan-out member",

@@ -2,7 +2,7 @@
 // and a refused first message here; the recovery of a moved chat is folded into the failure's row.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -11,12 +11,13 @@ import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatManager, type ManagerBridge } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
+import { rmRetry } from '../../rm-retry'
 
 const temps: string[] = []
 const managers: ChatManager[] = []
 afterEach(async () => {
   for (const m of managers.splice(0)) await m.closeAll()
-  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  for (const d of temps.splice(0)) rmRetry(d)
 })
 const temp = (prefix: string): string => {
   const d = mkdtempSync(join(tmpdir(), prefix))

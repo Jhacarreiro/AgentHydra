@@ -361,6 +361,18 @@ class LaneTest(unittest.TestCase):
         self.assertEqual(self.asked, [])
         self.assertFalse(payload["acting"])
 
+    def test_the_unattended_run_with_the_tray_down_asks_nobody_and_records_it(self):
+        # No --force: the armlib gate refuses, and the tray-not-armed recovery row is written to the
+        # ledger under this isolated state dir. DISARMED is asserted, not only "nobody asked". The
+        # policy is the isolated state dir's, which has no config.json (no overrides), so the
+        # machine's own config.json cannot switch the lane off.
+        payload, _ = self._run("--yes")
+        self.assertEqual(self.asked, [])
+        self.assertFalse(payload["acting"])
+        self.assertIn("DISARMED", json.dumps(payload["notes"]))
+        self.assertTrue(any(r.get("kind") == "tray-not-armed"
+                            for r in stall_watch.recoverylib.ledger("stall_watch")))
+
     def test_an_unknown_flag_is_refused_before_anything_is_read(self):
         code, _out, _err = run_cli(stall_watch.main, ["--yes", "--sesion", SID])
         self.assertEqual(code, 3)

@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../src/config'
 import { decryptSafeStorage, encryptSafeStorage } from '../src/core/crypto'
@@ -23,6 +23,7 @@ import { PROFILE_API_URL } from '../src/core/shared'
 import { resetUsageApiBackoff } from '../src/usage'
 import { USAGE_API_URL } from '../src/usage-api'
 import { checkUsageForDesktop } from '../src/usage-service'
+import { rmRetry } from './rm-retry'
 
 const realFetch = globalThis.fetch
 afterEach(() => {
@@ -109,7 +110,7 @@ describe.skipIf(process.platform !== 'win32')('revoked desktop grants', () => {
         for (const t of [code, year, legacy]) expect(text).not.toContain(t)
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      rmRetry(dir)
     }
   }, 60_000)
 
@@ -151,7 +152,7 @@ describe.skipIf(process.platform !== 'win32')('revoked desktop grants', () => {
       expect(await pruneRevokedGrants(dir, { prove: true })).toBe(0)
       expect(readFileSync(path, 'utf8')).toBe(landed)
     } finally {
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      rmRetry(dir)
     }
   }, 60_000)
 })

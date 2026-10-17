@@ -42,10 +42,18 @@ import os
 from pathlib import Path
 from typing import Any
 
-# ORCHESTRATOR_STATE_DIR wins, as in ledgerlib: with it set, the policy lives with the rest of the
-# state wherever the checkout is (docs/LIVE-CHECKOUT.md). Read once, at import.
-STATE = Path(os.environ.get("ORCHESTRATOR_STATE_DIR") or (Path(__file__).resolve().parent.parent.parent / "state"))
-CONFIG_PATH = Path(os.environ.get("ORCH_CONFIG") or (STATE / "config.json"))
+def config_path() -> Path:
+    """Where the policy file is. Resolved on every call, as ledgerlib resolves its state dir: a
+    test that points ORCHESTRATOR_STATE_DIR at its own temp dir must also get that dir's policy,
+    not the one the process started with. ORCH_CONFIG wins; with ORCHESTRATOR_STATE_DIR set the
+    policy lives with the rest of the state wherever the checkout is (docs/LIVE-CHECKOUT.md)."""
+    env = os.environ.get("ORCH_CONFIG")
+    if env:
+        return Path(env)
+    state = os.environ.get("ORCHESTRATOR_STATE_DIR")
+    if state:
+        return Path(state) / "config.json"
+    return Path(__file__).resolve().parents[2] / "state" / "config.json"
 
 
 class ConfigError(ValueError):
@@ -536,7 +544,7 @@ def _coerce(row: dict, value: Any) -> Any:
 def read_file(path: Path | None = None) -> dict[str, Any]:
     """The raw overrides on disk, unmerged. Missing file = no overrides, which is the normal
     state of a fresh machine and never an error."""
-    p = path or CONFIG_PATH
+    p = path or config_path()
     if not p.exists():
         return {}
     try:
@@ -568,22 +576,25 @@ def validate(overrides: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
 
 _CACHE: dict[str, Any] | None = None
+_CACHE_PATH: Path | None = None
 _PROBLEMS: list[str] = []
 
 
 def load(force: bool = False) -> dict[str, Any]:
     """Defaults with the file's valid overrides applied. Cached per process on purpose: a
-    lane that read the file twice in one pass could act on two different policies."""
-    global _CACHE, _PROBLEMS
-    if _CACHE is not None and not force:
+    lane that read the file twice in one pass could act on two different policies. The cache
+    is keyed on the path it was read from, so a changed config_path() reloads it."""
+    global _CACHE, _CACHE_PATH, _PROBLEMS
+    path = config_path()
+    if _CACHE is not None and _CACHE_PATH == path and not force:
         return _CACHE
     merged = defaults()
     try:
-        clean, problems = validate(read_file())
+        clean, problems = validate(read_file(path))
     except ConfigError as err:
         clean, problems = {}, [str(err)]
     merged.update(clean)
-    _CACHE, _PROBLEMS = merged, problems
+    _CACHE, _CACHE_PATH, _PROBLEMS = merged, path, problems
     return merged
 
 
@@ -635,7 +646,7 @@ def _write_unlocked(overrides: dict[str, Any], path: Path | None) -> dict[str, A
         raise ConfigError("; ".join(problems))
     dflt = defaults()
     kept = {k: v for k, v in clean.items() if v != dflt[k]}
-    p = path or CONFIG_PATH
+    p = path or config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     # A note a person added by hand ("_why": ...) survives the rewrite; only the two generated
     # ones are regenerated. The file invites hand edits, so it must not eat them.

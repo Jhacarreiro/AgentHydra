@@ -6,7 +6,8 @@
 // through bash) never does; a worker that ignores the hold is let go after BACKGROUND_HOLDS_MAX.
 // regression: two workers of a wave ended their turns over a queued test run and went done with no
 // result. gap: nothing read the process table at the stop. seam: the real table, with this test
-// process standing in for the CLI and real bash children under it.
+// process standing in for the CLI and real bash children under it. The cases wait for a killed
+// shell to exit, because taskkill returns before Windows has ended it (CI run 39033746843).
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
@@ -27,19 +28,21 @@ function bashToolLine(command: string): string {
   return `source /c/Users/me/.claude/shell-snapshots/snapshot-bash-1-example.sh 2>/dev/null || true && eval '${command}' < /dev/null && pwd -P >| /tmp/claude-1-cwd`
 }
 
-const spawned: number[] = []
-afterEach(() => {
-  for (const pid of spawned.splice(0)) killProcessTree(pid)
+const spawned: Bun.Subprocess[] = []
+afterEach(async () => {
+  const procs = spawned.splice(0)
+  for (const proc of procs) if (proc.exitCode === null) killProcessTree(proc.pid)
+  await Promise.all(procs.map((proc) => proc.exited))
 })
 
-function spawnBash(line: string): number {
+function spawnBash(line: string): { pid: number; exited: Promise<number> } {
   const proc = Bun.spawn([GIT_BASH, '-c', line], {
     stdout: 'ignore',
     stderr: 'ignore',
     windowsHide: true,
   })
-  spawned.push(proc.pid)
-  return proc.pid
+  spawned.push(proc)
+  return { pid: proc.pid, exited: proc.exited }
 }
 
 function runningWorker(id: string): CliMayteWorker {
@@ -61,14 +64,15 @@ function runningWorker(id: string): CliMayteWorker {
 describe.skipIf(!canSpawn)('the Stop hook and background runs', () => {
   test(
     'a live Bash-tool run holds the stop and names the command; once it is gone, the stop goes through',
-    () => {
+    async () => {
       const w = runningWorker('w-bg-1')
       try {
-        const pid = spawnBash(bashToolLine('sleep 30'))
+        const { pid, exited } = spawnBash(bashToolLine('sleep 30'))
         const held = climayteStopHook(w.id, {}) as { decision?: string; reason?: string }
         expect(held.decision).toBe('block')
         expect(held.reason).toContain(`pid ${pid}: sleep 30`)
         killProcessTree(pid)
+        await exited
         expect(climayteStopHook(w.id, { stop_hook_active: true })).toEqual({})
       } finally {
         workers.delete(w.id)

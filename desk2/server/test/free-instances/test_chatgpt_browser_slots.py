@@ -61,15 +61,18 @@ class BrowserSlotTests(unittest.TestCase):
     def test_native_wait_claims_exact_file_and_releases_file_before_mutex(self):
         events = []
         native = Native(events, result=2)
+        # The clock stands still, so the one native wait must carry the whole 120 s budget: a slow
+        # runner that took over a second to reach the wait failed the old 119-120 s window.
         with patch.object(browser_slots, '_windows_api', return_value=native), \
-                patch.object(browser_slots.time, 'sleep', side_effect=AssertionError('No polling')):
+                patch.object(browser_slots.time, 'sleep', side_effect=AssertionError('No polling')), \
+                patch.object(browser_slots.time, 'monotonic', return_value=1_000.0):
             with browser_slots.browser_slot(Path('synthetic-slots'), wait=120, locker=locker(events)):
                 events.append(('body',))
         operations = [event[:2] for event in events]
         self.assertEqual(operations[-7:], [('file_enter', 'chatgpt-2'), ('body',),
             ('file_exit', 'chatgpt-2'), ('release', 102), ('close', 100), ('close', 101), ('close', 102)])
         self.assertEqual(sum(event[0] == 'wait' for event in events), 1)
-        self.assertTrue(119_000 <= next(event[2] for event in events if event[0] == 'wait') <= 120_000)
+        self.assertEqual(next(event[2] for event in events if event[0] == 'wait'), 120_000)
 
     def test_abandoned_mutex_is_owned_and_released(self):
         events = []

@@ -38,15 +38,10 @@ class ArchiveChatTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
-        from lib import configlib, hydralib
+        from lib import hydralib
 
-        # The policy file is resolved once, at import, from the REAL state dir - not from
-        # ORCHESTRATOR_STATE_DIR - so without this every test here ran under the machine owner's
-        # live policy and refused wholesale whenever archive.enabled was off there. Defaults only.
-        self._real_config = (configlib.CONFIG_PATH, configlib._CACHE)
-        configlib.CONFIG_PATH = Path(self._state.name) / "config.json"
-        configlib._CACHE = None
-
+        # The policy file follows ORCHESTRATOR_STATE_DIR (configlib.config_path), so this temp state
+        # dir also holds the policy: the machine owner's live config.json is never read here.
         hydralib.BASE = self.stub.url
         import archive_chat
         from lib import ledgerlib
@@ -58,9 +53,6 @@ class ArchiveChatTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": []}
 
     def tearDown(self):
-        from lib import configlib
-
-        configlib.CONFIG_PATH, configlib._CACHE = self._real_config
         self.stub.close()
         os.environ.pop("ORCHESTRATOR_STATE_DIR", None)
         self._tmp.cleanup()

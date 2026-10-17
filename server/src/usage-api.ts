@@ -94,7 +94,7 @@ export type UsageApiResult =
 /** `Retry-After` is either delay-seconds or an HTTP-date (RFC 9110 §10.2.3). Returns whole seconds
  *  in the future, or null for absent/garbage/past values - a bad header must not become a countdown
  *  to a moment that already passed. */
-function parseRetryAfter(header: string | null): number | null {
+export function parseRetryAfter(header: string | null): number | null {
   if (!header?.trim()) return null
   const raw = header.trim()
   const asSeconds = Number(raw)

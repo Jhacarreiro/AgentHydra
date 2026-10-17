@@ -19,6 +19,7 @@ import {
   killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteQuietTickForTests,
   startCliMayte,
 } from '../src/climayte'
 import { workers as liveWorkers, setSpendKit } from '../src/climayte-core'
@@ -53,6 +54,21 @@ function opusHighCode() {
 function forgetManagers(): void {
   for (const [id, w] of liveWorkers) if (w.kind === 'manage') liveWorkers.delete(id)
 }
+
+// Finished workers stay in the shared map; climayte-login-wall places its task on the account of a
+// leftover worker from this file, so a block forgets the workers of its own groups.
+function forgetGroups(groups: string[]): void {
+  for (const [id, w] of liveWorkers) if (groups.includes(w.group)) liveWorkers.delete(id)
+}
+
+// The quiet waits (3 s queued, 15 s idle, the 5 s wave reconcile) run at 1 s here, the pace the daemon
+// ticks at while a worker runs. Put back after the file.
+const quietTicksWas = setCliMayteQuietTickForTests({
+  queuedMs: 1_000,
+  idleMs: 1_000,
+  reconcileMs: 1_000,
+})
+afterAll(() => setCliMayteQuietTickForTests(quietTicksWas))
 
 describe('wave store', () => {
   let tempDir: string
@@ -853,6 +869,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1154,6 +1171,7 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1429,6 +1447,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })

@@ -39,6 +39,36 @@ function applied(): UpdateApplyResult {
   return { ok: true, message: 'updated', restartRequired: true, status: status(), output: [] }
 }
 
+// Contract: an applied update asks Desk 2's server onto it before the daemon hands over, and an apply that failed asks
+// nothing; a Desk that does not answer fails neither. Regression: the daemon pulled and relaunched itself, and the window's
+// server sat on the old code until someone clicked Menu > Restart to update (2026-10-17).
+test('an applied update asks Desk onto it before the daemon relaunches, and a failed one does not', async () => {
+  const order: string[] = []
+  setAutoUpdateHooks({
+    check: async () => status(),
+    apply: async () => applied(),
+    restartDesk: async () => {
+      order.push('desk')
+      throw new Error('Desk is not running')
+    },
+    relaunch: () => {
+      order.push('daemon')
+      return true
+    },
+  })
+  expect(await runAutoUpdateOnce()).toEqual({ checked: true, applied: true, relaunched: true })
+  expect(order).toEqual(['desk', 'daemon'])
+  setAutoUpdateHooks({
+    check: async () => status(),
+    apply: async () => ({ ...applied(), ok: false }),
+    restartDesk: () => {
+      order.push('desk again')
+    },
+  })
+  expect((await runAutoUpdateOnce()).reason).toBe('apply-failed')
+  expect(order).toEqual(['desk', 'daemon'])
+})
+
 test('a second restart request while a successor handshake is pending shares it', async () => {
   let ready!: (ok: boolean) => void
   let attempts = 0

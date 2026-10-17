@@ -50,6 +50,8 @@
   --danger: #d03b3b;
   --danger-text: #ec7e7e;
   --danger-bg: #3c0e0e;
+  --advisor-bg: #9a3f0a; /* Urgency Advisor bubble: dark orange, 7:1 under --advisor-text, clear of both page tones */
+  --advisor-text: #fff4ec;
 
   /* Code and git */
   --code-text: #ec7e7e;

@@ -2,13 +2,14 @@
 // whose pages belong to a live chat, a dead owner and a deleted chat.
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { findChrome, LIVE_CHROME_FLAGS, newPage, pageTabs } from '../../src/browser/cdp'
 import { ownPage } from '../../src/browser/ledger'
 import { readLedger } from '../../src/browser/ownership'
 import { closeChatTabs, deadOwnerTargetIds, makeLiveness, ownerLive, profileFolders, sessionOwnerLiveness, sweepDeadOwnerTabs } from '../../src/browser/tab-sweep'
+import { rmRetry } from '../rm-retry'
 
 setDefaultTimeout(180_000)
 
@@ -25,7 +26,7 @@ beforeAll(() => {
 
 afterAll(() => {
   try {
-    rmSync(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    rmRetry(base)
   } catch {
     // A leftover temp folder must not fail the suite.
   }

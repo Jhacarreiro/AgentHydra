@@ -36,6 +36,11 @@ export function noAutoOpen(): boolean {
   return appEnv('NO_OPEN') === '1'
 }
 
+/** `*_DESK_AT_BOOT=1` — start Desk 2's server as soon as the daemon listens, not on the first page. Read at call time. */
+export function deskAtBoot(): boolean {
+  return appEnv('DESK_AT_BOOT') === '1'
+}
+
 /**
  * Resolve the per-user config dir, moving a pre-rename `~/.ccmanagerui` across on first run.
  *

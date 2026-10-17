@@ -8,6 +8,7 @@ import { warmAnalyticsInBackground } from './analytics'
 import { apiBodyLimit } from './api-body-limit'
 import { apiOriginAllowlist } from './api-origins'
 import {
+  askDeskRestart,
   autoUpdateEnabled,
   getAutoUpdateIntervalSecs,
   lastUpdateCheck,
@@ -34,6 +35,7 @@ import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import { runnerHandoffsSettled } from './climayte-runner'
 import { flushCliMayteStore } from './climayte-store-writer'
+import { startCloudSessions, stopCloudSessions } from './cloud-sessions'
 import { startCommandPacks } from './command-packs'
 import {
   APP_ROOT,
@@ -42,6 +44,7 @@ import {
   DATA_DIR,
   DATA_DIR_NOTICE,
   DB_PATH,
+  deskAtBoot,
   HOST,
   IS_RELEASE,
   LAUNCHER_PATH,
@@ -947,6 +950,7 @@ await import('./routes/session-message')
 await import('./routes/versions')
 await import('./routes/box-doctor')
 await import('./routes/climayte')
+await import('./routes/urgency-advisor')
 await import('./routes/completions')
 await import('./routes/hswarm')
 await import('./routes/helpers')
@@ -1250,6 +1254,7 @@ function stopBackgroundTimers(): void {
   stopIdleSweep()
   stopClaudeNativePrewarm()
   stopExtraUsageGuard()
+  stopCloudSessions()
   stopStallSentinel()
   stopCliMaytePing()
   peopleAddon()?.stop?.()
@@ -1556,6 +1561,7 @@ setAutoUpdateHooks({
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
   relaunch: () => relaunchDaemon(),
+  restartDesk: () => askDeskRestart(),
 })
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any
@@ -1710,6 +1716,10 @@ startCommandPacks()
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).
 startExtraUsageGuard()
 
+// Claude Code cloud sessions and claude.ai Project threads: off unless AGENTHYDRA_CLOUD_SESSIONS=1
+// (server/src/cloud-sessions.ts). With the flag unset this starts nothing.
+startCloudSessions()
+
 // --- one-time repair: CLI config dirs still naming the pre-rebrand config root ------------------
 // See migrateCliInstanceConfigDirs. A no-op on every install except one carried across the
 // ccmanagerui → agenthydra rename, where it is what makes an existing CLI login readable again.
@@ -1852,10 +1862,20 @@ warmSessionMetaIndex()
 // instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
 warmToolIntentInBackground(MCP_TOOLS)
 
+// A double-click opens the window, and openWindow starts Desk 2 itself. The else-if keeps a headless
+// start from taking the in-flight start first: desk2.start() ignores options on a start already running,
+// so the native window would never open.
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`
   if (!openWindow(url))
     console.error(`[agenthydra] Could not open a browser automatically. Open ${url} manually.`)
+} else if (deskAtBoot()) {
+  void desk2
+    .start()
+    .then((r) => {
+      if (!r.ok) console.error(`[agenthydra] Desk 2 did not start at boot: ${r.reason}`)
+    })
+    .catch((e) => console.error('[agenthydra] Desk 2 did not start at boot:', e))
 }
 
 export type App = typeof app

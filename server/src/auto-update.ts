@@ -51,6 +51,10 @@ export interface AutoUpdateHooks {
   apply: typeof applyUpdate
   /** Restart the daemon so the freshly-pulled code takes over. Wired by server/src/index.ts. */
   relaunch: () => void | boolean | Promise<void | boolean>
+  /** Ask Desk 2's server, a process of its own, onto the code an update just put on disk, so the window is never left
+   *  on old server code waiting for Menu > Restart to update (owner, 2026-10-17: "so I never have to think about it
+   *  again"). Wired by server/src/index.ts (askDeskRestart); default: nothing. */
+  restartDesk: () => void | Promise<void>
   /** True when dispatch runs are in flight. An update relaunches the daemon; even though runs now
    *  survive that (they're detached + reattached), we DEFER updating while the queue is busy so a
    *  relaunch never churns a live run's stream, for at most AUTO_UPDATE_MAX_DEFER_S. Wired by
@@ -68,7 +72,21 @@ const realHooks: AutoUpdateHooks = {
   check: checkForUpdate,
   apply: applyUpdate,
   relaunch: defaultRelaunch,
+  restartDesk: () => {},
   hasActiveRuns: () => false,
+}
+
+/** Asks Desk 2's server to restart onto the code an update just put on disk. Desk takes an ask that is not the window's
+ *  only while its code on disk is newer than it and its launcher started it (desk2 server/src/plugins/60-update.ts);
+ *  any other ask answers 409 and changes nothing, and its chats run on through the restart. */
+export async function askDeskRestart(
+  port = Number(process.env.HYDRA_DESK_PORT) || 7798,
+): Promise<void> {
+  await fetch(`http://127.0.0.1:${port}/api/server/restart`, {
+    method: 'POST',
+    headers: { 'User-Agent': 'agenthydra-auto-update' },
+    signal: AbortSignal.timeout(5000),
+  })
 }
 let hooks: AutoUpdateHooks = realHooks
 /** Override the side-effect hooks (index.ts sets `relaunch`; tests inject fakes for all three so
@@ -254,6 +272,10 @@ export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRun
   try {
     const res = await hooks.apply()
     if (!res.ok) return { checked: true, applied: false, relaunched: false, reason: 'apply-failed' }
+    // Desk 2's server goes onto the new code too, before this daemon hands over; a Desk that is down or current is no failure.
+    await Promise.resolve()
+      .then(() => hooks.restartDesk())
+      .catch(() => {})
     if (res.restartRequired) {
       const relaunched = await relaunchAfterUpdate()
       return {

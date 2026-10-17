@@ -7,6 +7,7 @@ long as someone keeps checking it against the modules themselves.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -40,12 +41,13 @@ class _ConfigCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.path = Path(self._tmp.name) / "config.json"
-        self._real_path, self._real_cache = configlib.CONFIG_PATH, configlib._CACHE
-        configlib.CONFIG_PATH = self.path
+        self._env = mock.patch.dict(os.environ, {"ORCH_CONFIG": str(self.path)})
+        self._env.start()
         configlib._CACHE = None
 
     def tearDown(self):
-        configlib.CONFIG_PATH, configlib._CACHE = self._real_path, self._real_cache
+        self._env.stop()
+        configlib._CACHE = None
         self._tmp.cleanup()
 
     def write(self, payload: dict):
@@ -521,3 +523,24 @@ class EveryKnobIsWiredTest(unittest.TestCase):
         src = self._source()
         self.assertNotIn('_k("archive.enabled"', src,
                          "configlib.py is in the scanned source: the check can no longer fail")
+
+
+class PolicyPathTest(unittest.TestCase):
+    """The policy path is read on every call, as the state dir is. A test (or a lane) that points
+    ORCHESTRATOR_STATE_DIR somewhere after configlib is imported must get THAT dir's policy, not
+    the one the process started with."""
+
+    def test_a_state_dir_set_after_import_supplies_the_policy(self):
+        with tempfile.TemporaryDirectory() as state, \
+                mock.patch.dict(os.environ, {"ORCHESTRATOR_STATE_DIR": state}):
+            os.environ.pop("ORCH_CONFIG", None)
+            Path(state, "config.json").write_text(json.dumps({"archive.enabled": False}), encoding="utf-8")
+            self.assertFalse(configlib.get("archive.enabled"))
+
+    def test_orch_config_still_wins_over_the_state_dir(self):
+        with tempfile.TemporaryDirectory() as state, tempfile.TemporaryDirectory() as other, \
+                mock.patch.dict(os.environ, {"ORCHESTRATOR_STATE_DIR": state,
+                                             "ORCH_CONFIG": str(Path(other, "config.json"))}):
+            Path(state, "config.json").write_text(json.dumps({"archive.enabled": False}), encoding="utf-8")
+            Path(other, "config.json").write_text(json.dumps({"archive.enabled": True}), encoding="utf-8")
+            self.assertTrue(configlib.get("archive.enabled"))

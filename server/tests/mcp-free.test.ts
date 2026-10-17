@@ -13,6 +13,7 @@ import {
   providerDown,
   resetFreeHealth,
   restingFor,
+  setFreeTickMsForTests,
   windowResetAt,
 } from '../src/mcp-free'
 
@@ -192,8 +193,12 @@ describe('free_chat through a stand-in Desk 2', () => {
   let individualJobReads = 0
   let server: ReturnType<typeof Bun.serve>
   let port: string | undefined
+  let prevTickMs = 0
 
   beforeAll(() => {
+    // Shorter than the 1.5 s batch tick, but long enough that a 24-task batch finishes inside one tick:
+    // at 60 ms a second tick read the bulk route again before the batch was done (one bulk read per batch).
+    prevTickMs = setFreeTickMsForTests(500)
     // From no sends, rests or caps: a pacing test above that fails before its own reset leaves #2 at its
     // cap, and two of these then waited out their 30 s for an account that never frees (2026-10-11).
     resetFreeHealth()
@@ -320,6 +325,7 @@ describe('free_chat through a stand-in Desk 2', () => {
     process.env.HYDRA_DESK_PORT = String(server.port)
   })
   afterAll(() => {
+    setFreeTickMsForTests(prevTickMs)
     if (port === undefined) delete process.env.HYDRA_DESK_PORT
     else process.env.HYDRA_DESK_PORT = port
     server.stop(true)

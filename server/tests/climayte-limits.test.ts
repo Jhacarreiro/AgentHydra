@@ -18,6 +18,7 @@ import {
   killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteQuietTickForTests,
   startCliMayte,
 } from '../src/climayte'
 import { setSpendKit, workers } from '../src/climayte-core'
@@ -28,6 +29,15 @@ import { harnessKit } from './mocks/climayte-kit'
 import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 setSpendKit(harnessKit)
+
+// The quiet waits (3 s queued, 15 s idle, the 5 s wave reconcile) run at 1 s here, the pace the daemon
+// ticks at while a worker runs. Put back after the file.
+const quietTicksWas = setCliMayteQuietTickForTests({
+  queuedMs: 1_000,
+  idleMs: 1_000,
+  reconcileMs: 1_000,
+})
+afterAll(() => setCliMayteQuietTickForTests(quietTicksWas))
 
 describe('sizing (owner, 2026-10-01): too big for a window is split, one that fits waits for room', () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-size-'))

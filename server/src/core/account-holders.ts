@@ -69,6 +69,16 @@ export function accountUuidOfClaudeJson(text: string): string | null {
   }
 }
 
+/** The org a `.claude.json` file names (its oauthAccount), null when absent or unreadable. */
+export function orgUuidOfClaudeJson(path: string): string | null {
+  try {
+    const org = JSON.parse(readFileSync(path, 'utf8'))?.oauthAccount?.organizationUuid
+    return typeof org === 'string' && org.trim() ? org.trim() : null
+  } catch {
+    return null
+  }
+}
+
 /** Apply "this instance holds `uuid` at `now`" to its history; true when the history changed. */
 export function noteHolder(history: Holder[], uuid: string | null, now: number): boolean {
   const last = history[history.length - 1]

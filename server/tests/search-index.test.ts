@@ -47,8 +47,12 @@ function scratch(): string {
   dirs.push(dir)
   return dir
 }
+// The index path is shared by the whole root suite: put back the one this file found, or a later
+// file (codex-instance-sessions) searches a scratch index this file has just deleted.
+const indexPathBefore = searchIndexPath()
 afterAll(() => {
   dropSearchIndex()
+  setSearchIndexPathForTests(indexPathBefore)
   for (const d of dirs) rmSync(d, { recursive: true, force: true })
 })
 

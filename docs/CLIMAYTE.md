@@ -1931,6 +1931,10 @@ the chat failed, and it looked like the account was broken. Now:
   and cwd, not cancelled or failed) answers with the worker already made, marked `repeat: true`,
   and starts nothing; the answer carries `repeated` and a `note`. `copies: true` makes new ones
   anyway (field note 62).
+  A task whose `requestId` an earlier dispatch carried answers with that worker whatever its
+  state, copies or not (`madeFor`). With no `group` named, that answer is the worker's own group
+  and a new task in the retry joins it (`repeatedGroup`); repeats from several groups still get a
+  new group.
   The body's `origin` (only ever the caller the MCP tool resolved) is validated and stored; the
   answer carries `ping: { on: true, to? } | { on: false, why }`. `POST /api/corch/waves` the same.
 - `POST /api/corch/adopt` `{ group, origin }` → `climayteAdopt` (`climayte_status {group, ping:true}`);

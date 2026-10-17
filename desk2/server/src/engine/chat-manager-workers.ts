@@ -75,7 +75,14 @@ export class WorkerSync {
       raw = ids.flatMap((id) => this.workerRows.get(id) ?? [])
     }
     const byId = new Map(raw.map((w) => [w.id, w]))
-    for (const e of entries) {
+    // The chats whose worker runs, or which still show it running, are read first. After a restart every chat starts
+    // closed and this pass reads every worker, oldest chat first: the newest, the ones at work, sat on their done ring
+    // behind hundreds of finished ones (owner, 2026-10-17: 377 workers, a 79 s pass, the live chats 355th to 368th).
+    const live = (e: Entry): boolean => {
+      const w = byId.get(e.chat.workerId as string)
+      return !!w && (isActiveWorkerStatus(w.status) || LIVE_STATUSES.has(e.chat.status))
+    }
+    for (const e of [...entries.filter(live), ...entries.filter((e) => !live(e))]) {
       const w = byId.get(e.chat.workerId as string)
       if (w && this.host.chats.get(e.chat.id) === e) await this.applyWorker(e, w)
       // One worker's read at a time: a click's request and the timers run between two workers, not after the whole pass.

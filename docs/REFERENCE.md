@@ -650,14 +650,64 @@ second Desktop chat. External dispatch can append valid turns to a Desktop-backe
 whether reopening an existing Desktop chat causes the renderer to request those turns is not a
 stable interface and must not be assumed by product logic.
 
+## Claude Code cloud sessions (opt-in, off by default)
+
+Claude Code sessions that run in Anthropic's cloud, and the Project threads on claude.ai, have no
+store on this PC, so AgentHydra cannot see them from disk. Setting `AGENTHYDRA_CLOUD_SESSIONS=1`
+turns on a read-only poll of the list claude.ai's own sessions page reads. It is **off by default**:
+with the variable unset the daemon starts no timer, makes no request and creates no folder for it.
+
+- **Endpoint.** `GET https://api.anthropic.com/v1/code/sessions` with `statuses=active` and
+  `statuses=paused`, once untagged and once for the tags `hearth-thread` and `cowork-remote`, following
+  `next_cursor`. Only sessions that run on Anthropic's side are kept (environment kind
+  `anthropic_cloud`, or one of those tags): a Remote Control (`bridge`) session and a Cowork run
+  that runs on this PC are listed from the local store already, so the API's copy is left out. The endpoint is undocumented: it can change shape or be
+  withdrawn, and claude.ai answers non-browser clients with a 403. A failed pass changes nothing.
+- **Accounts.** The default login (`CLAUDE_CONFIG_DIR`, else `~/.claude`, identified by
+  `~/.claude.json`) and each AgentHydra-managed CLI login, one per account uuid. A login is used only
+  when its token is unexpired and carries the `user:sessions:claude_code` scope.
+- **Credentials.** The token is read the way `usage-api.ts` reads it: sent in the request header and
+  nowhere else, never persisted, never logged. It is **never refreshed**. The refresh token rotates in a
+  family the CLI shares, so refreshing it here would sign the CLI out; on a PC nobody logs into, the
+  source goes quiet until the CLI refreshes the token itself. A 401 or 403 on the untagged query skips
+  that account until its token changes. On the tagged query it skips only that query, and the untagged
+  list still runs. A 429 backs off for the `Retry-After` the server gives (five minutes if none, an hour
+  at most).
+- **Snapshot.** Each pass that lists the account writes `<root>/<account uuid>/sessions.json` whole and
+  renames it into place, including a partial pass whose tagged query failed (its tagged rows are carried
+  forward). The folders are private (0700) and the files 0600 where the OS has POSIX modes, since session
+  titles are chat text. Each pass also writes `<root>/accounts.json` before any request, naming the
+  accounts it polls; the listing shows only those. `<root>` is `AGENTHYDRA_CLOUD_SESSIONS_DIR` when set, else `~/.agenthydra/cloud-sessions`;
+  the writer and the `claude-cloud` foreign adapter both read that one root. The adapter lists nothing
+  while the flag is unset, even a snapshot an earlier opt-in left, and it lists only accounts whose
+  login still resolves.
+- **Status.** A running turn reads working. A session in the `blocked` bucket, an unread reply, or a
+  Project thread in `review_ready` reads needs you. Anything else reads done. A Project thread waits on
+  its bucket alone, because its unread flag never clears.
+- **Stale rows.** A session that an account's clean pass no longer lists loses its `claude-cloud` status
+  row, and only that account's own previous snapshot decides which rows those are. A pass that failed,
+  was refused or was rate-limited releases nothing. A pass whose tagged query failed keeps the tagged
+  sessions it last saw.
+- **Not listed.** Remote Control sessions (`environment_kind` `bridge`) are left out, because a Remote
+  Control session that runs on this PC is already listed from its local transcript, and listing its cloud
+  copy would show it twice.
+- **Transcripts.** A cloud session's transcript is not replayed here. Opening one shows a single line that
+  it is on claude.ai. The poll never opens a socket per session and never follows a live feed.
+- **Claude's own settings are untouched.** The poll never changes `autoUploadSessions` or
+  `remoteControlAtStartup`.
+
 ## Config (env)
 
 | Var | Default | Meaning |
 |---|---|---|
 | `PORT` | `7787` | preferred API/UI port (hops if busy) |
+| `AGENTHYDRA_CLOUD_SESSIONS` | unset | `1` = opt in to the Claude Code cloud sessions poll (see [Claude Code cloud sessions](#claude-code-cloud-sessions-opt-in-off-by-default)). Unset: no timer, no request, no folder |
+| `AGENTHYDRA_CLOUD_SESSIONS_DIR` | `~/.agenthydra/cloud-sessions` | folder the cloud-sessions snapshots are written to and read from; only used when `AGENTHYDRA_CLOUD_SESSIONS=1` |
 | `AGENTHYDRA_INSTANCE_PORT` | `PORT + 1` | preferred port for `--instances` quick mode (hops if busy; separate from the full daemon) |
 | `HOST` | `127.0.0.1` | loopback bind host; only `127.0.0.1`, `localhost`, and `::1` are accepted because the local API is intentionally passwordless |
 | `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
+| `AGENTHYDRA_NO_OPEN` | unset | `1` = open no window or browser: neither the one a release start opens nor the `--instances` quick-mode window |
+| `AGENTHYDRA_DESK_AT_BOOT` | unset | `1` = start Desk 2's server (no window) as soon as the daemon listens, instead of on the first page. Use it for a daemon run from source, or a release with `AGENTHYDRA_NO_OPEN=1`, on a headless Linux or macOS box; a release you start by double-clicking it, without AGENTHYDRA_NO_OPEN, already starts it at boot; a release started from the tray does not, unless this is 1. |
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
 | `HYDRA_FAMILY_DIR` | `~/.hydra-family` | folder of the [Hydra family](#the-hydra-family) manifests, one JSON file per member |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
@@ -1279,6 +1329,10 @@ stays quiet on the fixed one, so none can rot into a silent no-op.
   inheriting bun's 5s default. Such a case times the runner, not itself, and a cold windows-latest
   box runs this class ~10x slower than a dev machine. A repo-wide `bun test --timeout N` stands the
   check down, which is the better answer for a suite where nearly everything spawns.
+- `rm-retry-option-ignored.mjs`: an `rmSync` that passes `maxRetries` or `retryDelay`. Bun ignores
+  both, so the call tries once, and Windows holds a folder for a moment after the processes in it
+  are gone (EBUSY). Tests remove folders with `rmRetry` (`server/tests/rm-retry.ts`,
+  `desk2/server/test/rm-retry.ts`), which tries again for real.
 - `fixer-only-called-by-its-test.mjs`: an exported fixer (a name matching
   `^(sweep|reassert|run.*Once)`) that only test code names. `reassertAutomationStamps` and
   `sweepUntitledDesktopChats` both shipped like that, unit-tested and documented as running on a

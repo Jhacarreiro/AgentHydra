@@ -92,8 +92,8 @@ def show_status(as_json: bool) -> int:
     changed = configlib.diff()
     problems = configlib.problems()
     if as_json:
-        print(json.dumps({"configPath": str(configlib.CONFIG_PATH),
-                          "exists": configlib.CONFIG_PATH.exists(),
+        print(json.dumps({"configPath": str(configlib.config_path()),
+                          "exists": configlib.config_path().exists(),
                           "knobs": len(configlib.SPEC),
                           "changed": {k: {"default": d, "value": v} for k, (d, v) in changed.items()},
                           "problems": problems,
@@ -102,8 +102,8 @@ def show_status(as_json: bool) -> int:
         return 2 if problems else 0
 
     print("ORCHESTRATOR POLICY")
-    print(f"  file      {configlib.CONFIG_PATH}"
-          + ("" if configlib.CONFIG_PATH.exists() else "   (does not exist yet - all defaults)"))
+    print(f"  file      {configlib.config_path()}"
+          + ("" if configlib.config_path().exists() else "   (does not exist yet - all defaults)"))
     print(f"  knobs     {len(configlib.SPEC)} across {len(configlib.GROUPS)} groups")
     if changed:
         print(f"  changed   {len(changed)} knob(s) are NOT at their default:")
@@ -215,7 +215,7 @@ def do_set(pairs: list[str]) -> int:
         row = configlib.BY_KEY[key]
         print(f"set {key} = {_fmt(row, configlib.get(key))}"
               + ("  (back at the default)" if configlib.get(key) == row["default"] else ""))
-    print(f"\nwritten to {configlib.CONFIG_PATH}. Lanes pick it up on their next run "
+    print(f"\nwritten to {configlib.config_path()}. Lanes pick it up on their next run "
           "(≤5 minutes for the scheduled ones).")
     return 0
 
@@ -251,7 +251,7 @@ def do_preset(name: str, yes: bool) -> int:
         print(f"refused: {err}", file=sys.stderr)
         return 3
     configlib.load(force=True)
-    print(f"\napplied. {configlib.CONFIG_PATH}")
+    print(f"\napplied. {configlib.config_path()}")
     return 0
 
 
@@ -286,7 +286,7 @@ def do_ask(group: str | None, as_json: bool) -> int:
     qs = build_questions(group)
     if as_json:
         print(json.dumps({
-            "configPath": str(configlib.CONFIG_PATH),
+            "configPath": str(configlib.config_path()),
             "howToAnswer": ('write {"answers":[{"key":"<key>","value":<value>}, ...]} and run '
                             '`orch.py policy --apply <file>`; omit a knob to leave it alone'),
             "rails": [{"name": n, "why": w} for n, w in configlib.RAILS],
@@ -343,7 +343,7 @@ def do_apply(path: str) -> int:
         now = configlib.get(key)
         print(f"  {key:<44} {_fmt(row, before[key])} -> {_fmt(row, now)}"
               + ("" if now != before[key] else "   (unchanged)"))
-    print(f"\napplied {len(changes)} answer(s) to {configlib.CONFIG_PATH}.")
+    print(f"\napplied {len(changes)} answer(s) to {configlib.config_path()}.")
     return 0
 
 
@@ -457,7 +457,7 @@ def do_wizard() -> int:
         print(f"refused, NOTHING written: {err}", file=sys.stderr)
         return 3
     configlib.load(force=True)
-    print(f"written to {configlib.CONFIG_PATH}. The lanes read it on their next run.")
+    print(f"written to {configlib.config_path()}. The lanes read it on their next run.")
     return 0
 
 
@@ -467,11 +467,11 @@ def do_doctor(as_json: bool) -> int:
         raw = configlib.read_file()
     except configlib.ConfigError:
         raw = {}  # unreadable: already named in `problems`, which is this command's whole job
-    payload = {"configPath": str(configlib.CONFIG_PATH), "exists": configlib.CONFIG_PATH.exists(),
+    payload = {"configPath": str(configlib.config_path()), "exists": configlib.config_path().exists(),
                "overrides": len(raw), "problems": problems, "ok": not problems}
     if as_json:
         print(json.dumps(payload, indent=2, default=str))
-    elif not configlib.CONFIG_PATH.exists():
+    elif not configlib.config_path().exists():
         print("no policy file - running on defaults. That is a valid state, not a fault.")
     elif problems:
         print(f"{len(problems)} problem(s) - these values are IGNORED and the default is used:")

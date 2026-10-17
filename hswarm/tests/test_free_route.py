@@ -100,7 +100,8 @@ class _Fake:
                 self.wfile.write(data)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        # A short poll, so shutdown() does not wait out serve_forever's 0.5 s default.
+        threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
 
     def batch(self):
         # A list of replies answers each sent message in turn: a tool task's thread is several messages long.
@@ -291,6 +292,9 @@ def test_a_task_no_free_account_had_room_for_says_so_on_its_ledger_line(fake, mo
     fake(accounts=[{**ACCOUNTS[0], "busy": True}])
     api = _Api()
     monkeypatch.setattr(free_route, "eligible", lambda task: True)  # pinned, so its API route needs no keys
+    # The task still waits and polls for room before its API route; the real 90 s wait and 5 s poll are shortened.
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_WAIT_S", 0.2)
+    monkeypatch.setattr(free_route, "ROOM_POLL_S", 0.05)
     job = asyncio.run(JobManager(client=api).run_batch([_task(model="deepseek-flash")], concurrency=1))
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert api.calls == 1 and job.results["t0"].status == "ok"

@@ -612,7 +612,8 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   that the earlier session never got to stay as yours. The prompt a moved session goes on with ("This
   session was moved to another account ...") is not shown either; one that went on after a pause, a
   restart or an overloaded API is one muted line ("Continued after AgentHydra restarted."), and a result
-  sent back by a failed verdict is CliMayte's note, never your message. Chats already saved read the same way.
+  sent back by a failed verdict is CliMayte's note, never your message. A chat relaunched after a move or a
+  restart never shows its own prompt as raw JSON (`{"type":"user",...}`). Chats already saved read the same way.
 - **A chat moving off a signed-out or full account says so, and sends once.** The sign-in or limit line
   is a warning that says the chat is moving to another account and your message goes again by itself,
   instead of a red dead end. The session copy no longer stops the server while it runs (a 555 MB session
@@ -776,6 +777,10 @@ on the bun AgentHydra's launcher downloads into the install's `runtime/` on firs
 Open runs the launcher below; on Linux and macOS the daemon starts the server on that bun and opens your
 browser. Either way the daemon starts it when it is down.
 
+A daemon run from source, or a release with `AGENTHYDRA_NO_OPEN=1`, starts this server only on the first
+page. Set `AGENTHYDRA_DESK_AT_BOOT=1` to start it as soon as the daemon listens; on a headless release,
+pair it with `AGENTHYDRA_NO_OPEN=1` so no browser is tried.
+
 **The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts an "AgentHydra" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
 waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
@@ -848,6 +853,20 @@ rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe 
 | 7798 | Hydra Desk server: the API, the `/ws` live updates and the built window (`HYDRA_DESK_PORT` overrides) |
 | 4798 | Vite dev server during `bun run dev`, forwarding `/api` and `/ws` to 7798 |
 | 7787 | AgentHydra's daemon, which Hydra Desk talks to (`HYDRA_URL` overrides) |
+
+Every port binds 127.0.0.1, so only this machine reaches the window. To open it from another device, put a proxy that
+signs you in first (Cloudflare Access or similar) in front of 7798, pass the browser's Host and Origin through
+unchanged, and list the proxy's origin in `HYDRA_DESK_PUBLIC_ORIGINS` (comma-separated, such as
+`https://desk.example.test`). On the listed name, only that exact origin passes. Any other site, a sibling subdomain
+included, can still navigate you to the window's start page (that is the sign-in exception below). Its API calls,
+fetches, frames and socket are refused. Set it in the user
+environment, or in the environment the AgentHydra daemon starts with: the launcher forwards it to the server it starts,
+and a restart keeps it. **Desk 2 has no sign-in of its own**, so list only a name whose DNS and certificate you control
+and that is reachable only through the proxy's sign-in: whoever reaches it gets the chats, the shell and the restart
+control of this machine. Serve it over https only: the proxy must not answer plain http, or must redirect it to https
+with HSTS. Account sign-in (`/oauth`, which returns to 127.0.0.1:7787) and dev-server previews (`*.localhost`) still need
+this machine. After the proxy's sign-in, the first page loads directly: the redirect back to the listed name is a
+top-level page load, which passes. The API, websocket and other cross-site or same-site requests stay refused.
 
 ## Where data lives
 

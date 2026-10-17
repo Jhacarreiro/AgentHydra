@@ -7,11 +7,12 @@
 
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { AccountInfo, ChatSummary, ServerEvent, TranscriptItem } from '../shared/protocol'
 import { portFrom } from './lib/free-port'
+import { rmRetry } from '../server/test/rm-retry'
 
 const MODEL = process.env.E2E_MODEL || 'sonnet'
 const PORT = portFrom(process.env.E2E_PORT)
@@ -32,7 +33,7 @@ const info = (s: string) => console.log(`     ${s}`)
 const STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 const root = mkdtempSync(join(tmpdir(), 'hydra-desk-hosts-e2e-'))
 process.on('exit', () => {
-  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  try { rmRetry(root) } catch {}
 })
 const home = join(root, 'home')
 const work = join(root, 'work')

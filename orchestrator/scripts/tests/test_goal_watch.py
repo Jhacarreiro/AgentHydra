@@ -7,6 +7,7 @@ it stops (the goal file unchanged across continuations becomes an incident).
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -250,6 +251,16 @@ class LaneTest(unittest.TestCase):
             payload, _ = self._run("--yes", "--force")
         self.assertEqual(self.sent, [])
         self.assertFalse(payload["acting"])
+
+    def test_the_unattended_run_with_the_tray_down_types_nothing(self):
+        # No --force: the armlib gate is the only thing between this run and the chats. DISARMED is
+        # asserted, not only "nothing sent", so a policy-off branch cannot satisfy this test. The
+        # policy is the isolated state dir's, which has no config.json (no overrides), so the
+        # machine's own config.json cannot switch the lane off.
+        payload, _ = self._run("--yes")
+        self.assertEqual(self.sent, [])
+        self.assertFalse(payload["acting"])
+        self.assertIn("DISARMED", json.dumps(payload["notes"]))
 
     def test_an_unknown_flag_is_refused_before_anything_is_read(self):
         code, _out, _err = run_cli(goal_watch.main, ["--yes", "--sesion", SID])

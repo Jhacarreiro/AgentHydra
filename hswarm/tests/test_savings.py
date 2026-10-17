@@ -69,7 +69,8 @@ def kit_daemon(home, monkeypatch):
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # A short poll, so shutdown() does not wait out serve_forever's 0.5 s default.
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     monkeypatch.setenv("AGENTHYDRA_URL", f"http://127.0.0.1:{server.server_port}")
     yield box
     server.shutdown()

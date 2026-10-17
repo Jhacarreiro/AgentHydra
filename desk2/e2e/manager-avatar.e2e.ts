@@ -11,11 +11,12 @@
 // %TEMP%\manager-avatar\lead-face.jpg (and to E2E_LEAD_SHOT when set). Prints aria-labels only, never a row's text.
 
 import { deflateSync } from 'node:zlib'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -244,7 +245,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  try { rmRetry(SCRATCH) } catch {}
 }
 console.log(`${total - failed}/${total} passed`)
 process.exit(failed || !total ? 1 : 0)

@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { callCodexAppPipe, codexAppPipesForPid } from '../src/core/codex-app-tools'
 
+/** A cold PowerShell with Add-Type, which the lookup allows 10 s, can take seconds on a loaded runner. */
+const PIPE_LOOKUP_TEST_MS = 20_000
+
 async function withPipe(
   handler: (socket: Socket) => void,
   run: (pipe: string) => Promise<void>,
@@ -61,6 +64,8 @@ test('reads fragmented native app frames and ignores unrelated responses', async
 
 // Codex 26.1013 serves its app tools on codex-app-tools-* pipes; discovery that looked only at codex-browser-use-*
 // found nothing, and restoring an Unassigned chat failed with "app-tools connection could not be found" (2026-10-16).
+// The timeout sits above the lookup's own 10 s child bound, so a slow but in-budget lookup passes and a hung one still
+// fails. CI run 39014776120 timed out at bun's default 5 s.
 test.skipIf(process.platform !== 'win32')(
   'finds the app-tools pipe a Codex app serves by its own pid',
   async () => {
@@ -72,6 +77,7 @@ test.skipIf(process.platform !== 'win32')(
       'codex-app-tools-',
     )
   },
+  PIPE_LOOKUP_TEST_MS,
 )
 
 test('native refusals are surfaced without a second dispatch', async () => {

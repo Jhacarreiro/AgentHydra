@@ -59,6 +59,7 @@ import { removeInstance } from '../src/core/lifecycle'
 import { instancesRoot } from '../src/core/paths'
 import { grantDigest } from '../src/core/revoked-grants'
 import { base, store, token } from './login-sync-store'
+import { rmRetry } from './rm-retry'
 import './no-chats'
 
 const HOST = '.claude.ai'
@@ -292,8 +293,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       disconnectLoginSync()
       // Retried: on the Windows runner a handle the sync just closed can still hold the folder a moment
       // (EBUSY failed CI run 36986153843 after every assertion had passed).
-      for (const dir of made)
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      for (const dir of made) rmRetry(dir)
     }
   }, 120_000)
 
@@ -385,8 +385,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect(await v2Here(b.dir)).toBe(cache({ [LIVE]: { token: 't-5000', expiresAt: 5000 } }))
     } finally {
       disconnectLoginSync()
-      for (const dir of made)
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      for (const dir of made) rmRetry(dir)
     }
   }, 120_000)
 
@@ -467,8 +466,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect(JSON.stringify(sent)).not.toContain('Not needed here')
     } finally {
       disconnectLoginSync()
-      for (const dir of made)
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      for (const dir of made) rmRetry(dir)
     }
   }, 120_000)
 
@@ -556,7 +554,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect(sent.meta.expiresAt).toBe((out as { expiresAt: number }).expiresAt)
     } finally {
       disconnectLoginSync()
-      if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      if (dir) rmRetry(dir)
     }
   }, 120_000)
 
@@ -659,7 +657,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
     } finally {
       globalThis.fetch = realFetch
       deleteCliInstance(id, getCliInstance(id)?.name)
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      rmRetry(dir)
     }
   })
 
@@ -744,8 +742,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         expect(two.uploads.map((l) => l.id)).toEqual([fresh])
         expect(await readDesktopTokens(b)).not.toBeNull()
       } finally {
-        for (const dir of made)
-          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        for (const dir of made) rmRetry(dir)
       }
     }, 60_000)
 
@@ -774,7 +771,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         const landed = JSON.parse((await readDesktopTokens(dir))?.v2 ?? '{}')
         expect(landed[SESSION]?.expiresAt).toBe(now + 30 * DAY)
       } finally {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        rmRetry(dir)
       }
     }, 60_000)
   })
@@ -874,7 +871,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         expect((await loginSyncStatus()).logins.find((l) => l.id === id)?.note).toBeNull()
       } finally {
         disconnectLoginSync()
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        rmRetry(dir)
       }
     }, 120_000)
 
@@ -890,7 +887,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         expect((await loginSyncStatus()).logins.find((l) => l.id === id)?.note).toBe('own')
       } finally {
         disconnectLoginSync()
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        rmRetry(dir)
       }
     }, 120_000)
 
@@ -907,7 +904,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         expect(await sessionOf(dir)).toBeUndefined()
         expect(desktopNotes.waiting.has(id)).toBe(true)
       } finally {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        rmRetry(dir)
       }
     })
 
@@ -920,7 +917,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         expect(ctx.out.landed).toBe(0)
         expect(await sessionOf(dir)).toBeUndefined()
       } finally {
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        rmRetry(dir)
       }
     })
   })

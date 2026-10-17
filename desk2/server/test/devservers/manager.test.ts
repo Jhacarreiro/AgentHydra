@@ -5,13 +5,14 @@
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createDevServers } from '../../src/devservers/manager'
 import type { DevServers } from '../../src/devservers/contract'
 import { killHostTree, pidAlive } from '../../src/host/launch'
 import type { Listener, ProcInfo, Scan } from '../../src/localhost/ports'
+import { rmRetry } from '../rm-retry'
 
 const dirs: string[] = []
 const made: DevServers[] = []
@@ -26,7 +27,7 @@ afterEach(async () => {
   for (const ds of made.splice(0)) await ds.stopAll()
   for (const d of dirs.splice(0)) {
     try {
-      rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+      rmRetry(d)
     } catch {
       // a child still letting go of its folder: the temp folder is the OS's to clean
     }

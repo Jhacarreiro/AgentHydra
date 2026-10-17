@@ -423,10 +423,11 @@ describe('a lead pick that misses the hook budget (C2 NEW-1, C3 N1, C2 NEW-2, C3
       { chat, session: 's1', cwd: CWD, prompt, placement: 'slot' },
       new Date(T + at),
     )
+  // The gap is wide because a loaded Windows runner ran 221 ms past the budget (run 39033746843, 1221 ms against 1150).
   const slow = (pick: (m: string) => string) => {
     globalThis.__leadMock = async (ask) => {
       asked.push({ ask, ms: ask.budgetMs })
-      await Bun.sleep(MESSAGE_BUDGET_MS + 300)
+      await Bun.sleep(MESSAGE_BUDGET_MS + 900)
       const slug = pick(ask.message)
       return slug === 'none' ? null : { slug }
     }
@@ -438,7 +439,7 @@ describe('a lead pick that misses the hook budget (C2 NEW-1, C3 N1, C2 NEW-2, C3
     slow((m) => (/sqlite/.test(m) ? 'sam-backend' : 'ivy-ui'))
     const started = performance.now()
     const first = await msg('late', 'now store the signups in a new sqlite table')
-    expect(performance.now() - started).toBeLessThan(MESSAGE_BUDGET_MS + 150)
+    expect(performance.now() - started).toBeLessThan(MESSAGE_BUDGET_MS + 500)
     expect(first.text).not.toContain('Lead change')
     expect(asked.at(-1)?.ms).toBe(LATE_BUDGET_MS)
     await latePicks()

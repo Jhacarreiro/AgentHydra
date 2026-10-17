@@ -67,6 +67,7 @@ import { readLoginUuid } from '../core/login-state'
 import { normalizeInstancePath } from '../core/paths'
 import { db, getSetting, setSetting } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
+import { hswarmAccountId } from '../hswarm'
 import { deepseekBalance } from '../hswarm-cost'
 import { app } from '../http-app'
 import { instanceDirParam } from '../instance-dir-param'
@@ -115,7 +116,6 @@ import {
   desktopKey,
   surveyUsage,
 } from '../usage-service'
-import { hswarmAccountId } from './hswarm'
 
 /** Resolve an `account` query param that may be an account id OR a free-text label. */
 function resolveAccountParam(param: string): { id: string; label: string } | null {

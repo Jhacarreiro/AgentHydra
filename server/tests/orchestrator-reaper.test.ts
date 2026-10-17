@@ -31,13 +31,25 @@ import {
   pythonBinary,
   resetOrchestratorOperationsForTests,
   runOrchestrator,
+  setDrainGraceMsForTests,
   startOrchestratorOperation,
 } from '../src/orchestrator'
 
 afterEach(() => resetOrchestratorOperationsForTests())
 
+// The drain grace (5 s) only waits out a pipe that a grandchild holds open after its child is gone.
+const drainGraceWas = setDrainGraceMsForTests(300)
+
+/** Wait until the operation closes, up to 10 s: the watchdog grace is 300 ms, so a poll is the bound. */
+async function untilClosed(id: string): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (getOrchestratorOperation(id)?.status === 'running' && Date.now() < deadline)
+    await Bun.sleep(20)
+}
+
 const ROOT = mkdtempSync(join(tmpdir(), 'agenthydra-orch-reaper-root-'))
 afterAll(() => {
+  setDrainGraceMsForTests(drainGraceWas)
   // The grandchild this file deliberately orphans outlives the suite, and on Windows a live
   // process makes its own directory undeletable. The scratch tree is the OS temp dir's problem
   // after that; failing the file over it would be the test cleaning up louder than it tests.
@@ -164,7 +176,7 @@ test('the registry closes an operation whose run never settles, past its declare
     },
   )
   expect(getOrchestratorOperation(op.id)?.status).toBe('running')
-  await Bun.sleep(2_000)
+  await untilClosed(op.id)
   const closed = getOrchestratorOperation(op.id)
   expect(closed?.status).toBe('failed')
   expect(closed?.finishedAt).not.toBeNull()
@@ -194,7 +206,7 @@ test('a run that settles after the watchdog closed it does not reopen the record
       },
     },
   )
-  await Bun.sleep(2_000)
+  await untilClosed(op.id)
   expect(getOrchestratorOperation(op.id)?.status).toBe('failed')
   const closedAt = getOrchestratorOperation(op.id)?.finishedAt
   release()

@@ -44,6 +44,11 @@ TRIES = 5  # rename attempts: Windows refuses one while another process (a reade
 RECHECK_S = 1800.0  # a failed import check is run again after this: one that ran out of time on a busy machine is no verdict
 KEEP_S = 86_400.0  # a copy written within this long is kept: a process besides this server (a hand-over helper) may run it
 LEFTOVER_S = 3600.0  # a folder without a marker this old is a leftover; a younger one may be an export landing right now
+# The clone a copy's process follows, set by the start that ran it (serve_committed, shared._spawn). 2026-10-17: two
+# clones on one PC (a dev checkout and an auto-updating worktree) commit the same hswarm tree and so share one copy,
+# whose marker names whichever clone exported it first; the daemon's start from the other clone then served a copy that
+# said it came from the first, so the daemon replaced that "foreign" server on every boot and it followed the wrong HEAD.
+SOURCE_ENV = "HSWARM_CODE_SOURCE"
 _heads: dict[str, tuple[float, dict | None]] = {}
 
 
@@ -90,12 +95,16 @@ def _age(p: Path) -> float:
 
 
 def running() -> dict | None:
-    """The copy this process runs ({tree, commit, source, ...}), or None when it runs a clone or an install."""
-    return _read(PACKAGE.parent / MARKER)
+    """The copy this process runs ({tree, commit, source, ...}), or None when it runs a clone or an install. Its source
+    is the clone the start followed (SOURCE_ENV) when the start said so: the marker names only the first exporter."""
+    mine = _read(PACKAGE.parent / MARKER)
+    if mine and os.environ.get(SOURCE_ENV):
+        mine["source"] = os.environ[SOURCE_ENV]
+    return mine
 
 
 def source() -> Path | None:
-    """The clone this process's code follows: the one its copy was exported from, or the clone it runs in. None for an
+    """The clone this process's code follows: the one its copy's start followed, or the clone it runs in. None for an
     install with no git beside it, which has nothing to follow."""
     mine = running()
     if mine:
@@ -269,6 +278,7 @@ def serve_committed(argv: list[str]) -> int | None:
     serves its own code: not the daemon's start (HSWARM_SUPERVISED), already a committed copy, or no copy to run."""
     if argv[:1] != ["mcp"] or "--http" not in argv or not os.environ.get("HSWARM_SUPERVISED") or running():
         return None
+    src = source()
     dest = target()
     if dest is None:
         print("[hswarm] no committed hswarm could be prepared, so this server runs the working tree it was started in",
@@ -277,11 +287,12 @@ def serve_committed(argv: list[str]) -> int | None:
     mark = _read(dest / MARKER) or {}
     print(f"[hswarm] serving hswarm as commit {str(mark.get('commit'))[:12]} has it, from {dest}", file=sys.stderr, flush=True)
     cmd = [sys.executable, "-c", BOOTSTRAP, str(dest), *argv]
+    env = dict(os.environ, **{SOURCE_ENV: str(src)})  # this clone, whichever clone exported the copy first
     if os.name != "nt":
-        os.execv(sys.executable, cmd)
+        os.execve(sys.executable, cmd, env)
     # No window of its own whatever console this start has, and its output into the daemon's log as before.
     child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=_handle(sys.stdout), stderr=_handle(sys.stderr),
-                             creationflags=CREATE_NO_WINDOW)
+                             env=env, creationflags=CREATE_NO_WINDOW)
     _kill_with_me(child)
     return child.wait()
 

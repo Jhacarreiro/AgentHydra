@@ -113,9 +113,7 @@ const cases: Case[] = [
 ]
 // One open menu per screenshot (?shot=<id>#/gallery): open menus steal focus from each other.
 const menuCases: Case[] = [
-  { id: 'menu-mode', label: 'Permission mode menu', chat: idle, demo: { text: 'how we looking', openMenu: 'mode' } },
   { id: 'menu-model', label: 'Model menu', chat: idle, demo: { text: 'how we looking', openMenu: 'model' } },
-  { id: 'menu-effort', label: 'Effort popover', chat: idle, demo: { text: 'how we looking', openMenu: 'effort' } },
   { id: 'menu-plus', label: 'Plus menu', chat: idle, demo: { text: 'how we looking', openMenu: 'plus' } },
   { id: 'slash', label: 'Slash menu (typed /re)', chat: slash, demo: { text: '/re', slashOpen: true } },
   { id: 'mention', label: '@-mention menu', chat: idle, demo: { text: 'look at @', mentionOpen: true } }

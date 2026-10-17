@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CLAUDE_MAIN_DIR, CLAUDE_PROJECTS_ROOT } from '../src/config'
 import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
+import { hswarmAccountId } from '../src/hswarm'
 import {
   type ClaudeFileOwner,
   type ClaudeRoot,
@@ -12,7 +13,6 @@ import {
   ingestClaude,
 } from '../src/kit/ingest-claude'
 import { hourStart, KitStore } from '../src/kit/store'
-import { hswarmAccountId } from '../src/routes/hswarm'
 
 const root = mkdtempSync(join(tmpdir(), 'kit-claude-'))
 afterAll(() => {

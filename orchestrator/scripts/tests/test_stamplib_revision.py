@@ -25,9 +25,7 @@ class MutateMetaTest(unittest.TestCase):
     def setUp(self):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
-        # the shipped policy, never this machine's own state/config.json
-        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
-        configlib._CACHE = configlib.defaults()
+        # The shipped policy: configlib reads it from the temp state dir, which has no config.json.
         self._tmp = tempfile.TemporaryDirectory()
         self.meta = Path(self._tmp.name) / "local_abc.json"
         self.meta.write_text(json.dumps({"cliSessionId": "abc", "title": "Old title",
@@ -137,8 +135,7 @@ class AutomationProfileTest(unittest.TestCase):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
         self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
-        configlib._CACHE = configlib.defaults()
+        # The shipped policy: configlib reads it from the temp state dir, which has no config.json.
         self.mine = self._meta("mine-1")
         self.bot = self._meta("bot-1")
         stamplib.mark_automation("bot-1", "test")
@@ -155,7 +152,7 @@ class AutomationProfileTest(unittest.TestCase):
         return p
 
     def policy(self, **overrides):
-        configlib._CACHE = {**configlib.defaults(), **overrides}
+        configlib.write(overrides)
 
     def read(self, p: Path) -> dict:
         return json.loads(p.read_text(encoding="utf-8"))

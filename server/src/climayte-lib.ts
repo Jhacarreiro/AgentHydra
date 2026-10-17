@@ -1119,6 +1119,27 @@ export function transcriptHandoff(jsonl: string, cap = 4_000): string {
   return kept.length ? kept.join('\n\n') : '(The transcript held no messages to carry over.)'
 }
 
+/** The owner's own words from a task text: a stream-json user line (nested by relaunches) read as the text it
+ *  carries, and an earlier continuation's note and handoff cut off, so a continuation never nests the one before. */
+export function plainTask(raw: string): string {
+  let text = raw.trim()
+  for (let i = 0; i < 20 && text.startsWith('{'); i++) {
+    let inner: string | null = null
+    try {
+      const line = JSON.parse(text)
+      const c = line?.type === 'user' ? line.message?.content : null
+      if (typeof c === 'string') inner = c
+      else if (Array.isArray(c)) inner = c.map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('')
+    } catch {
+      /* not an envelope */
+    }
+    if (inner === null) break
+    text = inner.trim()
+  }
+  const cut = text.indexOf('\n\n---\nAn earlier session already worked on this task')
+  return (cut > 0 ? text.slice(0, cut) : text).trim()
+}
+
 /** The first prompt of the session that continues a task from a handoff. `transcripts`: the earlier
  *  sessions', newest first. `from`: whether that session ran on the account this one starts on, and
  *  why it handed off (2 of 36 continuations on record ran on the same account and were told
@@ -1151,7 +1172,7 @@ export function continuationPrompt(
   const main = from.chat
     ? " That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him."
     : ''
-  return `${task}\n\n---\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below (also saved at ${handoffPath}).${main}${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
+  return `${plainTask(task)}\n\n---\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below (also saved at ${handoffPath}).${main}${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
 
 export const PRE_OVERAGE_NOTICE =

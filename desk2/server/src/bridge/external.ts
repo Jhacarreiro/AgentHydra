@@ -232,6 +232,8 @@ function fromIndex(st: MapState, id: string, source: ExternalSession['source'], 
     canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
     // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
     fromPc: row?.from_pc || null,
+    // A claude-cloud session is a Claude chat, though its store is foreign: the Apps filter and the other-PC label read this.
+    ...(row?.source === 'foreign' && row.tool === 'claude-cloud' ? { app: 'claude' } : {}),
     ...(base.parentId ? { parentId: base.parentId } : {}),
     ...limitOf(row),
     ...UNMARKED,

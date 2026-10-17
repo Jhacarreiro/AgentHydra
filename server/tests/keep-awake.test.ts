@@ -51,6 +51,16 @@ describe('countWorkingSessions', () => {
     expect(countWorkingSessions(NOW)).toBe(1)
   })
 
+  test('a claude-cloud turn running elsewhere never holds the PC awake', () => {
+    recordAgentStatus({
+      sessionId: 'cloud-running',
+      source: 'claude-cloud',
+      event: 'cloud-working',
+      at: at(60_000),
+    })
+    expect(countWorkingSessions(NOW)).toBe(0)
+  })
+
   test('a row restored from before a restart never holds the PC', () => {
     hook('working-now', 'UserPromptSubmit', 60_000)
     hydrateAgentStatus()

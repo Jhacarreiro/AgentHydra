@@ -6,9 +6,10 @@
 // Only the side-run process this script started is closed (by pid). Exits 0 on pass, 1 with the received log.
 
 import { spawn } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { rmRetry } from '../server/test/rm-retry'
 
 const EXE = resolve(import.meta.dir, '../launcher/HydraDesk2.exe')
 const WITHIN_MS = 20_000
@@ -114,7 +115,7 @@ function cleanup() {
     } catch {}
     // Its WebView2 children let go of the throwaway folder a moment after the host dies; the host sweeps what is left on its next side-run.
     try {
-      rmSync(join(tmpdir(), `HydraDesk2-smoke-${pid}`), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+      rmRetry(join(tmpdir(), `HydraDesk2-smoke-${pid}`))
     } catch {}
   }
   for (const s of servers) s.stop(true)

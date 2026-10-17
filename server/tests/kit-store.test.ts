@@ -385,9 +385,9 @@ describe('settled calls, the raw cut and the hour rollup', () => {
       await s.upsertEventsAsync([{ id: 'warm', ts: T0, source: 'cli' }])
       let peak = 0
       let pausesAtIdle = 0
-      for (let b = 0; b < 40; b++) {
+      for (let b = 0; b < 16; b++) {
         // the end of a sweep: the checkpoint worker stops, and the next long write must start another
-        if (b === 20) {
+        if (b === 8) {
           s.idle()
           pausesAtIdle = s.walPauses
         }
@@ -403,10 +403,11 @@ describe('settled calls, the raw cut and the hour rollup', () => {
         )
         peak = Math.max(peak, statSync(`${path}-wal`).size)
       }
-      // 60,000 rows with their indexes are 60 MB of WAL when it is never restarted
+      // 24,000 rows reach 11.9-19.4 MB of WAL when it is never restarted and 2.8 MB with the pauses (measured 2026-10-17);
+      // 16 batches keep the case off the Windows runner's 30 s limit (40 took up to 30 s there)
       expect(pausesAtIdle).toBeGreaterThan(0)
       expect(s.walPauses).toBeGreaterThan(pausesAtIdle)
-      expect(peak).toBeLessThan(20_000_000)
+      expect(peak).toBeLessThan(8_000_000)
     } finally {
       s.close()
       try {

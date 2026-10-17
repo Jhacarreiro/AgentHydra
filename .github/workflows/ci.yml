@@ -144,6 +144,13 @@ jobs:
       - name: Guardrail (subprocess tests must set an explicit timeout)
         run: bun scripts/checks/spawn-test-without-timeout.mjs
 
+      # Fails if an rmSync passes maxRetries or retryDelay. Bun ignores both (1.4.3 threw EBUSY after
+      # 0 ms with maxRetries: 10), so 33 test cleanups meant to ride out Windows holding a folder
+      # tried once, and climayte-runner-job failed this job on that EBUSY (2026-10-17). Tests use
+      # rmRetry instead. See the check's header.
+      - name: Guardrail (rmSync retry options are ignored under Bun)
+        run: bun scripts/checks/rm-retry-option-ignored.mjs
+
       # Fails if the transcript index can be born stale. It used to stamp its snapshot with a
       # timestamp captured BEFORE a ~9.5s sweep and keep it for TTL_MS=2000, so the snapshot was
       # never once fresh and every request scheduled another sweep — synchronously, inside a
@@ -233,6 +240,11 @@ jobs:
       - name: Guardrail (no raw control bytes in source)
         run: bun scripts/checks/raw-control-bytes-in-source.mjs
 
+      # The stdio MCP server opens no database: it must not reach db.ts, which opens SQLite on import,
+      # by a static import. It does not race the daemon for that file. See the check's header.
+      - name: Guardrail (the stdio MCP server must not reach the database module)
+        run: bun scripts/checks/mcp-server-opens-no-database.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.
@@ -294,6 +306,38 @@ jobs:
       - name: Test (orchestrator)
         working-directory: orchestrator
         run: python -m unittest discover -s scripts/tests -p "test_[${{ matrix.shard }}]*.py"
+
+  # hswarm/ (HydraSwarm) ran only by hand: its ~1,550 tests (`python -m pytest hswarm/tests -q`) were no
+  # CI job's command, so a change that broke HSwarm still landed green. Windows, because that is where
+  # HSwarm runs and where its Windows-only tests (test_blobs.py, test_shared_http.py) live. Python 3.14
+  # is the version this PC runs. Python 3.13+ strips docstring indentation, which keeps the served
+  # hswarm_run description under test_mcp_surface's 3,000-character cap; on 3.12 it goes over.
+  hswarm:
+    needs: already
+    if: needs.already.outputs.verified != '1'
+    timeout-minutes: 20
+    name: hswarm tests (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Python (HSwarm, 3.14 as on this PC)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: hswarm/pyproject.toml
+
+      # The live-checkout install; the test extra carries pytest, pytest-asyncio and pytest-timeout.
+      - name: Install HSwarm and its test tools
+        run: pip install -e "./hswarm[test]"
+
+      # Same TEMP/TMP as the desk2 job, so the runner's 8.3 short TEMP (C:\Users\RUNNER~1) never reaches the suite.
+      - name: Test (hswarm)
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: python -m pytest hswarm/tests -q
 
   # desk2/ (AgentHydra 2.0's window) is its own bun workspace with its own lockfile and suite, and
   # the root `bun test` skips it (bunfig.toml), so without this job a change that breaks Desk 2

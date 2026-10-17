@@ -894,3 +894,10 @@ button.tx-file-card:hover {
   background-color: var(--find-active);
   color: var(--on-accent);
 }
+
+/* The Urgency Advisor's bubble: the owner's bubble shape in dark orange (--advisor-bg / --advisor-text, style.css). */
+.tx-bubble.tx-bubble-advisor {
+  max-width: 100%;
+  background: var(--advisor-bg);
+  color: var(--advisor-text);
+}

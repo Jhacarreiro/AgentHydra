@@ -305,7 +305,7 @@ export interface DeskPlace {
 }
 
 type DeskChat = Pick<ChatSummary, 'id' | 'sessionId' | 'title' | 'cwd' | 'group' | 'archived' | 'createdAt' | 'updatedAt' | 'model' | 'effort' | 'account'>
-type DeskExternal = Pick<ExternalSession, 'id' | 'title' | 'cwd' | 'group' | 'source' | 'instance' | 'archived' | 'lastActivityAt' | 'model' | 'fromPc'>
+type DeskExternal = Pick<ExternalSession, 'id' | 'title' | 'cwd' | 'group' | 'source' | 'instance' | 'archived' | 'lastActivityAt' | 'model' | 'fromPc' | 'app'>
 
 /** A cloud row of what the desk knows of a session; what only AgentHydra counts (messages, queued work) is left at nothing. */
 const deskRow = (r: Omit<CloudSession, 'lastCwd' | 'messageCount' | 'dispatched'>): CloudSession => ({ ...r, lastCwd: null, messageCount: 0, dispatched: false })
@@ -345,7 +345,7 @@ export function deskPlaces(chats: DeskChat[], external: DeskExternal[]): Map<str
       id: s.id,
       title: s.title,
       cwd: s.cwd,
-      source: ahSource(s.source),
+      source: s.app ?? ahSource(s.source),
       instance: num ? null : s.instance,
       lastActivityAt: s.lastActivityAt ?? 0,
       createdAt: null,

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   type CatalogEntry,
@@ -29,6 +29,7 @@ import { type Parsed, parse, squash } from './tree-parse'
 export type Step =
   | 'q1'
   | 'q2'
+  | 'q2b'
   | 'q3'
   | 'q4'
   | 'q5'
@@ -61,6 +62,8 @@ export interface RunState {
   step: Step
   msg: string
   steps: string[]
+  walt?: 'ok'
+  need?: string
   tier?: string
   team?: string
   lead?: string | null
@@ -85,6 +88,7 @@ type Reply = Record<string, unknown>
 const QUESTIONS: Record<Exclude<Step, 'done'>, string> = {
   q1: "Do you need anything you don't already have for this message? Answer `no`, or `yes: <what you need>`.",
   q2: '',
+  q2b: "Is this a big new idea we don't already have, that will take real time? `yes` or `no`.",
   q3: 'Do it yourself, or delegate? `myself` or `delegate`.',
   q4: 'What tier is it, 1-5? 1 = one worker for minutes, 2 = one worker for an hour, 3 = a few workers or one field for a day, 4 = several fields in parallel, 5 = a multi-team build. Sized for an AI, never months.',
   q5: 'How big a team? Any number (1, 3, 5, 20).',
@@ -100,6 +104,7 @@ const QUESTIONS: Record<Exclude<Step, 'done'>, string> = {
 const EXAMPLE: Record<Exclude<Step, 'done'>, string> = {
   q1: '`yes: move the notes into the archive folder`',
   q2: '`mid` or `new`',
+  q2b: '`yes` or `no`',
   q3: '`myself` or `delegate`',
   q4: '`3`',
   q5: '`5`',
@@ -218,6 +223,20 @@ export function scope(dir: string, chat: string, now = new Date()) {
     shown: [],
     retried: false,
   }
+  const hold = readHold(files)
+  let waltNote: Record<string, unknown> = {}
+  if (hold) {
+    rmSync(files.walt, { force: true })
+    if (wantsIt(state.msg)) {
+      state.walt = 'ok'
+      waltNote = {
+        walt: 'The owner wants the held idea built: the work may go ahead. Build it so it breaks nothing.',
+      }
+    } else
+      waltNote = {
+        walt: `The owner did not say he wants to do the held idea ("${hold.idea}"): save it with Connections memory_save (one memory, tag \`idea-list\`) and stop.`,
+      }
+  }
   writeText(files.state, JSON.stringify(state, null, 2))
   appendLog(dir, { chat, run: state.run, step: 'start' }, now)
   const cwd = existsSync(files.cwd) ? readFileSync(files.cwd, 'utf8').trim() : ''
@@ -225,12 +244,34 @@ export function scope(dir: string, chat: string, now = new Date()) {
     run: state.run,
     step: 'q1' as Step,
     question: questionOf('q1', doc),
+    ...waltNote,
     context: {
       hydraMd: doc
         ? { exists: true, path: files.hydraMd, lead: leadName(doc), tier: doc.tier }
         : { exists: false, path: files.hydraMd },
       ...folderKnowledge(cat, cwd),
     },
+  }
+}
+
+const WALT = 'person:walt-on-task'
+const WALT_YES =
+  /\b(i want to (do|build) it|build it|let'?s build|go ahead and build|i want it built)\b/i
+const WALT_NO = /\b(don'?t|do not|not|never|no)\b[^.,;!?]{0,25}\b(build|do it|want)/i
+
+/** True when the message clearly says to build the held idea; a negated phrase does not count. */
+function wantsIt(msg: string): boolean {
+  return WALT_YES.test(msg) && !WALT_NO.test(msg)
+}
+
+/** The held idea's verdict from the owner's next message: any clear 'I want to do it' lets the work go ahead. */
+function readHold(files: Files): { idea: string } | null {
+  if (!existsSync(files.walt)) return null
+  try {
+    const h = JSON.parse(readFileSync(files.walt, 'utf8'))
+    return h?.held ? { idea: String(h.idea ?? '') } : null
+  } catch {
+    return null
   }
 }
 
@@ -400,13 +441,24 @@ function firstQ1(ctx: Ctx, state: RunState, p: Parsed): Reply {
     return next(ctx, state, null)
   }
   state.tier = String(p.n)
-  if (p.n >= 2 && hasLeads(ctx)) {
-    state.groups = [leadGroup(p.text ?? state.msg)]
+  state.need = p.text ?? state.msg
+  if (p.n >= 2 && state.walt !== 'ok' && ctx.cat.has(WALT)) {
+    state.step = 'q2b'
+    return next(ctx, state, null)
+  }
+  return firstAfterGate(ctx, state)
+}
+
+/** A first message's route once the difficulty is known: a lead pick for tier 2 or more, else q3. */
+function firstAfterGate(ctx: Ctx, state: RunState): Reply {
+  const need = state.need ?? state.msg
+  if (Number(state.tier) >= 2 && hasLeads(ctx)) {
+    state.groups = [leadGroup(need)]
     fill(ctx, state.groups[0])
     state.step = 'q6pick'
     return next(ctx, state, null)
   }
-  state.groups = [group('need', p.text ?? state.msg)]
+  state.groups = [group('need', need)]
   fill(ctx, state.groups[0])
   state.step = 'q3'
   return next(ctx, state, null)
@@ -436,8 +488,29 @@ function routeQ1(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Re
 
 function routeQ2(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
   if (p.kw === 'mid') return endMid(ctx, state, doc)
+  if (state.walt !== 'ok' && ctx.cat.has(WALT)) {
+    state.step = 'q2b'
+    return next(ctx, state, doc)
+  }
   state.step = 'q3'
   return next(ctx, state, doc)
+}
+
+/** A big new idea is held for Walt's speed bump; the owner's answer decides it on the next scope run. */
+function routeQ2b(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'no') {
+    if (!doc) return firstAfterGate(ctx, state)
+    state.step = 'q3'
+    return next(ctx, state, doc)
+  }
+  writeText(ctx.files.walt, JSON.stringify({ held: true, idea: state.msg }))
+  return end(ctx, state, doc, 'hold', {
+    say: `Hold: do not start building. Consult Walt (core_use ${WALT}) or load his brief, give the owner Walt's speed bump in the first lines of your reply, then wait for the owner's answer.`,
+    walt: WALT,
+    idea: state.msg,
+    if_no:
+      'If the owner does not want to do it, save the idea with Connections memory_save (one memory, tag `idea-list`) and stop.',
+  })
 }
 
 function routeQ3(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
@@ -562,6 +635,7 @@ function pageAnswer(ctx: Ctx, state: RunState, doc: HydraDoc | null, label?: str
 const ROUTES: Partial<Record<Step, Route>> = {
   q1: routeQ1,
   q2: routeQ2,
+  q2b: routeQ2b,
   q3: routeQ3,
   q4: routeQ4,
   q5: routeQ5,
@@ -586,6 +660,8 @@ function fallback(step: Step, state: RunState): Parsed {
       return { kw: 'yes', text: state.msg }
     case 'q2':
       return { kw: 'new' }
+    case 'q2b':
+      return { kw: 'no' }
     case 'q3':
       return { kw: 'myself' }
     case 'q4':

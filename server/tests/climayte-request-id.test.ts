@@ -58,6 +58,29 @@ describe('a start or a message sent again with its requestId is taken once', () 
     expect(climayteList({ group: 'request-id-start' })).toHaveLength(2)
   })
 
+  test('an unnamed dispatch sent again answers in its workers group, so status and cancel reach them', () => {
+    setCliMayteAccountsProvider(() => [])
+    const first = climayteRun({ tasks: [chat('unnamed A', 'unnamed-run:1')] })
+    groups.add(first.group)
+    // The same request with no group answers its worker, in the group that holds it (not a new g- name).
+    const again = climayteRun({ tasks: [chat('unnamed A', 'unnamed-run:1')] })
+    expect(again.group).toBe(first.group)
+    expect(again.workers.map((w) => [w.id, w.repeat])).toEqual([[first.workers[0]?.id, true]])
+    // A retry that adds a task joins the same group, and the group lists both workers.
+    const grown = climayteRun({
+      tasks: [chat('unnamed A', 'unnamed-run:1'), chat('unnamed B', 'unnamed-run:2')],
+    })
+    expect(grown.group).toBe(first.group)
+    expect(climayteList({ group: first.group })).toHaveLength(2)
+    // A request id nothing made yet still gets a group of its own.
+    const unseen = climayteRun({ tasks: [chat('unnamed C', 'unnamed-run:3')] })
+    groups.add(unseen.group)
+    expect(unseen.group).not.toBe(first.group)
+    // Cancelling the group reaches both workers the retry named.
+    const cancelled = climayteCancel({ group: first.group })
+    expect(cancelled.cancelled.sort()).toEqual([first.workers[0]?.id, grown.workers[1]?.id].sort())
+  })
+
   test('still the same worker once it was cancelled: the request made it, so a retry never makes a second', () => {
     setCliMayteAccountsProvider(() => [])
     const first = climayteRun({

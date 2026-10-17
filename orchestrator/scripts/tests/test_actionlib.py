@@ -9,6 +9,7 @@ escape hatch (a person's own --force) without naming which scripts reach it. Thi
 the catalog against the two things that must never be able to drift from it again: the actual
 files on disk, and lib/armlib's own gated-script set."""
 
+import ast
 import json
 import sys
 import subprocess
@@ -107,6 +108,25 @@ class CatalogShapeTest(unittest.TestCase):
             self.assertTrue(str(row.get("result") or "").strip(), name)
 
 
+_GATE_FUNCTIONS = frozenset({"refuse_unless_armed", "refuse_unless_armed_for"})
+
+
+def _armlib_gate_calls(name: str) -> set[str]:
+    """The armlib gate functions scripts/<name>.py really calls as armlib.<fn>(...).
+
+    A real call on the armlib module, so a prose mention (unblock_prompts.py's docstring) does not
+    count. refuse_unless_armed_for is accepted too: a gated script that moves to the catalog-consulting
+    variant (armlib.py:235) is still gated. No gated script uses it today."""
+    tree = ast.parse((SCRIPTS / f"{name}.py").read_text(encoding="utf-8"))
+    called = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "armlib"
+                and node.func.attr in _GATE_FUNCTIONS):
+            called.add(node.func.attr)
+    return called
+
+
 class ArmlibAgreementTest(unittest.TestCase):
     """The direct-vs-unattended split in the catalog must equal what lib/armlib itself
     allows - checked against armlib's OWN predicate, never a second copy of its set."""
@@ -135,6 +155,14 @@ class ArmlibAgreementTest(unittest.TestCase):
             src = (SCRIPTS / f"{name}.py").read_text(encoding="utf-8")
             self.assertNotIn("armlib.refuse_unless_armed", src,
                               f"{name} is catalogued direct but calls armlib.refuse_unless_armed")
+
+    def test_gated_scripts_call_refuse_unless_armed(self):
+        # The gated side: every name in GATED_SCRIPTS must make a real gate call in its own source.
+        # This is the drift check for a name added later; it cannot see a refusal that is computed
+        # and then ignored - the behavioural tests in each script's own test file do that.
+        for name in sorted(armlib.GATED_SCRIPTS):
+            self.assertTrue(_armlib_gate_calls(name),
+                            f"{name} is in armlib.GATED_SCRIPTS but never calls armlib.refuse_unless_armed")
 
     def test_migrate_chat_is_still_the_documented_direct_exception(self):
         # The one exception AH-25 was told never to change: migrate_chat.py stays reachable

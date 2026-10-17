@@ -4,11 +4,12 @@
 // Desk's side (web/src/lib/frame-dismiss.ts): the account menu closes on a click on the chat, on the sidebar, and into a
 // frame. AgentHydra's side (hydra/src/lib/desk-embed.ts): a menu open in its page, framed in Desk, closes on a click on
 // Desk. The throwaway Desk's AgentHydra address is a closed port, so its page reads nothing from the real one.
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { QUIET_EDGE } from './lib/edge-flags'
 import { portFrom } from './lib/free-port'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -127,7 +128,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {} // floor-ok: a temp folder Edge still holds
+  try { rmRetry(SCRATCH) } catch {} // floor-ok: a temp folder Edge still holds
 }
 console.log(`${total - failed} of ${total} frame-click checks pass`)
 process.exit(failed ? 1 : 0)

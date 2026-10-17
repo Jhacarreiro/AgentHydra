@@ -9,7 +9,12 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { classifyLimitResetScreen, dateAfter, runCliLimitReset } from '../src/core/cli-limit-reset'
+import {
+  classifyLimitResetScreen,
+  dateAfter,
+  runCliLimitReset,
+  setLimitResetStartScreenMsForTests,
+} from '../src/core/cli-limit-reset'
 
 test('the real space-less "not available" screen maps to unavailable with a clean sentence', () => {
   const hit = classifyLimitResetScreen(
@@ -97,10 +102,14 @@ async function standInCli(): Promise<string> {
   return join(dir, 'claude')
 }
 
+// The stand-in CLI draws its prompt at once, so the real CLI's 6 s start-screen wait is shortened.
+let startScreenWas = 0
 beforeAll(async () => {
   process.env.AGENTHYDRA_CLAUDE_PATH = await standInCli()
+  startScreenWas = setLimitResetStartScreenMsForTests(500)
 }, 60_000)
 afterAll(() => {
+  setLimitResetStartScreenMsForTests(startScreenWas)
   if (claudeWas === undefined) delete process.env.AGENTHYDRA_CLAUDE_PATH
   else process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
   rmSync(root, { recursive: true, force: true })

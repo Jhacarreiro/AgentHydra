@@ -228,8 +228,9 @@ interface ItemBase {
 export type TranscriptItem =
   /** sendFailed is client-only: the window's own bubble for a message the POST did not reach the server. */
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean; sendFailed?: string })
-  /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
-  | (ItemBase & { kind: 'note'; from: string; text: string })
+  /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble.
+   * advisor: the Urgency Advisor's nudge sent on the owner's behalf (`from` is its name): drawn as an orange bubble on the owner's side. */
+  | (ItemBase & { kind: 'note'; from: string; text: string; advisor?: true })
   /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest).
    * media: pictures and videos the finished reply only names (a path in backticks, prose or a link), shown under it; the text is unchanged. */
   | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string; media?: ImageRef[] })
@@ -404,6 +405,8 @@ export interface ExternalSession {
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
   fromPc: string | null
+  /** The app a session belongs to when its `source` does not say (a claude-cloud session is 'claude' under source 'other'). Absent: read `source`. */
+  app?: string
   /** The ExternalSession id of the chat whose chip started this one, when that chat is in the list; the sidebar nests it under that chat. Left out when the parent is not known. */
   parentId?: string
   /** Set while a usage limit stopped it and nothing has followed (AgentHydra's `limit_stop`, pending): the babysitter's. */

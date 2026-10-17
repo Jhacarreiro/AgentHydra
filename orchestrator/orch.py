@@ -440,7 +440,7 @@ def _render_policy(s: dict, L: list[str]) -> None:
     if s.get("policy"):
         L.append(f"\nPOLICY       {len(s['policy'])} knob(s) not at default: "
                  + ", ".join(f"{k}={v}" for k, v in list(s["policy"].items())[:6]))
-    elif not configlib.CONFIG_PATH.exists():
+    elif not configlib.config_path().exists():
         # THE ONE-LINE NUDGE (owner, 2026-09-17: "it should ask which ... toggles, triggers,
         # options the user wants on"). Said once, on a machine that has never been asked, and
         # never again once a policy file exists - a prompt that repeats forever gets skimmed.

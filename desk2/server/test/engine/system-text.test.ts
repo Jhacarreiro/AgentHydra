@@ -396,6 +396,25 @@ describe('notes and picture lines', () => {
     expect(noteOf('he wrote "[AgentHydra] Not from the user." in the log')).toBeNull()
   })
 
+  test('the Urgency Advisor nudge is an advisor note: its name, the nudge, never the owner bubble or a plain note', () => {
+    const text = "[Urgency Advisor · Ada] Sent on the owner's behalf.\n\nThe report is overdue. Wrap up and send it."
+    const nudge = 'The report is overdue. Wrap up and send it.'
+    expect(noteOf(text)).toEqual({ from: 'Ada', text: nudge, advisor: true })
+    expect(userTurn(user(text), null)).toEqual({ kind: 'note', id: 'u1', ts: 5, from: 'Ada', text: nudge, advisor: true })
+    expect(userTurns(user(text), null)).toHaveLength(1)
+    expect(noteOf("fyi [Urgency Advisor · Ada] Sent on the owner's behalf.\nhi")).toBeNull()
+    expect(noteOf(PING)).not.toHaveProperty('advisor')
+  })
+
+  test('the advisor note is still recognised after the Send now / urgent preface', () => {
+    const body = "[Urgency Advisor · Ada] Sent on the owner's behalf.\n\nWhy is this not done?"
+    const sentNow = `[Sent now: the user stopped your previous turn mid-step to send this message. Act on it first.]\n\n${body}`
+    const urgent = `AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator. Go on.\n\n${body}`
+    for (const text of [sentNow, urgent]) {
+      expect(userTurn(user(text), null)).toEqual({ kind: 'note', id: 'u1', ts: 5, from: 'Ada', text: 'Why is this not done?', advisor: true })
+    }
+  })
+
   test('a note keeps its id, time and sub-agent and is never a user item', () => {
     const note = userTurn(user(PING, { parentToolUseId: null, queued: true }), null)
     expect(note).toEqual({ kind: 'note', id: 'u1', ts: 5, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: noteOf(PING)!.text })
@@ -541,6 +560,17 @@ describe("a handoff's continuation prompt", () => {
     expect(out[3]).toMatchObject({ text: 'why did it stop?' })
   })
 
+  test("a chat continuation led by a stream-json line carrying an earlier continuation shows the plain message and one muted line", () => {
+    const heir = (c: string) =>
+      c.replace('Do not redo steps it reports finished.', "That session was this chat's manager before you: you continue as the manager. Do not redo steps it reports finished.")
+    const lead = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: heir(continued({})) }] } })
+    const chat = heir(continued({})).replace('Please tidy the example garden plan.', lead)
+    expect(userTurns(user(chat), null)).toEqual([
+      { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
+      { kind: 'system', id: 'u9:continued', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' },
+    ])
+  })
+
   test("a non-chat continuation hides the repeated task as before", () => {
     expect(userTurns(user(continued()), null)).toEqual([userTurn(user(continued()), null)!])
     expect(userTurns(user(continued({ messages: ['why did it stop?'] })), null)).toEqual([userTurn(user(continued({ messages: ['why did it stop?'] })), null)!])
@@ -620,5 +650,35 @@ describe("CliMayte's resume prompts", () => {
     // Source text: each `\\n` is the backslash and n its template literal holds.
     expect(climayte).toContain('`${SENT_BACK} ${note}\\n\\nFix it, prove the fix with a command and what it printed, and report again.`')
     expect(climayte).toContain('`${SENT_BACK_CHECK} ${note}\\n\\nFix what you can within those rules, prove it with a command and what it printed, and report again.`')
+  })
+})
+
+describe("a relaunched chat's prompt saved as a stream-json line", () => {
+  const user = (text: string): Extract<TranscriptItem, { kind: 'user' }> => ({ kind: 'user', id: 'u9', ts: 7, text, parentToolUseId: null })
+  const envelope = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })
+
+  test("an envelope around a continuation prompt is the muted line it would be as plain text", () => {
+    const line = { kind: 'system' as const, id: 'u9', ts: 7, parentToolUseId: null, level: 'info' as const, text: 'Continued in a fresh session: the conversation had grown long.' }
+    expect(userTurn(user(envelope(continued())), null)).toEqual(line)
+    expect(userTurns(user(envelope(continued())), null)).toEqual([line])
+  })
+
+  test("a double envelope around a plain message is that message as the person's bubble", () => {
+    const plain = 'Check the ledger totals for March.'
+    expect(userTurn(user(envelope(envelope(plain))), null)).toMatchObject({ kind: 'user', id: 'u9', text: plain })
+  })
+
+  test("an envelope around a chat's continuation keeps the owner's message as his bubble, as plain text does", () => {
+    const chat = continued().replace('Please tidy the example garden plan.', 'Why did it stop?').replace(
+      'Do not redo steps it reports finished.',
+      "That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+    )
+    expect(userTurns(user(envelope(chat)), null)).toEqual(userTurns(user(chat), null))
+    expect(userTurns(user(envelope(chat)), null)[0]).toMatchObject({ kind: 'user', text: 'Why did it stop?' })
+  })
+
+  test("JSON among other words is the person's text as it stands", () => {
+    const text = `Fix the parser for ${envelope('x')} inputs.`
+    expect(userTurn(user(text), null)).toEqual(user(text))
   })
 })

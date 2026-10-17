@@ -248,9 +248,6 @@
     "server/src/mcp-fan-out.ts": {
       "asymptotic-waste/loop-invariant-recompute": 1
     },
-    "server/src/mcp-free.ts": {
-      "asymptotic-waste/membership-scan-in-loop": 1
-    },
     "server/src/routes/kit.ts": {
       "asymptotic-waste/membership-scan-in-loop": 1
     },

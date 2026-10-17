@@ -541,7 +541,8 @@ test('an account uuid maps to the acct id hswarm prints and to the instance sign
 })
 
 test('the main ~/.claude folder names its login, its earlier logins and ledger ids, under every better name', async () => {
-  const { hswarmAccountMap, hswarmAccountId, MAIN_CLI_LABEL } = await import('../src/routes/hswarm')
+  const { hswarmAccountMap, MAIN_CLI_LABEL } = await import('../src/routes/hswarm')
+  const { hswarmAccountId } = await import('../src/hswarm')
   const now = '00000000-0000-0000-0000-0000000000b1'
   const before = '00000000-0000-0000-0000-0000000000b2'
   const onDesktop = '00000000-0000-0000-0000-0000000000b3'
@@ -577,7 +578,8 @@ test('the main ~/.claude folder names its login, its earlier logins and ledger i
 })
 
 test('a signed-out account is named from known accounts and login history, never over a current login', async () => {
-  const { hswarmAccountMap, hswarmAccountId } = await import('../src/routes/hswarm')
+  const { hswarmAccountMap } = await import('../src/routes/hswarm')
+  const { hswarmAccountId } = await import('../src/hswarm')
   const current = '00000000-0000-0000-0000-0000000000a1'
   const moved = '00000000-0000-0000-0000-0000000000a2'
   const nameOnly = '00000000-0000-0000-0000-0000000000a3'

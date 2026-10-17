@@ -98,6 +98,7 @@ import {
   type RunReply,
   type RunSetting,
   type RunTask,
+  repeatedGroup,
   repeatOf,
   requestIdProblem,
   runDefaultsOf,
@@ -638,7 +639,18 @@ ${code === null ? '' : output.trim()}${sev.others ? "\nThe failing files are not
 /** When the tick last looked for attempts whose spend the kit had not caught up with (every 5 s). */
 let lastSettle = 0
 
-/** The next tick's wait: 1 s while a worker runs, 3 s while one is queued or waiting, else 15 s. One
+/** The waits while no worker runs: the next tick's 3 s while one is queued or waiting, else 15 s, and
+ *  the wave reconcile's 5 s. */
+const quietTicks = { queuedMs: 3_000, idleMs: 15_000, reconcileMs: 5_000 }
+
+/** Test seam: shorten the quiet waits. Returns the previous values, to pass back to restore them. */
+export function setCliMayteQuietTickForTests(ms: Partial<typeof quietTicks>): typeof quietTicks {
+  const was = { ...quietTicks }
+  Object.assign(quietTicks, ms)
+  return was
+}
+
+/** The next tick's wait: 1 s while a worker runs, the quiet waits otherwise. One
  *  pass over the store and no copy of it: this runs after every tick, and the store keeps every
  *  finished worker. */
 function idleDelay(): number {
@@ -647,7 +659,7 @@ function idleDelay(): number {
     if (w.status === 'running') return 1_000
     if (!active && isActive(w)) active = true
   }
-  return active ? 3_000 : 15_000
+  return active ? quietTicks.queuedMs : quietTicks.idleMs
 }
 
 function schedule(delay?: number): void {
@@ -1247,7 +1259,8 @@ function enlistWorkers(
  *  only with `ownerWords`, on a sealed task, or with a `modelWhy` on a rung cheaper than the pick
  *  (runSetting).
  *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
- *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
+ *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. A requestId repeat with
+ *  no group answers in its worker's group (repeatedGroup). */
 export function climayteRun(input: {
   tasks: Array<{
     prompt: string
@@ -1316,8 +1329,9 @@ export function climayteRun(input: {
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
   assertKnownAccounts(input.accounts)
   const now = Date.now()
-  // Only a named group can repeat: an unnamed one is new by definition. A request sent again (its
-  // requestId) is always the worker it made, copies or not.
+  // Only a named group can repeat by its words: an unnamed one is new by definition. A request sent
+  // again (its requestId) is always the worker it made, copies or not, and an unnamed one answers in
+  // that worker's group.
   const named = input.group?.trim()
   const repeats = input.tasks.map(
     (t) =>
@@ -1332,7 +1346,7 @@ export function climayteRun(input: {
         fresh.map((i) => i + 1),
       )
     : []
-  const group = named || `g-${hex(6)}`
+  const group = named || repeatedGroup(repeats) || `g-${hex(6)}`
   // Joining a group keeps its cap unless the caller names a new one. A group nobody gave a cap
   // has none on record and takes the default, which scales with each account's plan (groupCap).
   if (input.perAccount !== undefined) perAccount[group] = cap
@@ -1923,9 +1937,6 @@ export function climayteVerdict(
   return { ok: true, message, next }
 }
 
-/** How often reconcileWaves reads the wave records (a read of every wave file). */
-const WAVE_RECONCILE_MS = 5_000
-
 let nextWaveReconcile = 0
 
 /** Judge one task of a running wave that its finished worker left `running` (reconcileWaves). */
@@ -2001,7 +2012,8 @@ function reconcileWaveTasks(id: string, now: number): void {
  *  ends its task `failed`. A pass stays provisional until the orchestrator accepts the wave. */
 function reconcileWaves(now: number): void {
   if (now < nextWaveReconcile) return
-  nextWaveReconcile = now + WAVE_RECONCILE_MS
+  // How often this reads the wave records (a read of every wave file): 5 s, see quietTicks.
+  nextWaveReconcile = now + quietTicks.reconcileMs
   // Most workers never belong to a wave: read no wave file unless a finished one does. A wave seen
   // past `running` never runs again, so it is not read again.
   const ended = [...workers.values()].filter(endedInWave)

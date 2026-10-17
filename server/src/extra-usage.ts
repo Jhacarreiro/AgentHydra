@@ -21,10 +21,10 @@
 // (every 10 minutes, 5 from 60%, 1 from 85%). Otherwise a heavy chat could bill for most of half an
 // hour before anyone looked. No other account is ever read for this.
 
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { climayteWorkerPids } from './climayte'
 import { BILL_GUARD_SESSION_PCT, BILL_GUARD_WEEK_PCT } from './climayte-lib'
+import { orgUuidOfClaudeJson } from './core/account-holders'
 import { resolveAccount, resolveCliConfigDirToken, resolveInstanceTokens } from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
 import { listInstanceLogins, listInstances } from './core/instances'
@@ -303,24 +303,13 @@ export function stopExtraUsageGuard(): void {
   timer = null
 }
 
-/** The org an OAuth login belongs to, from a CLI config dir's `.claude.json`. */
-function cliOrgUuid(configDir: string): string | null {
-  try {
-    const path = join(configDir, '.claude.json')
-    const org = JSON.parse(readFileSync(path, 'utf8'))?.oauthAccount?.organizationUuid
-    return typeof org === 'string' && org.trim() ? org.trim() : null
-  } catch {
-    return null
-  }
-}
-
 /** A token and its org for one instance ref. A desktop profile prefers its linked CLI login: that
  *  is the kind of credential the CLI makes this same call with. Value-blind: the token goes
  *  straight into the request and nowhere else. */
 async function credentialFor(ref: string): Promise<{ token: string; orgUuid: string } | null> {
   const fromCli = (configDir: string) => {
     const token = resolveCliConfigDirToken(configDir)?.token
-    const orgUuid = cliOrgUuid(configDir)
+    const orgUuid = orgUuidOfClaudeJson(join(configDir, '.claude.json'))
     return token && orgUuid ? { token, orgUuid } : null
   }
   if (ref.startsWith('cli:')) {
