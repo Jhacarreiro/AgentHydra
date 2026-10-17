@@ -916,9 +916,11 @@ class JobManager:
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
-        # A read or web tool task asks the owner's Free web accounts first (free_route.py), then CliMayte, then the paid
-        # API: CliMayte cannot take web tools, and Free is the cheaper try for read work too. Edit and all tasks, and
-        # tool-free ones, keep CliMayte first, then Free (an idle CliMayte account costs nothing extra either).
+        # A tool task the Free accounts may take asks them first (free_route.py), then CliMayte, then the paid API:
+        # CliMayte cannot take web tools, and Free is the cheaper try for read work too. An edit or all task Free may take
+        # (config.ROUTE_VIA_FREE_EDIT_PROFILES, _SHELL_PROFILES) goes there first as well, its leg in a scratch copy of its
+        # folder; other edit and all tasks, and tool-free ones, keep CliMayte first, then Free (an idle CliMayte account
+        # costs nothing extra either).
         free_first = task.tools != "none" and free_route.eligible(task)
         free_note = None
         if free_first:

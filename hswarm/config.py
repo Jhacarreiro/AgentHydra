@@ -329,6 +329,10 @@ _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT: tuple[str, ...] = ()
 ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
 _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT: tuple[str, ...] = ()
 ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
+# `route_via_free_edit_asks`: per profile, the models an edit or shell task's Free thread asks for, spelled as
+# route_via_free_tool_asks spells them; a profile not listed takes its route_via_free_tool_asks.
+_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {}
+ROUTE_VIA_FREE_EDIT_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT)
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
 # whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
@@ -615,7 +619,7 @@ def _apply_free_settings(doc: dict) -> None:
 def _apply_free_lists(doc: dict) -> None:
     global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
     global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S
-    global ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES
+    global ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES, ROUTE_VIA_FREE_EDIT_ASKS
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
     if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
@@ -629,6 +633,10 @@ def _apply_free_lists(doc: dict) -> None:
         ROUTE_VIA_FREE_EDIT_PROFILES = tuple(p.strip().lower() for p in fep)
     if _is_str_list(fsp):
         ROUTE_VIA_FREE_SHELL_PROFILES = tuple(p.strip().lower() for p in fsp)
+    fea = doc.get("route_via_free_edit_asks")
+    if isinstance(fea, dict):
+        ROUTE_VIA_FREE_EDIT_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fea.items()
+                                    if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
     fcp = doc.get("route_via_free_check_profiles")
     if _is_str_list(fcp):
         ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)

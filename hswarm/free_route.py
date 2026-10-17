@@ -211,12 +211,14 @@ def _ask(ask: str) -> tuple[str, str | None]:
 
 
 def _pick(task: Task, status: dict, unseen: int, skip=(), exclude=()) -> tuple[str, str | None] | None:
-    """The (model, provider) a task's Free thread asks for, or None when no account can take it now. A tool task takes
-    config.ROUTE_VIA_FREE_TOOL_ASKS for its profile, a tool-free one config.ROUTE_VIA_FREE_ASKS: the first ask whose
-    provider has an idle account with room is taken. A provider the health gate shuts (_sick) is passed over unless its
-    probe is due (_probe), and so is one in `skip` (a provider a failed try named). A profile with no asks asks for its
-    Claude family on whichever account is idle."""
-    asks = (config.ROUTE_VIA_FREE_TOOL_ASKS if task.tools != "none" else config.ROUTE_VIA_FREE_ASKS).get(task.profile or "")
+    """The (model, provider) a task's Free thread asks for, or None when no account can take it now. An edit or shell
+    task takes config.ROUTE_VIA_FREE_EDIT_ASKS for its profile, another tool task config.ROUTE_VIA_FREE_TOOL_ASKS, a
+    tool-free one config.ROUTE_VIA_FREE_ASKS: the first ask whose provider has an idle account with room is taken. A
+    provider the health gate shuts (_sick) is passed over unless its probe is due (_probe), and so is one in `skip` (a
+    provider a failed try named). A profile with no asks asks for its Claude family on whichever account is idle."""
+    profile = task.profile or ""
+    asks = (config.ROUTE_VIA_FREE_EDIT_ASKS.get(profile) if editing(task) else None) or (
+        config.ROUTE_VIA_FREE_TOOL_ASKS if task.tools != "none" else config.ROUTE_VIA_FREE_ASKS).get(profile)
     if not asks:
         family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
         return (family, None) if _idle(status, exclude=exclude) - unseen > 0 else None
