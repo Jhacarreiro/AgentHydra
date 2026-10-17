@@ -2,7 +2,8 @@
 
 Only authenticated loopback IPC carries credentials, in memory. A disconnected
 caller cancels its context, never another request or the shared browser. The
-empty browser and owned profile close after 60 idle seconds.
+empty browser and owned profile close after 60 idle seconds. A browser that stops
+answering ends every send in it, unconfirmed, and retires the broker.
 """
 
 import argparse
@@ -24,6 +25,28 @@ from .http import ChatGPTHttp
 MAX_FRAME = 4 * 1024 * 1024
 # How long an idle exit lets open connections finish (a ping reply) after it stops listening.
 CLOSE_GRACE_SECONDS = 2
+# zendriver waits forever for a CDP answer. On 2026-10-17 the shared Chrome stopped answering
+# mid-send: its sends held all three browser slots until their callers gave up, their cleanup
+# never returned, and the draining broker never exited, so every ChatGPT send failed for hours.
+CDP_SECONDS = 10  # one broker-owned command (a context's cookies or disposal) or the liveness probe
+PROBE_SECONDS = 15  # how often a broker with sends in flight checks that Chrome still answers
+STOP_SECONDS = 15  # how long Chrome may take to stop before its process is killed
+
+
+async def command(browser, value):
+    """One CDP command that fails, rather than waits forever, on a Chrome that answers nothing."""
+    return await asyncio.wait_for(browser.connection.send(value), CDP_SECONDS)
+
+
+async def stop_browser(browser):
+    """zendriver's stop() sends Browser.close and waits for the answer, so on a Chrome that answers
+    nothing it never returned and the owner lock stayed taken. Past STOP_SECONDS, kill Chrome."""
+    try:
+        await asyncio.wait_for(browser.stop(), STOP_SECONDS)
+    except TimeoutError:
+        process = getattr(browser, '_process', None)  # zendriver's Popen for Chrome
+        if process is not None and process.poll() is None:
+            process.kill()
 
 
 async def close_server(server, grace=CLOSE_GRACE_SECONDS):
@@ -55,10 +78,10 @@ class ContextBrowser:
         self.on_disposed = on_disposed
 
     async def get_all(self):
-        return await self.browser.connection.send(self.cdp.storage.get_cookies(browser_context_id=self.context_id))
+        return await command(self.browser, self.cdp.storage.get_cookies(browser_context_id=self.context_id))
 
     async def set_all(self, cookies):
-        await self.browser.connection.send(self.cdp.storage.set_cookies(cookies, browser_context_id=self.context_id))
+        await command(self.browser, self.cdp.storage.set_cookies(cookies, browser_context_id=self.context_id))
 
     async def get(self, url):
         await self.tab.get(url)
@@ -67,7 +90,7 @@ class ContextBrowser:
     async def stop(self):
         if not self.closed:
             try:
-                await self.browser.connection.send(self.cdp.target.dispose_browser_context(self.context_id))
+                await command(self.browser, self.cdp.target.dispose_browser_context(self.context_id))
                 self.closed = True
                 if self.on_disposed:
                     self.on_disposed()
@@ -84,6 +107,7 @@ class Pool:
         self.active = 0
         self.last_used = time.monotonic()
         self.seen = set()
+        self.sends = set()
         self.requests = 0
         self.draining = False
 
@@ -145,6 +169,7 @@ class Pool:
             claimed = True
             request['_cleanup_verified'] = True
             task = asyncio.create_task(self.send(request, writer))
+            self.sends.add(task)
             disconnected = asyncio.create_task(reader.read(1))
             done, _ = await asyncio.wait([task, disconnected], return_when=asyncio.FIRST_COMPLETED)
             if task in done:
@@ -162,6 +187,7 @@ class Pool:
         except (ConnectionError, OSError):
             pass
         finally:
+            self.sends.discard(task)
             for pending in (task, disconnected):
                 if pending and not pending.done():
                     pending.cancel()
@@ -207,15 +233,15 @@ class Pool:
                 request['_cleanup_verified'] = False
                 self.drain()
             try:
-                context_id = await self.browser.connection.send(self.cdp.target.create_browser_context(dispose_on_detach=True))
-                target_id = await self.browser.connection.send(self.cdp.target.create_target('about:blank', browser_context_id=context_id, new_window=True))
+                context_id = await command(self.browser, self.cdp.target.create_browser_context(dispose_on_detach=True))
+                target_id = await command(self.browser, self.cdp.target.create_target('about:blank', browser_context_id=context_id, new_window=True))
                 tab = await self.browser._get_tab(target_id)
                 return ContextBrowser(self.browser, tab, self.cdp, on_disposal_error=disposal_failed, on_disposed=disposed)
             except BaseException:
                 try:
                     if context_id is None:
                         raise RuntimeError('Context creation was not confirmed')
-                    await self.browser.connection.send(self.cdp.target.dispose_browser_context(context_id))
+                    await command(self.browser, self.cdp.target.dispose_browser_context(context_id))
                     disposed()
                 except Exception:
                     disposal_failed()
@@ -238,6 +264,20 @@ class Pool:
 
     def drain(self):
         self.draining = True
+
+    async def responsive(self):
+        try:
+            await command(self.browser, self.cdp.browser.get_version())
+        except Exception:
+            return False
+        return True
+
+    def wedged(self):
+        """Chrome answers nothing, so no send in it can finish or confirm its cleanup. End them (each
+        reports its outcome unconfirmed) and retire: exit ends Chrome, and the next send gets a new one."""
+        self.drain()
+        for task in self.sends:
+            task.cancel()
 
 
 def request(http, prompt, existing, *, endpoint, model, temporary, on_id):
@@ -310,17 +350,22 @@ async def serve(directory, version, *, idle_seconds=60):
             temporary.chmod(0o600)
             temporary.replace(endpoint)
             try:
+                probed = time.monotonic()
                 while pool.active or (not pool.draining and time.monotonic() - pool.last_used < idle_seconds):
                     await asyncio.sleep(1)
                     if browser.stopped:
                         pool.drain()
+                    elif pool.active and time.monotonic() - probed >= PROBE_SECONDS:
+                        if not await pool.responsive():
+                            pool.wedged()
+                        probed = time.monotonic()
             finally:
                 # No caller may find this port once it stops listening.
                 endpoint.unlink(missing_ok=True)
                 await close_server(server)
         finally:
             try:
-                await browser.stop()
+                await stop_browser(browser)
             finally:
                 endpoint.unlink(missing_ok=True)
 

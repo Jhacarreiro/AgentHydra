@@ -274,7 +274,6 @@ class CoordinatorAccountTests(unittest.TestCase):
                     output = f.owner.execute(ROOT / ACCOUNT, f.request, f.cancel, 500)
                 self.assertFalse(json.loads(output['stdout'])['ok'])
                 self.assertTrue(f.lease.quarantined)
-                self.assertTrue(f.owner.draining)
                 self.assertLess(f.events.index('quarantine'), f.events.index('lease-exit'))
 
     def test_missing_login_and_unsupported_options_short_circuit_before_phase_or_browser(self):

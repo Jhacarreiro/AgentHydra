@@ -247,28 +247,25 @@ class OwnerJob:
         self.creation = self.api.current_creation()
         self.lock = threading.Lock()
         self.phases = set()
-        self.draining = False
         _OWNERS.append(self)
 
     def assert_idle(self):
         with self.lock:
-            if self.phases or self.draining:
+            if self.phases:
                 raise ClaudeError('Owned request phases have not finished cleanup.',
                     code='browser_busy')
 
     def register(self, phase):
         with self.lock:
-            if self.draining:
-                raise ClaudeError('The request coordinator is draining uncertain phases.',
-                    code='browser_busy')
             self.phases.add(phase)
 
     def finished(self, phase, verified):
-        with self.lock:
-            if verified:
+        # An unconfirmed phase stays owned until this process exits and its job close ends it.
+        # Only its account is held (a quarantined lease): refusing every later phase made one
+        # uncertain phase fail every account's sends (2026-10-17).
+        if verified:
+            with self.lock:
                 self.phases.discard(phase)
-            else:
-                self.draining = True
 
 
 class _Lease:

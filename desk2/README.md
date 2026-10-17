@@ -1068,10 +1068,17 @@ held continuously through both phases and final cookie/registry persistence. Bro
 keeps its original 120-second anchor, and one 300-second outer deadline spans the entire request.
 The managed `pythonw.exe` launcher and native process jobs contain phase cancellation and crashes.
 Cancellation waits for the broker's context-disposal receipt before releasing account ownership;
-unconfirmed cleanup quarantines that account and drains the coordinator. No send is replayed after
-a coordinator write attempt. Before dispatch, an unavailable coordinator uses the existing path.
-The idle coordinator exits after 60 seconds, except when it must retain an unconfirmed cleanup lease
-for review. Standalone CLI requests and other commands stay unchanged.
+unconfirmed cleanup quarantines only that account, and the coordinator keeps serving every other
+account. No send is replayed after a coordinator write attempt. Before dispatch, an unavailable
+coordinator uses the existing path. The idle coordinator exits after 60 seconds, held accounts
+included: its exit ends any unconfirmed phase (the owner job) and frees them. Standalone CLI requests
+and other commands stay unchanged.
+
+The browser broker bounds every command it sends Chrome (10 seconds) and, while sends are in flight,
+checks every 15 seconds that Chrome still answers. A Chrome that does not ends those sends as
+unconfirmed (never resent) and retires the broker; its exit stops Chrome, killing it after 15
+seconds, so the next send starts a fresh one. On 2026-10-17 a wedged Chrome held every browser slot
+for minutes, then kept the broker and coordinator draining for hours.
 
 AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
 timer releases finished batches even when no later tool call arrives; pending work remains
