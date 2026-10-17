@@ -12,6 +12,7 @@ import { basename, extname, join, resolve } from 'node:path'
 import type { ImageRef } from '@shared/protocol'
 import { ctx } from '../context'
 import { flushFile, renameOver, writeFlushed } from '../write-flushed'
+import { imageSize, type ImageSize } from './image-size'
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 /** GIFs (screen recordings, demos) may be bigger than other pictures. */
@@ -310,7 +311,53 @@ export function mediaCache(home: string | undefined = ctx?.home ?? process.env.H
 /** An image the window sent (base64) as the url form the transcript keeps; dropped bytes when it cannot be cached. */
 export function toStoredImage(img: ImageRef, cache: MediaCache | null = mediaCache()): ImageRef {
   if (!img.dataBase64) return img
-  const ref = cache?.putBase64(img.dataBase64, img.name)
+  const pic = cache ? cachedPicture(img, cache) : null
   const { dataBase64: _d, ...rest } = img
-  return ref ? { ...rest, url: ref.url, bytes: ref.bytes } : rest
+  return pic ? { ...rest, url: pic.ref.url, bytes: pic.ref.bytes } : rest
+}
+
+/** A picture a message carries, saved in the cache: its ref there, its file (`<sha256>.<ext>`) and that file's path, and
+ *  its size from its header (null when the header does not say). */
+export interface CachedPicture {
+  ref: ImageRef
+  file: string
+  path: string
+  width: number | null
+  height: number | null
+}
+
+/** By the ref a send carries and the cache it went into: the send's transcript item, its SDK message and its index row
+ *  each ask for the same picture, which is decoded and hashed once. */
+const cachedPictures = new WeakMap<ImageRef, { dir: string; pic: CachedPicture | null }>()
+
+/**
+ * A picture a message carries (its bytes in dataBase64, or the url of one already cached), saved in the cache; null
+ * when it is not a picture the cache keeps (another type, over the cap) or a url the cache does not hold.
+ */
+export function cachedPicture(img: ImageRef, cache: MediaCache): CachedPicture | null {
+  const known = cachedPictures.get(img)
+  if (known?.dir === cache.dir) return known.pic
+  let pic: CachedPicture | null = null
+  try {
+    if (img.dataBase64) {
+      const bytes = (img.dataBase64.length * 3) / 4 > MAX_MEDIA_BYTES + 3 ? null : new Uint8Array(Buffer.from(img.dataBase64, 'base64'))
+      const ref = bytes ? cache.put(bytes, img.name) : null
+      if (ref?.url) pic = pictureOf(ref, cache.dir, imageSize(bytes!))
+    } else if (img.url?.startsWith(MEDIA_ROUTE)) {
+      const hit = cache.lookup(img.url.slice(MEDIA_ROUTE.length))
+      if (hit && hit.contentType.startsWith('image/')) {
+        const bytes = new Uint8Array(readFileSync(hit.path))
+        pic = pictureOf({ mediaType: hit.contentType, url: img.url, bytes: bytes.length, ...(img.name ? { name: img.name } : {}) }, cache.dir, imageSize(bytes))
+      }
+    }
+  } catch {
+    pic = null // unreadable: sent as it is, and named nowhere
+  }
+  cachedPictures.set(img, { dir: cache.dir, pic })
+  return pic
+}
+
+function pictureOf(ref: ImageRef, dir: string, size: ImageSize | null): CachedPicture {
+  const file = ref.url!.slice(MEDIA_ROUTE.length)
+  return { ref, file, path: join(dir, file), width: size?.width ?? null, height: size?.height ?? null }
 }

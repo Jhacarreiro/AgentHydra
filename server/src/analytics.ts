@@ -46,6 +46,7 @@ import { isAbsoluteCwd, type RepoRef, reposOf } from './project-repo'
 import { anyDiscount, atYourRate, type Discounts, readRoutingSettings } from './routing-cost'
 import { defaultCwdSources, learnedSessionCwds, learnSessionCwdsInBackground } from './session-cwds'
 import { streamLines } from './session-search'
+import { learnSessionWorkInBackground, workedRoots } from './session-work'
 import { decodeProjectKey, ensureTranscriptIndex, type TranscriptFile } from './transcript'
 import type {
   ActivityReport,
@@ -1389,12 +1390,14 @@ const KIT_PROVIDER: Record<string, SessionSource> = {
 }
 
 /** cwd (else the decoded store folder) of every session either stored table knows, by session id, and
- *  of the sessions session-cwds.ts learned from the sources' own files. `learnFrom` is the ledger whose
- *  sessions a background pass may look up (the shared one; a test's own store reads only the tables). */
+ *  of the sessions session-cwds.ts learned from the sources' own files; a session whose cwd is in no
+ *  repository has the repository its tool calls worked in instead, where session-work.ts found one.
+ *  `learnFrom` is the ledger whose sessions a background pass may look up (the shared one; a test's own
+ *  store reads only the tables). */
 async function sessionProjects(learnFrom: KitStore | null = null): Promise<Map<string, string>> {
   // Sessions change slowly and reading the scan cache costs ~100 us a row, so a minute's answer is kept.
   if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) {
-    if (learnFrom) learnBehind(learnFrom, projectsCache.map)
+    if (learnFrom) learnBehind(learnFrom, projectsCache)
     return projectsCache.map
   }
   if (!projectsInflight) {
@@ -1402,32 +1405,34 @@ async function sessionProjects(learnFrom: KitStore | null = null): Promise<Map<s
       projectsInflight = null
     })
   }
-  const map = await projectsInflight
-  if (learnFrom) learnBehind(learnFrom, map)
-  return map
+  const read = await projectsInflight
+  if (learnFrom) learnBehind(learnFrom, read)
+  return read.map
 }
 
-/** Look up the sessions `map` cannot place, without waiting: what a pass finds is in the next read. */
-function learnBehind(kit: KitStore, map: Map<string, string>): void {
-  learnSessionCwdsInBackground(
-    defaultCwdSources(kit),
-    () => new Set(map.keys()),
-    () => {
-      projectsCache = null
-    },
-  )
+/** Look up the sessions the map cannot place, and where the ones in no repository worked, without
+ *  waiting: what a pass finds is in the next read. */
+function learnBehind(kit: KitStore, read: SessionProjects): void {
+  const forget = () => {
+    projectsCache = null
+  }
+  learnSessionCwdsInBackground(defaultCwdSources(kit), () => new Set(read.cwds.keys()), forget)
+  learnSessionWorkInBackground(kit, () => read.cwds, forget)
 }
 const PROJECTS_TTL_MS = 60_000
-let projectsCache: { at: number; map: Map<string, string> } | null = null
+/** The project of each session (`map`), and where each ran (`cwds`, before any is credited to the
+ *  repository it worked in). */
+type SessionProjects = { at: number; map: Map<string, string>; cwds: Map<string, string> }
+let projectsCache: SessionProjects | null = null
 
 /** Forget the session-to-project map spendReport reads for up to five minutes. For tests only: a test
  *  that reads the spend report against its own database leaves an empty map behind otherwise. */
 export function resetSessionProjects(): void {
   projectsCache = null
 }
-let projectsInflight: Promise<Map<string, string>> | null = null
+let projectsInflight: Promise<SessionProjects> | null = null
 
-async function readSessionProjects(): Promise<Map<string, string>> {
+async function readSessionProjects(): Promise<SessionProjects> {
   const out = new Map<string, string>()
   const read = async (table: string, where: string) => {
     try {
@@ -1457,8 +1462,25 @@ async function readSessionProjects(): Promise<Map<string, string>> {
   } catch {
     // a store from before session_cwd_seen: the tables alone place what they place
   }
-  projectsCache = { at: Date.now(), map: out }
-  return out
+  const map = new Map(out)
+  try {
+    // A session that ran in a folder above the checkouts counts as the repository it worked in.
+    const worked = await workedRoots()
+    const cwds = new Set<string>()
+    for (const s of worked.keys()) {
+      const cwd = out.get(s)
+      if (cwd) cwds.add(cwd)
+    }
+    const repos = await reposOf(cwds)
+    for (const [s, root] of worked) {
+      const cwd = out.get(s)
+      if (cwd && !repos.get(cwd)) map.set(s, root)
+    }
+  } catch {
+    // a store from before session_work_vote: each session stays where it ran
+  }
+  projectsCache = { at: Date.now(), map, cwds: out }
+  return projectsCache
 }
 
 /**

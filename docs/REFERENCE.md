@@ -824,7 +824,10 @@ needed to recover already existed and nothing ever called it.
 ### Why it froze: the `STALL` lines
 
 The daemon runs on one thread, and the tray reaps it after three missed health probes in a row with a kill
-that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the thread was doing, in
+that leaves nothing behind. Since 2026-10-17 a daemon whose port still takes connections (Windows completes the
+handshake while the event loop is blocked) is busy, not dead: the tray gives it up to 120 s before that kill
+(`BUSY_PATIENCE`, `misc/tray-host-native/src/main.rs`), and writes `its port still takes connections` to
+`misc/Tray.log` once. `server/src/stall-sentinel.ts` writes down what the thread was doing, in
 `logs/daemon.log`:
 
 - `STALL main thread unresponsive for N s ... in flight: ...` comes from a worker thread while the main thread
@@ -969,7 +972,7 @@ query. The temporary comparison route that set the kit beside the old producers 
 producers.
 
 What "one record per call" means for each source, finest first (`server/src/kit/ingest-claude.ts`,
-`ingest-foreign.ts`, `ingest-hswarm.ts`):
+`ingest-foreign.ts`, `ingest-copilot.ts`, `ingest-hswarm.ts`):
 
 | Source | One record is | Kept once by |
 |---|---|---|
@@ -979,6 +982,7 @@ What "one record per call" means for each source, finest first (`server/src/kit/
 | OpenCode | a step (`step-finish` part), at the part's own time, with OpenCode's own cost | its part id |
 | DSH | an assistant message that reported usage | the session and the message's place in it |
 | Hermes | a (session, model) total, placed at the session's newest use | the session and model; Hermes keeps no per-call clock |
+| VS Code Copilot Chat (`vscode-copilot`) | a request the chat ever showed, edited-away ones included, with tokens only where VS Code or Copilot wrote them (most requests carry none: Copilot bills requests, not tokens); a history summary inside a request is its own call. The chat's window folder (`workspace.json`) is kept as kit meta `copilot_cwd:<session>` for Cost by project | the chat and request id; a summary by its tool-call round, so one carried on by later requests counts once |
 | HSwarm | a ledger line: one attempt of one task | the job, task and attempt |
 
 Codex rollouts packed into `archived_sessions/_packed/*.zip` are read in place, 512 MB a sweep, so a

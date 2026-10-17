@@ -1,7 +1,7 @@
-// Pure composer logic: slash command filtering, per-chat drafts, image validation, labels.
+// Pure composer logic: slash command filtering, per-chat drafts, image validation and shrinking, labels.
 // No Vue and no DOM here, so web/test/composer can test it with plain bun.
 
-import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL, MAX_PICTURE_SIDE } from '@shared/protocol'
 import type { AccountInfo, AccountRef, ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 
@@ -99,6 +99,39 @@ export function validateImage(file: { name: string; type: string; size: number }
     return `${name} is ${formatBytes(file.size)}; images are limited to 5 MB each.`
   }
   return null
+}
+
+// Shrinking: shrink.ts draws; the sizes and the types are worked out here.
+
+/** The quality a shrunk JPEG or WebP is encoded at. */
+export const SHRINK_QUALITY = 0.92
+
+/**
+ * What a picture is shrunk to: its longest side MAX_PICTURE_SIDE, the other in proportion, in its own type (a GIF, of
+ * which Claude reads one frame, as a PNG of its first). Null when it goes byte for byte as it is: within the side, or
+ * not a PNG, JPEG, GIF or WebP.
+ */
+export function shrinkPlan(p: { width: number; height: number; type: string }, max = MAX_PICTURE_SIDE): { width: number; height: number; type: string } | null {
+  const longest = Math.max(p.width, p.height)
+  if (!IMAGE_TYPES.includes(p.type) || longest <= max) return null
+  const scale = max / longest
+  return {
+    width: Math.max(1, Math.round(p.width * scale)),
+    height: Math.max(1, Math.round(p.height * scale)),
+    type: p.type === 'image/gif' ? 'image/png' : p.type
+  }
+}
+
+/** The type a shrunk picture is encoded again in when it is still over MAX_IMAGE_BYTES (a PNG as a JPEG); else null. */
+export function shrinkFallback(type: string, bytes: number): string | null {
+  return type === 'image/png' && bytes > MAX_IMAGE_BYTES ? 'image/jpeg' : null
+}
+
+/** A shrunk picture's name: a new type gets its extension ('shot.gif' as a PNG is 'shot.png'); a name it keeps stays. */
+export function shrunkName(name: string, from: string, to: string): string {
+  if (!name || from === to) return name
+  const dot = name.lastIndexOf('.')
+  return `${dot > 0 ? name.slice(0, dot) : name}.${to === 'image/jpeg' ? 'jpg' : to.slice('image/'.length)}`
 }
 
 /** Base64 payload of a data: URL (what ImageRef.dataBase64 carries). */

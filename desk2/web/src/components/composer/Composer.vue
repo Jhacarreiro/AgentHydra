@@ -46,6 +46,7 @@ import {
   slashQuery,
   splitModels,
   formatBytes,
+  IMAGE_TYPES,
   validateAttachment,
   validateImage,
   withFileLines,
@@ -64,6 +65,7 @@ import { holdFocus } from '@/lib/hold-focus'
 import { warmChat } from '@/lib/timing'
 import { isExternalChatId } from '@/components/external/logic'
 import { draftImages, draftImagesReady, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from './draft-images'
+import { readDataUrl, shrinkPicture, type ShrunkPicture } from './shrink'
 import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON } from './menu'
 import SendSplit from './SendSplit.vue'
 import SusMenu from './SusMenu.vue'
@@ -148,7 +150,9 @@ const text = ref('')
 const images = shallowRef<PendingImage[]>([])
 const files = shallowRef<PendingFile[]>([])
 const fileDrafts = new Map<string | null, PendingFile[]>()
-const uploading = computed(() => files.value.some((f) => !f.path))
+// Pictures still being shrunk (shrink.ts) hold the send as an upload does.
+const shrinking = ref(0)
+const uploading = computed(() => shrinking.value > 0 || files.value.some((f) => !f.path))
 const notice = ref<string | null>(null)
 const sending = ref(false)
 const dragging = ref(false)
@@ -695,14 +699,16 @@ function moveDraft(path: string) {
 
 // The viewer saved an annotated copy: right after its original when that is attached here, else (a picture from the
 // transcript) attached last. The original stays.
-function onAnnotated(ev: Event) {
+async function onAnnotated(ev: Event) {
   const copy = (ev as CustomEvent<Annotated>).detail
   if (copy.taken) return
-  const at = copy.afterId ? images.value.findIndex((i) => i.id === copy.afterId) : -1
-  if (copy.afterId && at < 0) return
+  if (copy.afterId && !images.value.some((i) => i.id === copy.afterId)) return
   copy.taken = true
   if (props.into) return showNotice(props.into.why)
-  const pic: PendingImage = { id: crypto.randomUUID(), name: copy.name, mediaType: copy.mediaType, dataBase64: dataUrlToBase64(copy.dataUrl), url: copy.dataUrl }
+  // Drawn at the full size of a picture from the transcript, which may be over the side: shrunk like any other.
+  const pic = await attachable(await shrink(dataUrlToFile(copy.dataUrl, copy.name)), copy.name).catch(() => null)
+  if (!pic) return showNotice(`Could not attach ${copy.name || 'the annotated picture'}.`)
+  const at = copy.afterId ? images.value.findIndex((i) => i.id === copy.afterId) : -1
   images.value = at >= 0 ? [...images.value.slice(0, at + 1), pic, ...images.value.slice(at + 1)] : [...images.value, pic]
 }
 // The tray's pictures then files, as one group the viewer steps through; a file's object URL lives until the viewer closes.
@@ -767,7 +773,7 @@ async function pullQueued(item: QueuedMessage) {
       // Typed into, or another chat opened, while the remove was out: the box keeps what is there and the
       // message goes back to the end of its chat's queue.
       putBack = true
-      const refs = pictures.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64, name: p.name }))
+      const refs = pictures.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64, name: p.name, ...originalOf(p) }))
       await shell.queueAdd?.({ kind: 'message', chatId: item.chatId, text: item.text, ...(refs.length ? { images: refs } : {}) })
       return
     }
@@ -794,7 +800,12 @@ async function pendingImage(img: ImageRef): Promise<PendingImage> {
       reader.readAsDataURL(blob)
     })
   }
-  return { id: crypto.randomUUID(), name: img.name ?? 'Image', mediaType: img.mediaType, dataBase64: dataUrlToBase64(url), url }
+  return { id: crypto.randomUUID(), name: img.name ?? 'Image', mediaType: img.mediaType, dataBase64: dataUrlToBase64(url), url, ...originalOf(img) }
+}
+
+/** The size a picture was shrunk from, as a sent ImageRef carries it. */
+function originalOf(img: { originalWidth?: number; originalHeight?: number }): Pick<ImageRef, 'originalWidth' | 'originalHeight'> {
+  return img.originalWidth && img.originalHeight ? { originalWidth: img.originalWidth, originalHeight: img.originalHeight } : {}
 }
 
 /** Arrow/Enter/Tab/Esc for an open list menu (slash or mention). True when the key was used. */
@@ -904,31 +915,40 @@ async function attachFile(file: File) {
   }
 }
 
-function addFiles(list: File[]) {
+/** shrinkPicture, counted in `shrinking` while it runs. */
+async function shrink(file: File): Promise<ShrunkPicture> {
+  shrinking.value++
+  try {
+    return await shrinkPicture(file)
+  } finally {
+    shrinking.value--
+  }
+}
+
+/** A shrunk picture as the box attaches it. */
+async function attachable(pic: ShrunkPicture, name: string): Promise<PendingImage> {
+  const url = await readDataUrl(pic.file)
+  return { id: crypto.randomUUID(), name: pic.file.name || name, mediaType: pic.file.type, dataBase64: dataUrlToBase64(url), url, ...originalOf(pic) }
+}
+
+async function addFiles(list: File[]) {
   if (props.into) return showNotice(props.into.why)
+  // One at a time, so the pictures keep the order they were given in.
   for (const file of list) {
-    // A PNG, JPEG, GIF or WebP up to 5 MB goes inline as a picture; anything else (a PDF, an email, a zip, a BMP or
-    // SVG, a bigger picture) is kept as a file the model opens by its path.
-    if (validateImage(file)) {
+    // A PNG, JPEG, GIF or WebP goes inline as a picture, shrunk to the side Claude takes first (shrink.ts), then held to
+    // 5 MB; anything else (a PDF, an email, a zip, a BMP or SVG) and a picture still over 5 MB is kept as a file the
+    // model opens by its path.
+    const pic = IMAGE_TYPES.includes(file.type) ? await shrink(file) : { file }
+    if (validateImage(pic.file)) {
       void attachFile(file)
       continue
     }
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      images.value = [
-        ...images.value,
-        {
-          id: crypto.randomUUID(),
-          name: file.name || 'Pasted image',
-          mediaType: file.type,
-          dataBase64: dataUrlToBase64(url),
-          url
-        }
-      ]
+    try {
+      const shown = await attachable(pic, 'Pasted image')
+      images.value = [...images.value, shown]
+    } catch {
+      showNotice(`Could not read ${file.name || 'the image'}.`)
     }
-    reader.onerror = () => showNotice(`Could not read ${file.name || 'the image'}.`)
-    reader.readAsDataURL(file)
   }
 }
 
@@ -936,7 +956,7 @@ function onPaste(e: ClipboardEvent) {
   // A message copied in Hydra Desk: its text pastes as usual, its pictures attach from the HTML
   const copied = parseCopiedImages(e.clipboardData?.getData('text/html') ?? '')
   if (copied.length) {
-    addFiles(copied.map((url, i) => dataUrlToFile(url, `Pasted image ${i + 1}`)))
+    void addFiles(copied.map((url, i) => dataUrlToFile(url, `Pasted image ${i + 1}`)))
     return
   }
   const pasted = Array.from(e.clipboardData?.items ?? [])
@@ -945,14 +965,14 @@ function onPaste(e: ClipboardEvent) {
     .filter((f): f is File => !!f)
   if (pasted.length) {
     e.preventDefault()
-    addFiles(pasted)
+    void addFiles(pasted)
   }
 }
 
 function onDrop(e: DragEvent) {
   dragging.value = false
   const files = Array.from(e.dataTransfer?.files ?? [])
-  if (files.length) addFiles(files)
+  if (files.length) void addFiles(files)
 }
 
 // Files dropped anywhere on the chat (the transcript too, `data-file-drop` in DeskFrame) attach here, not only on
@@ -985,7 +1005,7 @@ function onWindowDrop(e: DragEvent) {
 
 function onFilePicked(e: Event) {
   const input = e.target as HTMLInputElement
-  addFiles(Array.from(input.files ?? []))
+  void addFiles(Array.from(input.files ?? []))
   input.value = ''
 }
 
@@ -1154,7 +1174,7 @@ async function submit(ctrl = false) {
   sentAt = Date.now()
   const enqueue = sendDecision(ctrl) === 'enqueue'
   const body = withFileLines(text.value, files.value.map((f) => f.path ?? ''))
-  const refs: ImageRef[] = images.value.map((i) => ({ mediaType: i.mediaType, dataBase64: i.dataBase64, name: i.name }))
+  const refs: ImageRef[] = images.value.map((i) => ({ mediaType: i.mediaType, dataBase64: i.dataBase64, name: i.name, ...originalOf(i) }))
   const keptText = text.value
   const keptImages = images.value
   const keptFiles = files.value

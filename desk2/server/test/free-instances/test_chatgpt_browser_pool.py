@@ -409,5 +409,88 @@ class IdleExitTests(unittest.IsolatedAsyncioTestCase):
             browser.stop.assert_awaited_once()
 
 
+class WedgedBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_browser_that_stops_answering_mid_send_ends_the_send_and_retires_the_broker(self):
+        # 2026-10-17: the shared Chrome stopped answering mid-send. Its sends held every browser slot
+        # (minutes of browser_busy), their cleanup never returned, and the draining broker kept its
+        # Chrome and owner lock for hours, so every later ChatGPT send failed at 25 s.
+        from claudfree.chatgpt import browser_pool, browser_request
+
+        answering = True
+
+        async def never(*_args):
+            await asyncio.get_running_loop().create_future()
+
+        async def send(value):
+            if answering:
+                return value
+            await never()
+
+        chrome = Mock()
+        chrome.poll.return_value = None
+        tab = SimpleNamespace(target=SimpleNamespace(browser_context_id='wedged-context'), evaluate=never)
+        browser = SimpleNamespace(stopped=False, stop=never, _process=chrome,
+            connection=SimpleNamespace(send=send), _get_tab=AsyncMock(return_value=tab))
+        cdp = SimpleNamespace(
+            browser=SimpleNamespace(get_version=Mock(return_value='get-version')),
+            storage=SimpleNamespace(get_cookies=Mock(return_value='get-context-cookies')),
+            target=SimpleNamespace(create_browser_context=Mock(return_value='wedged-context'),
+                create_target=Mock(return_value='wedged-target'),
+                dispose_browser_context=Mock(return_value='dispose-context')))
+        zendriver = SimpleNamespace(start=AsyncMock(return_value=browser), cdp=cdp)
+
+        async def prepare(http, _prompt, _existing, *, browser_factory, **_options):
+            nonlocal answering
+            context = await browser_factory()
+            answering = False
+            try:
+                await context.tab.evaluate('document.title')  # a page command Chrome never answers
+            finally:
+                await browser_request._close_browser(http, context, True)
+
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            endpoint = directory / 'endpoint.json'
+            with patch.dict(sys.modules, {'zendriver': zendriver}), \
+                    patch.object(browser_request, '_prepare', prepare), \
+                    patch.object(browser_pool, 'CDP_SECONDS', .2), \
+                    patch.object(browser_pool, 'PROBE_SECONDS', .1), \
+                    patch.object(browser_pool, 'STOP_SECONDS', .2):
+                served = asyncio.create_task(serve(directory, 'fixture-version'))
+                for _ in range(200):
+                    if endpoint.exists() or served.done():
+                        break
+                    await asyncio.sleep(0.05)
+                info = json.loads(endpoint.read_text(encoding='utf-8'))
+                reader, writer = await asyncio.open_connection('127.0.0.1', info['port'])
+                writer.write((json.dumps({'op': 'send', 'token': info['token'], 'request_id': str(uuid4()),
+                    'cookies': [], 'email': 'example@example.test', 'headers': {}, 'timeout': 1,
+                    'prompt': 'Example prompt', 'model': 'gpt-4o-mini', 'existing': None,
+                    'temporary': True}) + '\n').encode())
+                await writer.drain()
+                try:
+                    frames = []
+                    while line := await asyncio.wait_for(reader.readline(), 15):
+                        frames.append(json.loads(line))
+                    await asyncio.wait_for(asyncio.shield(served), 15)
+                except TimeoutError:
+                    # Each cancel ends one unbounded wait: repeat, so a regression fails rather than hangs.
+                    for _ in range(10):
+                        if not (stuck := asyncio.all_tasks() - {asyncio.current_task()}):
+                            break
+                        for task in stuck:
+                            task.cancel()
+                        await asyncio.wait(stuck, timeout=.5)
+                    self.fail('A send on a browser that stopped answering never ended, so the broker never exited.')
+                finally:
+                    writer.close()
+            self.assertFalse(any(frame.get('ok') for frame in frames))
+            self.assertFalse(any(frame.get('cleanup_verified') for frame in frames))
+            self.assertFalse(endpoint.exists())
+            with chat_lock(directory, 'owner'):
+                pass
+            chrome.kill.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -27,7 +27,7 @@ import type {
 } from '@shared/protocol'
 import { createMediaCache, MAX_MEDIA_BYTES, type MediaCache, MEDIA_ROUTE } from '../media/cache'
 import { ChatBusyError, ChatError, type ChatManager, checkCwd, LIVE } from './chat-manager'
-import { type Json, obj, optBool, optString, parseCreate } from './chat-requests'
+import { type Json, obj, optBool, optString, originalSize, parseCreate } from './chat-requests'
 import { AsyncFile } from '../async-file'
 
 /** What the queue needs of the chat manager (tests fake it). */
@@ -619,7 +619,7 @@ export class QueueManager {
       if (img.dataBase64 !== undefined) {
         const ref = this.media.putBase64(img.dataBase64, img.name)
         if (!ref) throw new ChatError(400, `images[${i}] cannot be queued: a picture must be a PNG, JPEG, GIF or WebP of at most ${MAX_MEDIA_BYTES / 1024 / 1024} MB`)
-        return ref
+        return img.originalWidth && img.originalHeight ? { ...ref, originalWidth: img.originalWidth, originalHeight: img.originalHeight } : ref
       }
       if (img.url?.startsWith(MEDIA_ROUTE) && this.media.lookup(img.url.slice(MEDIA_ROUTE.length))) return { ...img }
       throw new ChatError(400, `images[${i}] needs dataBase64, or the ${MEDIA_ROUTE} url of a picture already queued`)
@@ -835,7 +835,7 @@ function optQueueImages(b: Json): ImageRef[] | undefined {
     if (!img || typeof img !== 'object') throw new ChatError(400, `images[${i}] must be an object`)
     const o = img as Json
     if (typeof o.mediaType !== 'string' || !IMAGE_TYPE.test(o.mediaType)) throw new ChatError(400, `images[${i}].mediaType must be image/png, image/jpeg, image/gif or image/webp`)
-    const ref: ImageRef = { mediaType: o.mediaType }
+    const ref: ImageRef = { mediaType: o.mediaType, ...originalSize(o) }
     if (typeof o.dataBase64 === 'string') ref.dataBase64 = o.dataBase64
     else if (typeof o.url === 'string') ref.url = o.url
     else throw new ChatError(400, `images[${i}] needs dataBase64 or url`)

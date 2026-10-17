@@ -65,7 +65,8 @@ import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, ST
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, SERVER_ERROR_TRIES, sleep } from './send-retry'
 import { mediaCache, toStoredImage } from '../media/cache'
-import { withNamedFiles } from './system-text'
+import { noteOf, standInShown, withNamedFiles } from './system-text'
+import { indexPictures, type PictureEngine } from '../media/picture-index'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
@@ -357,7 +358,7 @@ export class ChatManager {
         else if (item.status === 'running' && !isLongLived(item)) (e.bgTasks ??= new Set()).add(item.taskId)
       }
     }
-    return e.sent?.length ? [...items, ...e.sent.map((s) => withNamedFiles(s, mediaCache(this.store.home)))] : items
+    return e.sent?.length ? [...items, ...e.sent.map((s) => standInShown(s, mediaCache(this.store.home)))] : items
   }
 
   /** The messages waiting for another service's reply to end (waitForReply), shown queued after the rest. */
@@ -717,9 +718,16 @@ export class ChatManager {
     return accounts.map((a) => ((this.signInHeld.get(a.id) ?? 0) > now ? { ...a, signedIn: false } : a))
   }
 
+  /**
+   * Every message into a chat passes here (the window, the send queue, the API and peers, a message that waited for
+   * an old reply). Each picture it carries gets one row in the media cache's index once the message has gone where it
+   * runs (indexPictures); one that waits for an old reply gets its rows when it comes back here and goes.
+   */
   async send(id: string, text: string, images?: ImageRef[], opts: SendOptions = {}): Promise<{ queued: boolean }> {
     const e = this.entry(id)
     if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
+    // Named before it goes, so its index rows and its transcript item carry one id.
+    if (images?.length && !opts.messageId) opts = { ...opts, messageId: randomUUID() }
     e.lastAsk = text
     // A chat opened empty is named by its first message, as one opened with it is.
     if (!opts.noTitle && !e.titled && e.chat.title === NEW_TITLE && text.trim()) {
@@ -735,10 +743,21 @@ export class ChatManager {
     // Pinned to Codex or ChatGPT (Pin service): the turn runs there, whatever ran the chat before.
     if (e.chat.service) {
       if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
-      return this.pinnedOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+      const sent = this.pinnedOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+      this.indexPictures(e, text, images, opts, e.chat.service)
+      return sent
     }
     const lead = this.claudeHandoff(e)
-    if (e.chat.workerId !== undefined) return this.sendToWorker(e, lead ? `${lead.text}${ANSWER_NOW}${text}` : text, images, opts, text)
+    if (e.chat.workerId !== undefined) {
+      const sent = this.sendToWorker(e, lead ? `${lead.text}${ANSWER_NOW}${text}` : text, images, opts, text)
+      // Indexed once AgentHydra took it (or holds it to send again). A text-only send is handed back untouched: a
+      // step more before its caller goes on lets a worker sync started meanwhile read the worker's old folder first.
+      if (!images?.length) return sent
+      return sent.then((r) => {
+        this.indexPictures(e, text, images, opts, 'worker')
+        return r
+      })
+    }
     // Awaited only when there is something to wait for: a new chat's first send starts its process at once.
     if (e.moving) await this.awaitMove(e, id)
     // Sent again by hand while the move was sending it already (the owner saw the limit line): once is enough.
@@ -751,11 +770,34 @@ export class ChatManager {
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
     e.moved = undefined // a new message starts its own tries
     this.timings.sdkSent(e.chat, e.runtime?.running === true)
-    if (sdk) return this.runtimeOf(e).send(sdk.text, sdk.images, opts.messageId, text)
-    if (!lead) return this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
-    const sent = this.runtimeOf(e).send(`${lead.text}${ANSWER_NOW}${text}`, images?.length ? images : undefined, opts.messageId, text)
-    this.systemLine(id, 'caught-up', 'info', `Caught up on what was said on ${lead.from}.`)
+    let sent: { queued: boolean }
+    if (sdk) sent = this.runtimeOf(e).send(sdk.text, sdk.images, opts.messageId, text)
+    else if (!lead) sent = this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+    else {
+      sent = this.runtimeOf(e).send(`${lead.text}${ANSWER_NOW}${text}`, images?.length ? images : undefined, opts.messageId, text)
+      this.systemLine(id, 'caught-up', 'info', `Caught up on what was said on ${lead.from}.`)
+    }
+    this.indexPictures(e, text, images, opts, 'claude')
     return sent
+  }
+
+  /** The index rows of a message's pictures (media/picture-index.ts): never a reason for the send to fail. */
+  private indexPictures(e: Entry, text: string, images: ImageRef[] | undefined, opts: SendOptions, engine: PictureEngine): void {
+    if (!images?.length) return
+    const chat = e.chat
+    // A pinned chat's account and session are its thread on that service, once it has one.
+    const thread = chat.service ? chat.serviceThreads?.[chat.service] : undefined
+    const pinned = engine === 'codex' || engine === 'chatgpt' || engine === 'service'
+    indexPictures(images, mediaCache(this.store.home), {
+      account: pinned ? (thread?.label ?? null) : chat.account.label,
+      accountId: pinned ? (thread?.accountId ?? null) : chat.account.id,
+      workspace: chat.cwd,
+      chatId: chat.id,
+      sessionId: (pinned ? thread?.threadId : chat.sessionId) ?? null,
+      messageId: opts.messageId ?? null,
+      sender: noteOf(text)?.from ?? 'owner',
+      engine,
+    }, this.now())
   }
 
   /** Back on Claude after its pin moved it elsewhere: the message first carries what was said there. A worker's
@@ -887,7 +929,7 @@ export class ChatManager {
     const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued || chat.waiting ? { queued: true } : {}) }
     ;(e.sent ??= []).push(standIn)
     this.store.saveChats(this.stored())
-    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
+    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standInShown(standIn, mediaCache(this.store.home)) })
     if (behind) {
       this.holdForRetry(e, standIn, text, false)
       return { queued: true }
@@ -956,7 +998,7 @@ export class ChatManager {
     if (i >= 0 && !standIn.queued) {
       const held: UserItem = { ...standIn, queued: true }
       e.sent![i] = held
-      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: withNamedFiles(held, mediaCache(this.store.home)) })
+      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(held, mediaCache(this.store.home)) })
     }
     this.store.saveChats(this.stored())
     if (first) this.systemLine(e.chat.id, 'send-retry', 'info', 'AgentHydra did not answer in time, so this message is kept and sent again shortly. It is never sent twice.')
@@ -1284,7 +1326,7 @@ export class ChatManager {
     const { queued: _q, ...sent } = standIn!
     e.sent![i] = sent
     this.store.saveChats(this.stored())
-    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
+    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(sent, mediaCache(this.store.home)) })
   }
 
   async interrupt(id: string): Promise<void> {
@@ -2335,7 +2377,7 @@ export class ChatManager {
       return { ...s, queued: true }
     })
     this.store.saveChats(this.stored())
-    for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item })
+    for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(item, mediaCache(this.store.home)) })
   }
 
   /** A failed worker never reached the messages still held for it: they are dropped and the chat says so. One the chat

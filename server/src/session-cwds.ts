@@ -54,7 +54,7 @@ const HEAD_STEPS = [16 * 1024, 256 * 1024, 2 * 1024 * 1024]
 /** A file this old that names no cwd never will: it is marked so it is not read again. */
 const SETTLED_MS = 60 * 60_000
 /** A rollout file, or a packed one (`<zip>!rollout-...jsonl`). */
-const ROLLOUT = /(^|[\\/!])rollout-[^\\/]*\.jsonl$/
+export const ROLLOUT = /(^|[\\/!])rollout-[^\\/]*\.jsonl$/
 const PAGE = 2000
 const WRITE_BATCH = 200
 
@@ -188,7 +188,7 @@ function seenKeys(source: string): Set<string> {
 
 /** Every row of `sql` (which takes the last rowid and selects `rowid as r` in rowid order), a page at a
  *  time with a turn handed back between pages. */
-async function* pages<T extends { r: number }>(h: Database, sql: string): AsyncGenerator<T> {
+export async function* pages<T extends { r: number }>(h: Database, sql: string): AsyncGenerator<T> {
   const q = h.query<T, [number, number]>(`${sql} limit ?`)
   for (let last = 0; ; ) {
     const rows = q.all(last, PAGE)

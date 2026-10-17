@@ -175,7 +175,17 @@ export interface ImageRef {
   bytes?: number // file size, for the file card ("PNG, live.png, 67.2KB")
   /** The local file this ref was made from (absolute), so the window can offer "Open in Explorer"; absent for a pasted or generated picture. */
   path?: string
+  /** The picture's size in pixels before the window shrank it to MAX_PICTURE_SIDE; absent when it went as it was. */
+  originalWidth?: number
+  originalHeight?: number
 }
+
+/**
+ * The longest side, in pixels, of a picture a Claude chat is sent inline. Claude's API refuses a request holding more
+ * than 20 pictures when any one is bigger, and Claude Code then fails that chat on every later turn: the window shrinks
+ * every picture it attaches to this, and the server sends a bigger one to a Claude chat as its file path only.
+ */
+export const MAX_PICTURE_SIDE = 2000
 
 export interface ToolResult {
   text: string // the result as text (images described as "[image]"), cut to MAX_TOOL_RESULT_CHARS
@@ -230,7 +240,7 @@ export type TranscriptItem =
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean; sendFailed?: string })
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble.
    * advisor: the Urgency Advisor's nudge sent on the owner's behalf (`from` is its name): drawn as an orange bubble on the owner's side. */
-  | (ItemBase & { kind: 'note'; from: string; text: string; advisor?: true })
+  | (ItemBase & { kind: 'note'; from: string; text: string; advisor?: true; queued?: boolean }) // queued: an advisor's message still waiting for the chat
   /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest).
    * media: pictures and videos the finished reply only names (a path in backticks, prose or a link), shown under it; the text is unchanged. */
   | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string; media?: ImageRef[] })

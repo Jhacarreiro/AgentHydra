@@ -82,6 +82,12 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   the 294px its buttons need: over a narrower sidebar it reaches past the edge, as it does while the sidebar is hidden,
   and the chat's title bar starts after it; the drag handle then starts below the bar. In the footer, the account's
   name stays whole before its "· 41 accounts" does (`web/src/components/sidebar/width.ts`).
+- **On a phone-wide window the sidebar is a drawer over the chat** (2026-10-17). Under 600px (Material 3's compact
+  width) the chat takes the whole window and the sidebar opens over it from its toggle, beside a scrim, as M3's modal
+  navigation drawer does; picking anything, tapping the scrim or Esc shuts it, and it starts shut every time the window
+  turns narrow. The session rail lies over the chat there too, shut until its button asks for it and again once a chat is
+  picked. Neither touches the open or shut state a wide window remembers (`COMPACT_WIDTH` in `sidebar/width.ts`, `narrow`
+  in `shell/DeskFrame.vue`).
 - **A compact sidebar, and project icons in the cloud list** (owner, 2026-10-10). The chrome bar's Compact sidebar
   button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
   headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its
@@ -727,7 +733,8 @@ optionally one per range of Today, 7 days and 30 days), and keeps every source's
 that is down still shows its last numbers, marked late (`server/src/project-dashboard/`, `GET /api/project-dashboard`,
 `GET /api/project-dashboards`, `POST /api/project-dashboard/refresh`). The page draws it in the window's own kit
 (`web/src/components/dashboard/template/`); Project Hydra draws the same answer. No agent, port or localhost site is
-involved, so it works for anyone whose data source answers the feed.
+involved, so it works for anyone whose data source answers the feed. A checkout with a spec gets the same entry points as
+a site (the dashboard icon beside its New session +, a project tile's "Open dashboard"), with no site written.
 
 A project with no spec keeps the older kind: a small static website per project, which its chats write. A chat builds it with
 `dashboard_write` on the agenthydra MCP (any HTML, CSS, JavaScript or data), and the daemon hosts it at
@@ -1061,10 +1068,17 @@ held continuously through both phases and final cookie/registry persistence. Bro
 keeps its original 120-second anchor, and one 300-second outer deadline spans the entire request.
 The managed `pythonw.exe` launcher and native process jobs contain phase cancellation and crashes.
 Cancellation waits for the broker's context-disposal receipt before releasing account ownership;
-unconfirmed cleanup quarantines that account and drains the coordinator. No send is replayed after
-a coordinator write attempt. Before dispatch, an unavailable coordinator uses the existing path.
-The idle coordinator exits after 60 seconds, except when it must retain an unconfirmed cleanup lease
-for review. Standalone CLI requests and other commands stay unchanged.
+unconfirmed cleanup quarantines only that account, and the coordinator keeps serving every other
+account. No send is replayed after a coordinator write attempt. Before dispatch, an unavailable
+coordinator uses the existing path. The idle coordinator exits after 60 seconds, held accounts
+included: its exit ends any unconfirmed phase (the owner job) and frees them. Standalone CLI requests
+and other commands stay unchanged.
+
+The browser broker bounds every command it sends Chrome (10 seconds) and, while sends are in flight,
+checks every 15 seconds that Chrome still answers. A Chrome that does not ends those sends as
+unconfirmed (never resent) and retires the broker; its exit stops Chrome, killing it after 15
+seconds, so the next send starts a fresh one. On 2026-10-17 a wedged Chrome held every browser slot
+for minutes, then kept the broker and coordinator draining for hours.
 
 AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
 timer releases finished batches even when no later tool call arrives; pending work remains

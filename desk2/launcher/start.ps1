@@ -174,11 +174,55 @@ function Find-Bun {
     Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } | Select-Object -First 1
 }
 
+# The server runs under a name of its own, AgentHydra-desk.exe: a copy of the bun found above, in <desk home>\bin.
+# Chats stop their own dev servers with `taskkill /F /IM bun.exe` or `Stop-Process -Name bun`, and that is fine for
+# them; it also ended this server, which nothing revives (2026-10-17: down 48 minutes after a Ticket Tool chat's
+# kill). Its chat hosts start from the server's own executable, so they keep the name too. Beside the copy,
+# AgentHydra-desk.exe.source.json names the bun it came from and that file's size and time: a changed bun is copied
+# again, and the server reads it to put the real bun's folder on its dev servers' PATH (devservers/spawn-plan.ts).
+# A copy still running (a chat host) cannot be overwritten but can be renamed aside. Any failure keeps bun.exe.
+function Use-OwnName($bun) {
+  if ($DryRun -or -not $bun -or [IO.Path]::GetExtension([string]$bun.Source) -ne '.exe') { return $bun }
+  $dir = Join-Path $DeskHome 'bin'
+  $exe = Join-Path $dir 'AgentHydra-desk.exe'
+  $stampFile = "$exe.source.json"
+  $tmp = $null
+  try {
+    $src = Get-Item -LiteralPath $bun.Source -ErrorAction Stop
+    $mtime = [DateTimeOffset]::new($src.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+    $stamp = $null
+    if (Test-Path -LiteralPath $stampFile) { try { $stamp = Get-Content -Raw -LiteralPath $stampFile | ConvertFrom-Json } catch { } }
+    $current = $stamp -and $stamp.source -eq $src.FullName -and [long]$stamp.size -eq $src.Length -and
+      [long]$stamp.mtimeMs -eq $mtime -and (Test-Path -LiteralPath $exe) -and (Get-Item -LiteralPath $exe).Length -eq $src.Length
+    if (-not $current) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+      $tmp = "$exe.$PID.tmp"
+      Copy-Item -LiteralPath $src.FullName -Destination $tmp -Force -ErrorAction Stop
+      if (Test-Path -LiteralPath $exe) {
+        try { Remove-Item -LiteralPath $exe -Force -ErrorAction Stop }
+        catch { Rename-Item -LiteralPath $exe -NewName ('AgentHydra-desk.exe.{0}.old' -f [DateTime]::UtcNow.Ticks) -ErrorAction Stop }
+      }
+      Rename-Item -LiteralPath $tmp -NewName 'AgentHydra-desk.exe' -ErrorAction Stop
+      $json = @{ source = $src.FullName; size = $src.Length; mtimeMs = $mtime } | ConvertTo-Json -Compress
+      [IO.File]::WriteAllText($stampFile, $json)
+      Get-ChildItem -LiteralPath $dir -Filter 'AgentHydra-desk.exe.*.old' -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+      Say "made $exe from $($src.FullName)"
+    }
+    return @{ Source = $exe; Extension = '.exe' }
+  } catch {
+    if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    Say "the server keeps the name bun.exe: $exe could not be made ($($_.Exception.Message))"
+    return $bun
+  }
+}
+
 function Start-Server {
   $bun = Find-Bun
   if (-not $bun) {
     Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again."
   }
+  $bun = Use-OwnName $bun
   $entry = Join-Path $DeskRoot 'server\src\index.ts'
   if (-not (Test-Path $entry)) { Fail "AgentHydra could not start: $entry is missing." }
 
@@ -236,7 +280,7 @@ function Save-ServerPid($started) {
   $server = $null
   for ($i = 0; $i -lt 30 -and -not $server; $i++) {
     $server = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($info.wrapperPid)" -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -like 'bun*' } | Select-Object -First 1
+      Where-Object { $_.Name -like 'bun*' -or $_.Name -eq 'AgentHydra-desk.exe' } | Select-Object -First 1
     if (-not $server) { Start-Sleep -Milliseconds 100 }
   }
   if (-not $server) { return }

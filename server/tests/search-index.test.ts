@@ -300,6 +300,35 @@ describe('refresh and query', () => {
     // Thirteen refreshes of 12 bodies: 6.4 s on the GitHub Windows runner (2026-10-04), past bun's 5 s.
   }, 30_000)
 
+  // 1,197 HSwarm jobs sat in the owner's index as empty rows counted as covered (2026-10-17): sessions it
+  // claimed and could never match. The search reads such a store itself, so the index must not claim it.
+  test('a store the index cannot read is never recorded as covered', async () => {
+    const path = join(dir, 'job.json')
+    writeFileSync(path, JSON.stringify({ tasks: [{ prompt: 'the walrus ledger' }] }))
+    const st = statSync(path)
+    const job: IndexableFile = {
+      session_id: 'job-1',
+      source: 'zswarm',
+      path,
+      mtime_ms: st.mtimeMs,
+      size_bytes: st.size,
+    }
+    expect((await refreshSearchIndex([job])).indexed).toBe(0)
+    expect(searchIndexCoverage([job])).toEqual({ covered: 0, stale: 1 })
+  })
+
+  // A pass handed a list that lost most of the store (an account registry refused as corrupt lists no
+  // CLI accounts at all) must not drop them: bringing them back is a re-read of every transcript.
+  test('a pass whose list lost most of the index keeps those sessions', async () => {
+    const files = Array.from({ length: 210 }, (_, i) =>
+      session(`m${i}`, [turn('user', `mass${i}`)]),
+    )
+    await refreshSearchIndex(files)
+    expect((await refreshSearchIndex(files.slice(0, 5))).removed).toBe(0)
+    expect(candidateKeys('mass200')).toEqual(new Set([claudeKey('m200')]))
+    expect((await refreshSearchIndex(files.slice(0, 200))).removed).toBe(10) // an ordinary drop
+  }, 30_000)
+
   test('coverage reports what is current, so a stale index can stand aside', async () => {
     const a = session('a', [turn('user', 'hello')])
     const b = session('b', [turn('user', 'world')])

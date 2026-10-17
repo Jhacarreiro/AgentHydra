@@ -700,11 +700,20 @@ session): exactly like the reference: a strip above the box with folder name and
 "Type / for commands", Enter sends, Shift+Enter new line, auto-grows to 40% of the window; inside on the
 right a send arrow, which becomes a stop button (circle with a square) while the chat is working and
 the box is empty. Below the box: `+` (attach files or pictures; paste works too, and a file dropped anywhere on
-the chat, its transcript included, attaches to the box). A PNG, JPEG, GIF or WebP up to 5 MB goes inline as a
-picture (a thumbnail); any other file (a PDF, a note, an email, a zip, a bigger or other picture, up to 100 MB) is
+the chat, its transcript included, attaches to the box). A PNG, JPEG, GIF or WebP is first shrunk in the window to
+at most 2000 px on its longest side (`web/src/components/composer/shrink.ts`, `MAX_PICTURE_SIDE`: Claude's API refuses
+a request holding more than 20 pictures when any is bigger, and Claude Code then fails that chat on every later turn;
+a big GIF becomes a PNG of its first frame, a shrunk PNG still over 5 MB a JPEG; one within the side goes byte for
+byte), and then, up to 5 MB, goes inline as a picture (a thumbnail); any other file (a PDF, a note, an email, a zip, a
+bigger or other picture, up to 100 MB) is
 uploaded to `POST /api/attachments`, kept under `<home>/attachments/<hash>/<name>`, shown as a chip, and sent as a
 line `[File: source: <path>]` the model opens with Read (that folder is in the chat's additionalDirectories); the
-transcript shows each such line as a file card. Then
+transcript shows each such line as a file card. A Claude chat's model also gets each picture's
+`[Image: source: <media cache path>]` line beside its inline block, so it can hand the picture to a helper; a picture
+over 2000 px (from any sender), and every picture of a message holding 10 or more, goes as that line only, with a note
+saying so (`server/src/engine/input-queue.ts`). The transcript shows each picture once and none of those lines, live and
+read back. Every send writes one row per picture to `<home>/media/index.jsonl` (`server/src/media/picture-index.ts`).
+Then
 the permission mode menu (Ask permissions / Accept edits / Plan mode / Bypass permissions), and on the
 right the model menu (from `/api/models`), the effort menu, and a small context ring (contextPct). Typing
 `/` opens the slash command menu (from `/api/chats/:id/commands`). Ctrl+Enter queues the message instead of
@@ -1031,6 +1040,13 @@ from disk on every request, and an open window looks for a new build on every he
 when it comes back into view, then reloads onto it at once when out of sight, else once it has not been
 touched for 30 s, back on the chat or screen it showed (`web/src/lib/stale-bundle.ts`, `view-memory.ts`;
 drafts are saved as they are typed).
+
+**A server that dies comes back (2026-10-17).** The server runs as `~/.hydra-desk-2/bin/AgentHydra-desk.exe`, a copy
+of bun `start.ps1` keeps current, so a chat's `taskkill /IM bun.exe` passes it by. Every deliberate stop removes
+`server.pid` (stop.ps1, so Quit, Restart to update and the updater), so a pid file whose processes are gone means the
+server died: AgentHydra's daemon (`server/src/desk2-watch.ts`, Windows) then runs `start.ps1 -NoWindow -NoDialog`,
+once health has been silent 45 s, for its own `desk2/` and a server started since this boot, at most 3 times in 10
+minutes. A server whose process still runs (busy or booting) is never touched.
 
 **Restart to update.** The server's code is not reloaded the same way, so the window asks
 `GET /api/server/update` on every hello and every minute (`server/src/plugins/60-update.ts`,

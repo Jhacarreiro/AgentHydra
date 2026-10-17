@@ -21,6 +21,9 @@ import {
   modelTriggerLabel,
   prAsk,
   saveDraft,
+  shrinkFallback,
+  shrinkPlan,
+  shrunkName,
   slashQuery,
   validateAttachment,
   validateImage,
@@ -132,6 +135,34 @@ describe('images', () => {
 
   it('strips the data URL prefix', () => {
     expect(dataUrlToBase64('data:image/png;base64,QUJD')).toBe('QUJD')
+  })
+})
+
+describe('shrinking pictures', () => {
+  it('brings the longest side to 2000 px with the other in proportion, in the same type', () => {
+    expect(shrinkPlan({ width: 3840, height: 2160, type: 'image/png' })).toEqual({ width: 2000, height: 1125, type: 'image/png' })
+    expect(shrinkPlan({ width: 1500, height: 4500, type: 'image/jpeg' })).toEqual({ width: 667, height: 2000, type: 'image/jpeg' })
+    expect(shrinkPlan({ width: 6000, height: 2, type: 'image/webp' })).toEqual({ width: 2000, height: 1, type: 'image/webp' })
+  })
+
+  it('leaves a picture within 2000 px as it is (sent byte for byte), and anything that is no picture', () => {
+    expect(shrinkPlan({ width: 2000, height: 2000, type: 'image/png' })).toBeNull()
+    expect(shrinkPlan({ width: 1920, height: 1080, type: 'image/gif' })).toBeNull()
+    expect(shrinkPlan({ width: 5000, height: 5000, type: 'image/bmp' })).toBeNull()
+  })
+
+  it('makes a big GIF a PNG of its first frame, named for it', () => {
+    expect(shrinkPlan({ width: 2400, height: 1200, type: 'image/gif' })).toEqual({ width: 2000, height: 1000, type: 'image/png' })
+    expect(shrunkName('demo.gif', 'image/gif', 'image/png')).toBe('demo.png')
+    expect(shrunkName('shot.png', 'image/png', 'image/png')).toBe('shot.png')
+    expect(shrunkName('Pasted image', 'image/png', 'image/jpeg')).toBe('Pasted image.jpg')
+    expect(shrunkName('', 'image/png', 'image/jpeg')).toBe('')
+  })
+
+  it('encodes a shrunk PNG still over 5 MB again as a JPEG, and nothing else', () => {
+    expect(shrinkFallback('image/png', MAX_IMAGE_BYTES + 1)).toBe('image/jpeg')
+    expect(shrinkFallback('image/png', MAX_IMAGE_BYTES)).toBeNull()
+    expect(shrinkFallback('image/jpeg', MAX_IMAGE_BYTES * 2)).toBeNull()
   })
 })
 

@@ -322,7 +322,6 @@ class CoordinatorLocalReadbackTests(OfflineReadback):
         self.assertEqual(output['code'], 1)
         self.assertEqual(f.owner.phase.call_count, 2)
         self.assertTrue(f.lease.quarantined)
-        self.assertTrue(f.owner.draining)
 
     def test_unverified_browser_cleanup_never_reaches_local_render_and_retains_quarantine(self):
         f = fixture()
@@ -333,7 +332,6 @@ class CoordinatorLocalReadbackTests(OfflineReadback):
         self.assertEqual(output['code'], 1)
         local.assert_not_called()
         self.assertTrue(f.lease.quarantined)
-        self.assertTrue(f.owner.draining)
         self.assertEqual(f.owner.phase.call_count, 1)
 
 

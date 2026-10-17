@@ -5,7 +5,7 @@
 // session's .jsonl, AgentHydra's tail).
 
 import { CONTINUED_LINE, type ImageRef, type TranscriptItem } from '@shared/protocol'
-import type { MediaCache } from '../media/cache'
+import { MEDIA_ROUTE, type MediaCache } from '../media/cache'
 import { ANSWER_NOW, PIN_INTRO } from './handoff'
 
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
@@ -238,6 +238,26 @@ const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/
 const URGENT = /^\s*AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator\.[^\n]*\n\n/
 /** A picture named by its file, the form Claude Code (and a Desk worker's message) uses; a File line names any other file. */
 const NAMED_LINE = /^[ \t]*\[(Image|File): source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
+/** A path in the media cache, by its file name: the cache names each picture by the hash of its bytes. */
+const CACHED_PICTURE = /[\\/]([0-9a-f]{64}\.(?:png|jpg|gif|webp))$/
+/** filesOnlyNote's line, either form. */
+const FILES_ONLY_NOTE = /^[ \t]*\((?:The (?:\d+ )?pictures? above (?:is|are) saved as files?, not shown inline|Not shown inline, too big): [^\n]*\)[ \t]*(?:\r?\n|$)/gm
+
+/** The line that names a picture by its file: the form Claude Code uses, so the model opens it with Read (and can hand
+ *  the path to a helper, which reads only text). */
+export function pictureLine(path: string): string {
+  return `[Image: source: ${path}]`
+}
+
+/**
+ * What a Claude chat is told when pictures of a message go as their files only: `all` of them (a big batch, or every
+ * one too big to go inline), or the named ones too big. Read back, the transcript drops it with the lines.
+ */
+export function filesOnlyNote(files: readonly string[], all: boolean): string {
+  if (all && files.length === 1) return '(The picture above is saved as a file, not shown inline: open it with Read when you need to see it, or hand its path to a helper.)'
+  if (all) return `(The ${files.length} pictures above are saved as files, not shown inline: open each with Read when you need to see it, or hand the paths to helpers.)`
+  return `(Not shown inline, too big: ${files.join(', ')}. Open ${files.length === 1 ? 'it' : 'each'} with Read when you need to see it, or hand its path to a helper.)`
+}
 
 /** Who sent a note and what it says; null when the text is the person's. */
 export function noteOf(text: string): { from: string; text: string; advisor?: true } | null {
@@ -375,10 +395,32 @@ function personTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): U
   const item = preface ? { ...raw, text: raw.text.replace(preface, '') } : raw
   const note = noteOf(item.text)
   if (note) {
-    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
-    return { ...rest, kind: 'note', from: note.from, text: note.text, ...(note.advisor && { advisor: true as const }) }
+    const { kind: _k, text: _t, images: _i, queued, ...rest } = item
+    // The advisor's message waiting behind a running turn keeps its queued state: his bubble, not the owner's.
+    return { ...rest, kind: 'note', from: note.from, text: note.text, ...(note.advisor && { advisor: true as const, ...(queued && { queued: true }) }) }
   }
   return withNamedFiles(item, media)
+}
+
+/**
+ * A CliMayte chat's stand-in as the transcript shows it: the Urgency Advisor's is his queued bubble (a note), never
+ * the owner's plain one; any other is the owner's bubble, as typed. Its id stays the stand-in's, so the drop finds it.
+ */
+export function standInShown(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+  const note = noteOf(item.text)
+  if (!note?.advisor) return withNamedFiles(item, media)
+  const { kind: _k, text: _t, images: _i, queued, sendFailed: _f, ...rest } = item
+  return { ...rest, kind: 'note', from: note.from, text: note.text, advisor: true, ...(queued && { queued: true }) }
+}
+
+/** The stand-in a worker's copy of the Urgency Advisor's message replaces (matched by its words); -1 when none. */
+export function advisorStandInFor(sent: UserItem[], real: NoteItem): number {
+  if (!real.advisor) return -1
+  const said = real.text.replace(/\s+/g, ' ').trim()
+  return sent.findIndex((s) => {
+    const n = noteOf(s.text)
+    return !!n?.advisor && !!said && n.text.replace(/\s+/g, ' ').trim() === said
+  })
 }
 
 /**
@@ -403,17 +445,24 @@ function continuedChatTurns(raw: UserItem, c: NonNullable<ReturnType<typeof cont
 /**
  * The item with each `[Image: source: <path>]` line shown as its picture and each `[File: source: <path>]` line as a
  * file card, both in its images. A line naming a missing file stays as text, and an Image line naming a non-picture too.
+ * A Claude chat's message carries a line beside each picture it holds inline (input-queue.ts): that picture shows once,
+ * and the note on pictures sent as files only does not show.
  */
 export function withNamedFiles<T extends UserItem>(item: T, media: Pick<MediaCache, 'fileRef'> | null): T {
   if (!media || !/\[(?:Image|File): source: /.test(item.text)) return item
   const images: ImageRef[] = [...(item.images ?? [])]
-  const text = item.text.replace(NAMED_LINE, (line, kind: string, path: string) => {
-    const ref = media.fileRef(path.trim())
-    if (!ref || (kind === 'Image' && (!ref.url || !/^(image|video)\//.test(ref.mediaType)))) return line
-    const key = ref.url ?? ref.path
-    if (!images.some((i) => (i.url ?? i.path) === key)) images.push(ref)
-    return ''
-  })
+  const text = item.text
+    .replace(NAMED_LINE, (line, kind: string, path: string) => {
+      // The cached file of a picture the message holds already: no read, and no line left if the file is gone.
+      const cached = kind === 'Image' ? CACHED_PICTURE.exec(path.trim())?.[1] : undefined
+      if (cached && images.some((i) => i.url === MEDIA_ROUTE + cached)) return ''
+      const ref = media.fileRef(path.trim())
+      if (!ref || (kind === 'Image' && (!ref.url || !/^(image|video)\//.test(ref.mediaType)))) return line
+      const key = ref.url ?? ref.path
+      if (!images.some((i) => (i.url ?? i.path) === key)) images.push(ref)
+      return ''
+    })
+    .replace(FILES_ONLY_NOTE, '')
   if (images.length === (item.images?.length ?? 0) && text === item.text) return item
   return { ...item, text: text.trim(), ...(images.length ? { images } : {}) }
 }

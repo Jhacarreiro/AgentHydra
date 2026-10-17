@@ -1,6 +1,6 @@
 // server/tests/toolbox-calls.test.ts: a restart never cuts a chat move's call into the daemon.
 //
-// A move runs on through a restart (orchestrator.ts movesChats), but its steps are calls into the
+// A move runs on through a restart (orchestrator.ts outlivesDaemon), but its steps are calls into the
 // daemon, and an exit cuts whatever it is serving. A relaunch parks the move's calls first: a new one
 // is turned away unrun (hydralib sends it again, to the next daemon), and one already inside a route
 // is waited for.

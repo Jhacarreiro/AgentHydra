@@ -14,6 +14,7 @@ import type { FailureInput, FailureLedger } from './failures'
 import type { Timings } from './timings'
 import { CLIMAYTE_ACCOUNT, type Entry, type ManagerBridge, TURN_WATCH_MS, type UserItem, WORKER_END_GRACE_MS } from './chat-manager-types'
 import { accountName, isFolder, sameFolder, signature, standInFor } from './chat-manager-helpers'
+import { advisorStandInFor } from './system-text'
 
 /** What the worker sync reads and calls on ChatManager: its fields, and the members of the manager it applies to. */
 export interface WorkersHost {
@@ -244,6 +245,13 @@ export class WorkerSync {
     const unchanged = items === e.workerSeen
     e.workerSeen = items
     for (const item of unchanged ? [] : items) {
+      // The Urgency Advisor's message comes back as his note, not a user turn: without this its stand-in stayed
+      // "Queued" after the worker had it, and read "Not delivered" when the worker ended (2026-10-17). Checked before
+      // the already-shown skip, so a stand-in kept across a restart goes too.
+      if (item.kind === 'note' && item.advisor && e.sent?.length) {
+        const i = advisorStandInFor(e.sent, item)
+        if (i >= 0) this.host.dropStandIn(e, e.sent[i]!)
+      }
       const sig = signature(item)
       if (emitted.get(item.id) === sig) continue
       // The ended session's JSONL still says 'running' or answers its old notice: the settled item stays.

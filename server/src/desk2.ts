@@ -125,10 +125,15 @@ async function httpShutdown(url: string): Promise<void> {
   }
 }
 
-/** Starts a plan the way the launcher scripts need: hidden, outside this process's job, output to the log. */
-async function runPlan(
+/** Starts a plan the way the launcher scripts need: hidden, outside this process's job, output to the log.
+ *  Never detached on Windows: there Bun's detached start (no console) gives PowerShell a pid and it runs nothing.
+ *  Measured 2026-10-17: `powershell -Command Set-Content ...` wrote its file non-detached and never detached, with
+ *  or without -WindowStyle Hidden, windowsHide or -NonInteractive; so desk2.start() had started nothing on Windows.
+ *  start.ps1 puts the server outside this process's tree itself (WMI), as desk2's host/launch.ts does. */
+export async function runPlan(
   plan: StartPlan,
   wait: boolean,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<{ pid?: number; code?: number | null }> {
   let fd: number | null = null
   if (plan.logPath) {
@@ -139,7 +144,7 @@ async function runPlan(
     const child = spawn(plan.command, plan.args, {
       cwd: plan.cwd,
       env: plan.env,
-      detached: !wait,
+      detached: !wait && platform !== 'win32',
       windowsHide: true,
       stdio: fd === null ? 'ignore' : ['ignore', fd, fd],
     })
@@ -556,6 +561,9 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
     url,
     port,
     bun,
+    /** desk2/ beside this daemon, and Desk 2's data folder (~/.hydra-desk-2): what desk2-watch.ts reads. */
+    dir: deskDir,
+    home,
     logPath,
     healthy,
     forgetHealth,

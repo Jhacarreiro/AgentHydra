@@ -543,7 +543,8 @@ ${slot}` : ''}${rules}` }
       title: () => this.chat.title,
       accountLabel: () => (this.ranAs ?? this.chat.account).label,
     })
-    this.input = new InputQueue()
+    // Pictures are saved in the media cache and named by their path lines too (input-queue.ts buildUserMessage).
+    this.input = new InputQueue(mediaCache(this.store.home))
     this.dispatch({ type: 'runtimeStarting' })
     if (!attach) this.publishChat()
     // A host that kept the chat running already has its process: nothing to fetch.
@@ -826,7 +827,8 @@ ${slot}` : ''}${rules}` }
     this.unanswered.push({ text, images, uuid: msg.uuid })
     this.dispatch({ type: 'userSent', now: this.now() })
     const item: UserItem = { kind: 'user', id: msg.uuid ?? randomUUID(), ts: this.now(), text: shown ?? text }
-    // The SDK gets the bytes; the transcript (and so /ws and the history file) gets the cached url.
+    // The SDK gets the bytes and each picture's path line; the transcript (and so /ws and the history file) gets the
+    // cached url and the text as typed, so each picture shows once.
     if (images?.length) item.images = images.map((i) => toStoredImage(i))
     if (busy) {
       item.queued = true

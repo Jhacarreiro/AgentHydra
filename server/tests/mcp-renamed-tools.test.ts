@@ -29,12 +29,15 @@ test('an old tool name is answered by the renamed tool and listed only once', as
   expect(list.result?.tools?.map((t) => t.name)).toEqual(['climayte_send'])
 })
 
-// 2026-10-16: the price checker's tools became price_tag*, so a chat whose list still has price_check* reaches them.
-test('every price_check tool name answers as its price_tag tool, when the price check is installed', () => {
-  const priced = TOOLS.filter((t) => t.name.startsWith('price_tag'))
-  for (const t of priced)
-    expect(RENAMED_TOOLS[t.name.replace(/^price_tag/, 'price_check')]).toBe(t.name)
-  expect(Object.values(RENAMED_TOOLS).filter((n) => n.startsWith('price_tag')).length).toBe(
-    priced.length,
+// The price checker's tools were price_check* until 2026-10-16 and price_tag* until 2026-10-17, then eli*: a chat whose
+// list still has either old name reaches them.
+test('every price_tag and price_check tool name answers as its eli tool, when the price check is installed', () => {
+  const priced = TOOLS.filter((t) => /^eli(_|$)/.test(t.name))
+  for (const t of priced) {
+    expect(RENAMED_TOOLS[t.name.replace(/^eli/, 'price_tag')]).toBe(t.name)
+    expect(RENAMED_TOOLS[t.name.replace(/^eli/, 'price_check')]).toBe(t.name)
+  }
+  expect(Object.values(RENAMED_TOOLS).filter((n) => /^eli(_|$)/.test(n)).length).toBe(
+    priced.length * 2,
   )
 })

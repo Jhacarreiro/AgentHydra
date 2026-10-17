@@ -4,6 +4,7 @@
 // its own module so the fast/simple metadata list path (sessions.ts, GET /api/sessions) stays
 // completely untouched; this is a separate, slower, opt-in code path.
 import safeRegex from 'safe-regex2'
+import { ensureCliTranscriptFiles, listCliTranscriptFiles } from './cli-transcripts'
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
 import { listHermesSearchEvents } from './hermes-sessions'
@@ -11,11 +12,13 @@ import { readHSwarmSession } from './hswarm-sessions'
 import { instanceSessionMap } from './instance-sessions'
 import { listOpenCodeSearchEventsAsync } from './opencode-sessions'
 import {
+  type IndexRefreshResult,
   isRefreshing,
   refreshSearchIndex,
   searchIndexCandidates,
-  searchIndexCoverage,
+  searchIndexHolds,
   searchIndexIsOpen,
+  searchIndexKey,
 } from './search-index'
 import { dedupeKey } from './session-locator'
 import {
@@ -25,7 +28,12 @@ import {
   listTranscriptFiles,
   type TranscriptFile,
 } from './transcript'
-import type { SessionSearchResponse, SessionSearchResult, SessionSource } from './types'
+import type {
+  SessionSearchAccount,
+  SessionSearchResponse,
+  SessionSearchResult,
+  SessionSource,
+} from './types'
 
 export type { SessionSearchResponse, SessionSearchResult }
 
@@ -50,10 +58,10 @@ export interface SearchOptions {
   /**
    * Which path to take.
    *
-   * 'auto' (the default) uses the conversation index when it can answer and is warm, and the
-   * streaming scan otherwise. 'scan' forces the exhaustive path: every byte of every transcript,
-   * tool output included. That is the escape hatch for the index's two real limits, so it is a
-   * parameter rather than a hidden heuristic.
+   * 'auto' (the default) uses the conversation index whenever it is open, reading itself only what
+   * the index does not hold yet, and the streaming scan otherwise. 'scan' forces the exhaustive path:
+   * every byte of every transcript, tool output included. That is the escape hatch for the index's
+   * two real limits, so it is a parameter rather than a hidden heuristic.
    */
   mode?: 'auto' | 'scan'
 }
@@ -68,12 +76,62 @@ const MAX_REGEX_LENGTH = 200
 /**
  * Which physical store each result came from, keyed by object identity rather than a public field.
  *
- * `SessionSearchResult` deliberately carries no store/path info — session-locator.ts's whole point
- * is that a raw filesystem or database path is never a public identifier — so this is the one place
- * that identity survives for internal use (sortByActivity, below). Set once at construction, read
- * once per request; nothing here is ever serialized into a response.
+ * `SessionSearchResult` deliberately carries no path — session-locator.ts's whole point is that a
+ * raw filesystem or database path is never a public identifier — so this is the one place that
+ * identity survives for internal use (sortByActivity, below). Set once at construction, read once per
+ * request; nothing here is ever serialized into a response. The store's NAME and its account are
+ * public (`store`, `account`), set from the row this keeps (nameStores).
  */
 const resultStoreKey = new WeakMap<SessionSearchResult, string>()
+const resultRow = new WeakMap<SessionSearchResult, StoreRow>()
+
+/** What names a result's store: a transcript row, or a database store's identity. */
+type StoreRow = Pick<TranscriptFile, 'source' | 'session_id' | 'tool' | 'instance' | 'remote'> & {
+  mtime_ms?: number
+}
+
+/** Remember where a result came from (its store key for ordering, its row for naming the store). */
+function remember(hit: SessionSearchResult, key: string, row: StoreRow): void {
+  resultStoreKey.set(hit, key)
+  resultRow.set(hit, row)
+}
+
+/**
+ * The store a transcript is in, as a hit names it: 'claude' (~/.claude/projects, Claude Code's main
+ * folder), 'cli' (a CLI account's own folder, CliMayte's workers included), 'remote' (another PC's chat
+ * the chat sync keeps here), or the product (`codex`, `opencode`, `zswarm`, ...).
+ */
+function storeOf(row: StoreRow): string {
+  if (row.instance?.ref.startsWith('cli:')) return 'cli'
+  if (row.remote) return 'remote'
+  if (row.source === 'claude' && (row.tool ?? 'claude-code') === 'claude-code') return 'claude'
+  return row.tool ?? row.source
+}
+
+/** The account a transcript belongs to, when known: the account whose own store holds it (a CLI
+ *  account, a Codex instance), or the Claude Desktop instance a main-folder chat was had in. */
+function accountOf(row: StoreRow, desktop: Map<string, string>): SessionSearchAccount | null {
+  if (row.instance)
+    return {
+      ref: row.instance.ref,
+      num: row.instance.num > 0 ? row.instance.num : null,
+      name: row.instance.name,
+    }
+  const label = row.source === 'claude' && !row.remote ? desktop.get(row.session_id) : undefined
+  return label ? { ref: null, num: null, name: label } : null
+}
+
+/** Name every result's store and account, once the list is final. */
+function nameStores(results: SessionSearchResult[]): void {
+  if (results.length === 0) return
+  const desktop = instanceSessionMap()
+  for (const r of results) {
+    const row = resultRow.get(r)
+    if (!row) continue
+    r.store = storeOf(row)
+    r.account = accountOf(row, desktop)
+  }
+}
 
 function compact(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
@@ -133,9 +191,13 @@ function anyWordMatcher(words: string[]): Matcher {
  *  pump idiom, different source, same shape). Never buffers the whole file into memory.
  *
  *  Exported because session-usage.ts needs the same constant-memory read over a single transcript
- *  (the largest on a real machine is ~40 MB, which is not a thing to hold in the daemon's heap). */
-export async function* streamLines(path: string): AsyncGenerator<string> {
-  const stream = Bun.file(path).stream()
+ *  (the largest on a real machine is ~40 MB, which is not a thing to hold in the daemon's heap).
+ *
+ *  `fromByte` starts the read there instead, which must be the start of a line: the search reads only
+ *  what a running chat wrote after the conversation index last read it (searchIndexHolds). */
+export async function* streamLines(path: string, fromByte = 0): AsyncGenerator<string> {
+  const file = Bun.file(path)
+  const stream = (fromByte > 0 ? file.slice(fromByte) : file).stream()
   const decoder = new TextDecoder()
   let buf = ''
   for await (const chunk of stream as ReadableStream<Uint8Array>) {
@@ -204,7 +266,7 @@ function searchForeignFile(
     truncated: snippets.length < matchCount,
     snippets,
   }
-  resultStoreKey.set(hit, dedupeKey(tf))
+  remember(hit, searchIndexKey(tf), tf)
   return { stoppedEarly: false, hit }
 }
 
@@ -236,7 +298,7 @@ function searchDshFile(
     truncated: snippets.length < matchCount,
     snippets,
   }
-  resultStoreKey.set(hit, dedupeKey(tf))
+  remember(hit, searchIndexKey(tf), tf)
   // Whole-conversation read, so there is no part-way point and nothing to under-report.
   return { hit, stoppedEarly: false }
 }
@@ -270,7 +332,7 @@ function searchHSwarmFile(
     truncated: snippets.length < matchCount,
     snippets,
   }
-  resultStoreKey.set(hit, dedupeKey(tf))
+  remember(hit, searchIndexKey(tf), tf)
   // Whole-conversation read, so there is no part-way point and nothing to under-report.
   return { hit, stoppedEarly: false }
 }
@@ -312,11 +374,13 @@ function matchSearchLine(
   return { cwd, matches, snippets }
 }
 
+/** `fromByte`: read from there to the end (a JSONL transcript's unindexed tail), not the whole file. */
 export async function searchOneFile(
   tf: TranscriptFile,
   matcher: Matcher,
   perFileLimit: number,
   deadline: number,
+  fromByte = 0,
 ): Promise<FileSearchOutcome> {
   if (tf.source === 'foreign') return searchForeignFile(tf, matcher, perFileLimit)
   // DeepSeek Harness IS one file per session, so it belongs in this sweep rather than in a
@@ -331,7 +395,7 @@ export async function searchOneFile(
   let stoppedEarly = false
 
   try {
-    for await (const rawLine of streamLines(tf.path)) {
+    for await (const rawLine of streamLines(tf.path, fromByte)) {
       if (performance.now() > deadline) {
         stoppedEarly = true
         break
@@ -357,7 +421,7 @@ export async function searchOneFile(
     truncated: snippets.length < matchCount,
     snippets,
   }
-  resultStoreKey.set(hit, dedupeKey(tf))
+  remember(hit, searchIndexKey(tf), tf)
   return { stoppedEarly, hit }
 }
 
@@ -407,7 +471,7 @@ async function searchOpenCode(
           snippets: [],
         }
         found.set(key, result)
-        resultStoreKey.set(result, key)
+        remember(result, key, { source: 'opencode', tool, session_id: event.session_id })
       }
       result.match_count++
       if (result.snippets.length < perFileLimit)
@@ -456,7 +520,7 @@ function searchHermes(
           snippets: [],
         }
         found.set(key, result)
-        resultStoreKey.set(result, key)
+        remember(result, key, { source: 'hermes', tool, session_id: event.session_id })
       }
       result.match_count++
       if (result.snippets.length < perFileLimit)
@@ -499,56 +563,116 @@ const EMPTY_RESPONSE: SessionSearchResponse = {
   budgetMs: 0,
 }
 
-/**
- * How much of the store the index must already cover before it is allowed to answer.
- *
- * Below this the index would return a confident, complete-looking answer drawn from a fraction of
- * the sessions, which is precisely the failure the budget flag exists to prevent. A cold or
- * half-built index therefore stands aside and lets the scan answer while it finishes in the
- * background.
- */
-const INDEX_READY_RATIO = 0.98
-
-/** One pass of background indexing per search attempt, bounded so it never competes for long with
- *  the search that triggered it. Successive searches walk the backlog down. */
+/** One pass of background indexing after a search found the index cold, bounded so it never competes
+ *  for long with the searches after it. The daemon's keeper (startSearchIndexKeeper) does the steady
+ *  work; this is for a process that has none (a script, a test). */
 const INDEX_REFRESH_BUDGET_MS = 20_000
 
-function warmIndexInBackground(files: TranscriptFile[]) {
+/**
+ * Every file the search reads, for the index: the transcript index's and the CLI accounts' own, each
+ * from a finished listing (never an empty "not listed yet").
+ *
+ * ⛔ NEVER A SEARCH'S SCOPED LIST. A refresh drops every session it is not handed, and until
+ * 2026-10-17 the warm-up after a cold search was handed that search's own files: one search with
+ * `instance=`, `source=` or `view=1` emptied the index of everything else, so the next search found it
+ * cold again and scanned.
+ */
+async function everySearchFile(): Promise<TranscriptFile[]> {
+  const [main, cli] = await Promise.all([ensureTranscriptIndex(), ensureCliTranscriptFiles()])
+  return [...main, ...cli]
+}
+
+/** One refresh over every file, unless one is already running or queued (null then). */
+async function refreshWholeIndex(budgetMs: number): Promise<IndexRefreshResult | null> {
+  if (isRefreshing()) return null
+  return refreshSearchIndex(await everySearchFile(), { budgetMs })
+}
+
+function warmIndexInBackground() {
   if (isRefreshing()) return
-  void refreshSearchIndex(files, { budgetMs: INDEX_REFRESH_BUDGET_MS })
+  void refreshWholeIndex(INDEX_REFRESH_BUDGET_MS).catch(() => {})
+}
+
+/** How often the daemon brings the index up to date, and how long one pass may run. */
+const KEEP_EVERY_MS = 60_000
+const KEEP_PASS_MS = 8_000
+/** While a backlog remains (the first build, ~30 GB of transcripts on the owner's PC), the next pass
+ *  comes this soon instead: about a third of one core until it is through, then a pass a minute. */
+const KEEP_BACKLOG_MS = 15_000
+let keeper: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Keep the conversation index current from the daemon, off every request.
+ *
+ * ⛔ WHY (2026-10-17). Nothing did. The index was refreshed only by a search that had just found it too
+ * stale to answer, 20 s at a time, so between searches every chat that appended a line and every HSwarm
+ * job written made it staler, and the next search after a few quiet hours scanned instead: on the
+ * owner's PC 152 of the 2,119 files in scope changed in 12 hours, against the 42 the old 98% rule
+ * allowed, and `search_sessions` read 54 of 2,119 files in its 7 s and missed a word said in a chat.
+ * A pass only reads what changed (a running chat's new bytes, a new chat), so after the first build it
+ * costs a few files a minute.
+ */
+export function startSearchIndexKeeper(firstDelayMs = 15_000): void {
+  if (keeper) return
+  const schedule = (ms: number) => {
+    keeper = setTimeout(() => void pass(), ms)
+    keeper.unref?.()
+  }
+  const pass = async () => {
+    let backlog = false
+    try {
+      backlog = ((await refreshWholeIndex(KEEP_PASS_MS))?.remaining ?? 0) > 0
+    } catch {
+      // The next pass tries again; a search scans what the index does not hold meanwhile.
+    }
+    schedule(backlog ? KEEP_BACKLOG_MS : KEEP_EVERY_MS)
+  }
+  schedule(firstDelayMs)
 }
 
 /**
- * Whether the conversation index answers for `files`: 'ready' when it is open and covers them, 'cold'
- * when the scan answers and the index is warmed after, null when it never applies (a forced scan, or
- * nothing in scope).
+ * What the index can do for this search: how much of each file it holds (searchIndexHolds) when it is
+ * open and holds any of them, 'cold' when the scan answers alone and the index is warmed after, null
+ * when it never applies (a forced scan, or nothing in scope).
  *
  * A search never opens the index. bun:sqlite is synchronous, and an open of a file another process
  * holds waits out busy_timeout statement by statement: on GitHub's Windows runner the first search of
  * a run spent 7.2 s of its 7 s budget opening a fresh index file, then scanned nothing and missed a
  * one-file match (2026-10-13). The daemon opens it once listening (openSearchIndex).
  */
-function indexState(opts: SearchOptions, files: TranscriptFile[]): 'ready' | 'cold' | null {
+function indexPlan(opts: SearchOptions, files: TranscriptFile[]): number[] | 'cold' | null {
   if ((opts.mode ?? 'auto') !== 'auto' || files.length === 0) return null
   if (!searchIndexIsOpen()) return 'cold'
-  const coverage = searchIndexCoverage(files)
-  return coverage.covered / files.length >= INDEX_READY_RATIO ? 'ready' : 'cold'
+  const held = searchIndexHolds(files)
+  return held?.some((bytes) => bytes > 0) ? held : 'cold'
 }
 
 /** Newest-active first, the order both paths return results in.
  *
- *  Keyed by dedupeKey, not `${source}:${session_id}` (audit AH-35): two stores sharing a format and
- *  a session id (Kilo/MiMo Code, or two Hermes profiles) would otherwise look up each other's
- *  mtime. `resultStoreKey` carries the identity each result was built with; a result missing from
- *  it (should not happen) just sorts as if it had no activity, rather than borrowing a stranger's. */
+ *  Keyed by store, not `${source}:${session_id}` (audit AH-35): two stores sharing a format and a
+ *  session id (Kilo/MiMo Code, two Hermes profiles, a chat copied into two CLI accounts) would
+ *  otherwise borrow each other's mtime. A file-backed result carries its own (remember); a database
+ *  store's is looked up by the key it was built with, and one missing from both sorts as idle. */
 function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
-  const activity = new Map(listTranscriptFiles().map((file) => [dedupeKey(file), file.mtime_ms]))
+  let byStore: Map<string, number> | null = null
   const activityOf = (r: SessionSearchResult) => {
+    const own = resultRow.get(r)?.mtime_ms
+    if (own !== undefined) return own
     const key = resultStoreKey.get(r)
-    return key !== undefined ? (activity.get(key) ?? 0) : 0
+    if (key === undefined) return 0
+    byStore ??= new Map(listTranscriptFiles().map((file) => [dedupeKey(file), file.mtime_ms]))
+    return byStore.get(key) ?? 0
   }
   return results.sort((a, b) => activityOf(b) - activityOf(a))
 }
+
+/** Every file the search can read: the transcript index's, and the CLI accounts' own folders
+ *  (cli-transcripts.ts), which the session list does not show. */
+function allSearchFiles(): TranscriptFile[] {
+  return [...listTranscriptFiles(), ...listCliTranscriptFiles()]
+}
+
+const isCliAccountRow = (f: TranscriptFile) => f.instance?.ref.startsWith('cli:') === true
 
 /*
  * Streams every transcript's BODY content looking for `query`, newest files first. Constant
@@ -565,7 +689,7 @@ function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
  *  separately — see `searchOpenCode`/`searchHermes` — because neither is a file this loop can
  *  stream), newest-first. */
 function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
-  let files = listTranscriptFiles().filter(
+  let files = allSearchFiles().filter(
     (file) => file.source !== 'opencode' && file.source !== 'hermes',
   )
   if (opts.source) files = files.filter((file) => file.source === opts.source)
@@ -583,19 +707,79 @@ function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
     })
   }
   const allow = opts.allow
-  if (allow) files = files.filter((f) => allow.has(`${f.source}:${f.session_id}`))
+  // The list's own rows: a CLI account's chats are not rows of it, though a copy can share an id.
+  if (allow)
+    files = files.filter((f) => !isCliAccountRow(f) && allow.has(`${f.source}:${f.session_id}`))
   return files.slice().sort((a, b) => b.mtime_ms - a.mtime_ms)
 }
 
+/** What a newest-first scan over some files found, and why it stopped. */
+interface ScanOutcome {
+  hits: SessionSearchResult[]
+  filesSearched: number
+  /** A file was abandoned part-way through when the clock ran out. */
+  stoppedMidFile: boolean
+  /** Whole batches were never opened because the clock ran out. */
+  outOfTime: boolean
+  /** Files were left unopened because `room` hits were found. */
+  limitReached: boolean
+}
+
+/** Read `files` newest-first in batches, stopping once `room` of them matched or the clock runs out.
+ *  Batches, so dispatching stops once the room is used without giving up the pool's concurrency. */
+async function scanNewestFirst(
+  files: TranscriptFile[],
+  matcher: Matcher,
+  room: number,
+  perFileLimit: number,
+  deadline: number,
+): Promise<ScanOutcome> {
+  const batchSize = CONCURRENCY * 3
+  const out: ScanOutcome = {
+    hits: [],
+    filesSearched: 0,
+    stoppedMidFile: false,
+    outOfTime: false,
+    limitReached: false,
+  }
+  for (let start = 0; start < files.length; start += batchSize) {
+    // Deadline first: hitting the CAP is a different answer from running out of TIME, and the
+    // caller reports them differently ("your limit" vs "results may be incomplete").
+    if (performance.now() > deadline) {
+      out.outOfTime = true
+      break
+    }
+    if (out.hits.length >= room) {
+      out.limitReached = true
+      break
+    }
+    const batch = files.slice(start, start + batchSize)
+    const results = await pooledMap(batch, CONCURRENCY, (tf) =>
+      searchOneFile(tf, matcher, perFileLimit, deadline),
+    )
+    out.filesSearched += batch.length
+    for (const r of results) {
+      if (r.stoppedEarly) out.stoppedMidFile = true
+      if (r.hit) out.hits.push(r.hit)
+    }
+  }
+  return out
+}
+
 /**
- * The fast path: let the conversation index say WHICH sessions, then read only those. Split out of
- * searchSessionBodies, which otherwise had this whole block ahead of (and at the same nesting
- * level as) the scan loop below. Called only when indexState says 'ready'; returns null when the
- * index cannot answer this query, meaning the caller must fall through to searchViaScan.
+ * The fast path: the conversation index says WHICH sessions, and only those are read. Called when the
+ * index is open and holds any file in scope; returns null when it cannot answer this query (a regex, a
+ * damaged index), meaning the caller must fall through to searchViaScan.
  *
  * The index holds no text of its own, so snippets and match counts still come from the real
  * transcripts. That keeps one source of truth for what a match looks like, and it is why the
- * index is 12 MB rather than 12 MB plus a copy of everything it covers.
+ * index is small rather than a copy of everything it covers.
+ *
+ * WHAT THE INDEX DOES NOT HOLD YET IS READ HERE TOO, so the answer never depends on how current it is
+ * (2026-10-17; before, anything under 98% current made the whole index stand aside):
+ *   - a file that only grew since it was indexed (a running chat): just its new bytes;
+ *   - a file it has not read (new since the last pass, rewritten, or a store it cannot read, such as an
+ *     HSwarm job): the whole file, newest first, within the budget, which `budgetExhausted` reports.
  *
  * Narrowing by the substring matcher afterwards is deliberate, not redundant: the index matches
  * words case-insensitively, so it OVER-selects relative to a substring search, and running the
@@ -606,6 +790,7 @@ async function searchViaIndex(
   query: string,
   matcher: Matcher,
   files: TranscriptFile[],
+  held: number[],
   found: SessionSearchResult[],
   limit: number,
   perFileLimit: number,
@@ -618,43 +803,80 @@ async function searchViaIndex(
     exact: opts.caseSensitive,
   })
   if (!answer) return null
-  const candidates = answer.keys
-  // A looser rung answered (all the words apart, a typo the index spells otherwise, any word): none
-  // of these sessions need hold the phrase, so the substring matcher would throw every one away.
-  // Their snippets are read for the words that answered instead, and the response says so.
-  const fileMatcher = answer.relaxed ? anyWordMatcher(answer.relaxed.words) : matcher
-
-  const hits = files
-    .filter((f) => candidates.has(dedupeKey(f)))
-    .slice(0, Math.max(0, limit - found.length))
-  const outcomes = await pooledMap(hits, CONCURRENCY, (tf) =>
-    searchOneFile(tf, fileMatcher, perFileLimit, deadline),
-  )
-  let ranOut = false
-  for (const o of outcomes) {
-    if (o.stoppedEarly) ranOut = true
-    if (o.hit) found.push(o.hit)
+  const { relaxed } = answer
+  const named: TranscriptFile[] = []
+  const tails: Array<{ file: TranscriptFile; from: number }> = []
+  const unread: TranscriptFile[] = []
+  for (const [i, file] of files.entries()) {
+    const bytes = held[i] ?? 0
+    if (bytes > 0 && answer.keys.has(searchIndexKey(file))) named.push(file)
+    else if (bytes === Number.POSITIVE_INFINITY) continue
+    else if (bytes > 0) tails.push({ file, from: bytes })
+    else unread.push(file)
   }
+
+  let ranOut = false
+  const exact: SessionSearchResult[] = []
+  const loose: SessionSearchResult[] = []
+  const take = (outcomes: FileSearchOutcome[], into: SessionSearchResult[]) => {
+    for (const o of outcomes) {
+      if (o.stoppedEarly) ranOut = true
+      if (o.hit) into.push(o.hit)
+    }
+  }
+  // 1. What running chats wrote since the index last read them: a few KB each.
+  take(
+    await pooledMap(tails, CONCURRENCY, (t) =>
+      searchOneFile(t.file, matcher, perFileLimit, deadline, t.from),
+    ),
+    exact,
+  )
+  // 2. The sessions the index names. A looser rung answered (all the words apart, a typo the index
+  // spells otherwise, any word): none of these sessions need hold the phrase, so the substring matcher
+  // would throw every one away. Their snippets are read for the words that answered instead.
+  const room = Math.max(0, limit - found.length - (relaxed ? 0 : exact.length))
+  const reading = named.slice(0, room)
+  const namedMatcher = relaxed ? anyWordMatcher(relaxed.words) : matcher
+  take(
+    await pooledMap(reading, CONCURRENCY, (tf) =>
+      searchOneFile(tf, namedMatcher, perFileLimit, deadline),
+    ),
+    relaxed ? loose : exact,
+  )
+  // 3. The files the index has not read.
+  const scan = await scanNewestFirst(
+    unread,
+    matcher,
+    Math.max(0, limit - found.length - exact.length),
+    perFileLimit,
+    deadline,
+  )
+  // A looser rung's sessions stand only when nothing anywhere held the phrase itself.
+  const useLoose = relaxed !== null && found.length + exact.length + scan.hits.length === 0
+  const sorted = sortByActivity([...found, ...exact, ...scan.hits, ...(useLoose ? loose : [])])
   return {
-    results: sortByActivity(found).slice(0, limit),
+    results: sorted.slice(0, limit),
     searched: 'index',
-    // The honest caveat: complete over what was SAID, silent about tool output.
+    // The honest caveat: what the index answered for is complete over what was SAID, silent about
+    // tool output.
     conversationOnly: true,
-    budgetExhausted: ranOut,
-    limitReached: candidates.size > hits.length,
-    // The index covered every session; `hits.length` is only how many transcripts had to be
-    // re-read for snippets. Reporting the smaller number here would tell an agent the search
-    // reached 5 of 1,359 sessions, which is the opposite of what happened.
-    filesSearched: files.length,
+    budgetExhausted: ranOut || scan.stoppedMidFile || scan.outOfTime,
+    limitReached:
+      ((relaxed === null || useLoose) && named.length > reading.length) ||
+      scan.limitReached ||
+      sorted.length > limit,
+    // The index covered every file it holds; `reading.length` is only how many transcripts had to be
+    // re-read for snippets. Reporting that smaller number would tell an agent the search reached 5 of
+    // 1,359 sessions, which is the opposite of what happened. Files it does not hold count once read.
+    filesSearched: files.length - unread.length + scan.filesSearched,
     filesTotal: files.length,
     budgetMs,
-    ...(answer.relaxed ? { relaxed: answer.relaxed } : {}),
+    ...(useLoose && relaxed ? { relaxed } : {}),
   }
 }
 
-/** The slow path: a newest-first batch scan over every file in scope, stopping once `limit` is
- *  hit or the clock runs out. Split out of searchSessionBodies for the same reason as
- *  searchViaIndex — this was the other half sitting at the same nesting level. */
+/** The slow path: a newest-first scan over every file in scope, stopping once `limit` is hit or the
+ *  clock runs out. */
 async function searchViaScan(
   files: TranscriptFile[],
   matcher: Matcher,
@@ -664,43 +886,8 @@ async function searchViaScan(
   deadline: number,
   budgetMs: number,
 ): Promise<SessionSearchResponse> {
-  // Process in newest-first batches so we can stop dispatching more work once `limit` is hit,
-  // without giving up the pool's cross-file concurrency within each batch.
-  const batchSize = CONCURRENCY * 3
-  let fileFound = 0
-  let filesSearched = 0
-  let stoppedMidFile = false
-  let outOfTime = false
-  let limitReached = false
-  for (let start = 0; start < files.length; start += batchSize) {
-    // Deadline first: hitting the CAP is a different answer from running out of TIME, and the
-    // caller reports them differently ("your limit" vs "results may be incomplete").
-    if (performance.now() > deadline) {
-      outOfTime = true
-      break
-    }
-    if (fileFound >= limit) {
-      limitReached = true
-      break
-    }
-    const batch = files.slice(start, start + batchSize)
-    const results = await pooledMap(batch, CONCURRENCY, (tf) =>
-      searchOneFile(tf, matcher, perFileLimit, deadline),
-    )
-    filesSearched += batch.length
-    for (const r of results) {
-      if (r.stoppedEarly) stoppedMidFile = true
-      if (r.hit) {
-        found.push(r.hit)
-        fileFound++
-      }
-    }
-  }
-
-  const sorted = sortByActivity(found)
-  // Trimming to `limit` here is also a cap: OpenCode's rows are collected outside the file loop, so
-  // the list can exceed the limit without the loop ever having noticed.
-  if (sorted.length > limit) limitReached = true
+  const scan = await scanNewestFirst(files, matcher, limit, perFileLimit, deadline)
+  const sorted = sortByActivity([...found, ...scan.hits])
   return {
     results: sorted.slice(0, limit),
     searched: 'scan',
@@ -708,9 +895,11 @@ async function searchViaScan(
     // Either a file was abandoned part-way through, or whole batches were never opened because the
     // clock ran out. Both mean a miss is not evidence of absence. Files left unopened because the
     // LIMIT was hit are a different thing entirely, and are reported as `limitReached`.
-    budgetExhausted: stoppedMidFile || outOfTime,
-    limitReached,
-    filesSearched,
+    budgetExhausted: scan.stoppedMidFile || scan.outOfTime,
+    // Trimming to `limit` is also a cap: OpenCode's rows are collected outside the file loop, so the
+    // list can exceed the limit without the loop ever having noticed.
+    limitReached: scan.limitReached || sorted.length > limit,
+    filesSearched: scan.filesSearched,
     filesTotal: files.length,
     budgetMs,
   }
@@ -742,33 +931,26 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
     found.push(...kept)
   }
 
-  const index = indexState(opts, files)
-  if (index === 'ready') {
-    const indexResult = await searchViaIndex(
-      opts,
-      query,
-      matcher,
-      files,
-      found,
-      limit,
-      perFileLimit,
-      deadline,
-      budgetMs,
-    )
-    if (indexResult) return indexResult
-  }
-
-  const scanned = await searchViaScan(
-    files,
-    matcher,
-    found,
-    limit,
-    perFileLimit,
-    deadline,
-    budgetMs,
-  )
+  const plan = indexPlan(opts, files)
+  const answer =
+    (Array.isArray(plan)
+      ? await searchViaIndex(
+          opts,
+          query,
+          matcher,
+          files,
+          plan,
+          found,
+          limit,
+          perFileLimit,
+          deadline,
+          budgetMs,
+        )
+      : null) ??
+    (await searchViaScan(files, matcher, found, limit, perFileLimit, deadline, budgetMs))
   // After this search has answered, never before its scan: the warm-up opens and writes the index
-  // synchronously, which inside the search would spend its budget (see indexState).
-  if (index === 'cold') setImmediate(() => warmIndexInBackground(files))
-  return scanned
+  // synchronously, which inside the search would spend its budget (see indexPlan).
+  if (plan === 'cold') setImmediate(() => warmIndexInBackground())
+  nameStores(answer.results)
+  return answer
 }

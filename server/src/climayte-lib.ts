@@ -1129,7 +1129,10 @@ export function plainTask(raw: string): string {
       const line = JSON.parse(text)
       const c = line?.type === 'user' ? line.message?.content : null
       if (typeof c === 'string') inner = c
-      else if (Array.isArray(c)) inner = c.map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('')
+      else if (Array.isArray(c))
+        inner = c
+          .map((b: any) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+          .join('')
     } catch {
       /* not an envelope */
     }

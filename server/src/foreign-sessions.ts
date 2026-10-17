@@ -12,7 +12,8 @@
 // else — the list, search, export, the tab — comes for free from the shared DTOs.
 //
 // NO TOKENS, AND THAT IS NOT AN OVERSIGHT. Not one of these stores records what a turn cost.
-// Copilot and the IDE integrations bill credits and never write a token count at all; Grok, Kimi
+// The IDE integrations bill credits (the few counts VS Code Copilot writes are the usage ledger's, read by
+// kit/ingest-copilot.ts, not this list's); Grok, Kimi
 // and Zed simply do not persist one. So these sessions appear in the list, are readable and
 // searchable, and contribute NOTHING to the spend charts. A zero there would be a claim they were
 // free; an absence is the truth. Pi is the one exception - its assistant messages carry `usage` and
@@ -29,6 +30,7 @@ import {
 } from './cloud-sessions-root'
 import { timeSlice } from './core/loop-yield'
 import type { TailEvent } from './types'
+import { applyChatOp, parseChatOp, uriPath, workspaceJsonFolder } from './vscode-chat-log'
 
 /** One conversation from a foreign store, in the shape the transcript index wants. */
 export interface ForeignSession {
@@ -265,44 +267,118 @@ const kimi: Adapter = {
 }
 
 // --- VS Code Copilot ------------------------------------------------------------------------------
-// `<root>/workspaceStorage/<hash>/chatSessions/<uuid>.json`. One JSON document per chat with a
-// `requests` array; each request has the user's text, an epoch-ms timestamp, and a `response` array
-// of kind-tagged parts. Nothing anywhere records tokens: Copilot bills premium requests.
+// `<root>/workspaceStorage/<hash>/chatSessions/<session>.jsonl` for a window with a folder (named in
+// `<hash>/workspace.json`), and `<root>/globalStorage/emptyWindowChatSessions/` for a window with none.
+// Since 2025 a chat is an operation log, replayed by vscode-chat-log.ts exactly as the usage ledger
+// replays it; an older chat is one `.json` document of the same shape (measured 2026-10-17: 944 logs,
+// 218 documents). Each request has the user's text, an epoch-ms timestamp, and a `response` array of
+// kind-tagged parts.
+
+interface VsCodeRequest {
+  timestamp?: unknown
+  message?: { text?: unknown }
+  response?: unknown
+}
 
 interface VsCodeChat {
-  sessionId?: string
-  creationDate?: number
-  lastMessageDate?: number
-  requests?: Array<{
-    timestamp?: number
-    message?: { text?: string }
-    response?: Array<Record<string, unknown>>
-  }>
+  sessionId?: unknown
+  creationDate?: unknown
+  /** Only the older documents carry it; a log's newest request dates it instead. */
+  lastMessageDate?: unknown
+  /** The title VS Code shows, where it has one: the user's rename, or the one it generated. */
+  customTitle?: unknown
+  /** A URI, where the chat names one. */
+  workingDirectory?: unknown
+  requests?: unknown
+}
+
+const VSCODE_CHAT_FILE = /\.jsonl?$/
+const epoch = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined
+const strOf = (v: unknown): string => (typeof v === 'string' ? v : '')
+
+/** Inside a request, everything but its text and time: the listing skips these lines unparsed. Pushes onto
+ *  a response are the largest share of a log, and the list needs none of it. A line in a layout this does
+ *  not know is parsed anyway. */
+const UNLISTED_OP = /^\{"kind":[123],"k":\["requests",\d+,"(?!message"|timestamp")/
+
+/**
+ * A chat, replayed from its file. null when the file cannot be read or holds no chat: a locked or
+ * half-written file reads the same as a broken one, and VS Code is usually writing while a sweep runs.
+ * `listing` leaves out what only the transcript needs.
+ */
+function vsCodeChat(path: string, listing: boolean): VsCodeChat | null {
+  let body: string
+  try {
+    body = readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+  let chat: unknown
+  if (path.endsWith('.jsonl')) {
+    for (const line of body.split('\n')) {
+      if (!line.trim() || (listing && UNLISTED_OP.test(line))) continue
+      const op = parseChatOp(line)
+      if (op) chat = applyChatOp(chat, op)
+    }
+  } else {
+    try {
+      chat = JSON.parse(body)
+    } catch {
+      return null
+    }
+  }
+  return chat && typeof chat === 'object' && !Array.isArray(chat) ? (chat as VsCodeChat) : null
+}
+
+/** A chat's requests; a slot VS Code deleted is a hole, not a request. */
+function vsCodeRequests(chat: VsCodeChat): VsCodeRequest[] {
+  return (Array.isArray(chat.requests) ? chat.requests : []).filter(
+    (r): r is VsCodeRequest => !!r && typeof r === 'object',
+  )
+}
+
+/** The folder a workspace window had open, from its workspace.json. */
+function vsCodeWorkspaceFolder(workspace: string): string | null {
+  try {
+    return workspaceJsonFolder(readFileSync(join(workspace, 'workspace.json'), 'utf8'))
+  } catch {
+    return null
+  }
 }
 
 /** The readable text of one response part. Copilot's parts are a tagged union and most of them are
- *  UI furniture; the two that carry what the model actually said are handled, the rest named. */
-function vsCodeResponseText(part: Record<string, unknown>): { text: string; tool: string | null } {
+ *  UI furniture; the ones that carry what the model said, thought or did are kept, the rest dropped. */
+function vsCodeResponsePart(part: Record<string, unknown>): {
+  text: string
+  kind: TailEvent['kind']
+  tool: string | null
+} {
   const kind = typeof part.kind === 'string' ? part.kind : ''
   if (kind === 'toolInvocationSerialized') {
     const msg = part.pastTenseMessage ?? part.invocationMessage
     const value =
-      msg && typeof msg === 'object' ? ((msg as { value?: string }).value ?? '') : String(msg ?? '')
-    return { text: compact(value), tool: 'tool' }
+      msg && typeof msg === 'object' ? strOf((msg as { value?: unknown }).value) : strOf(msg)
+    return { text: compact(value), kind: 'tool_use', tool: strOf(part.toolId) || 'tool' }
+  }
+  const value = part.value
+  // A thinking part's value is a string, or the pieces it streamed in.
+  if (kind === 'thinking') {
+    const said = Array.isArray(value) ? value.map(strOf).join('') : strOf(value)
+    return { text: compact(said), kind: 'thinking', tool: null }
   }
   // A plain markdown part is `{ value: "..." }` with no kind at all.
-  const value = part.value
-  if (typeof value === 'string') return { text: compact(value), tool: null }
+  if (typeof value === 'string') return { text: compact(value), kind: 'text', tool: null }
   if (value && typeof value === 'object')
-    return { text: compact((value as { value?: string }).value ?? ''), tool: null }
-  return { text: '', tool: null }
+    return { text: compact(strOf((value as { value?: unknown }).value)), kind: 'text', tool: null }
+  return { text: '', kind: 'text', tool: null }
 }
 
 /**
  * Listed chats, keyed by path, valid only while the file is byte-for-byte the one that was parsed.
  *
- * Listing a VS Code store means JSON.parse-ing every chat document, because that is the only place
- * the title and timestamps live — there is no index file to read instead. That is not free at any
+ * Listing a VS Code store means replaying every chat file, because that is the only place the title
+ * and timestamps live — there is no index file to read instead. That is not free at any
  * real size: 355 chats measured 5.2 SECONDS, which was the single largest slice of a whole-store
  * sweep, and the sweep runs on a timer. A chat that has not been touched since the last sweep will
  * parse to exactly what it parsed to last time, so this keeps that answer and re-reads only what
@@ -320,79 +396,101 @@ const vsCodeChatCache = new Map<string, { stamp: string; session: ForeignSession
  */
 function* vsCodeChats(root: string): Generator<ForeignSession | null> {
   const storage = join(root, 'workspaceStorage')
+  const empty = join(root, 'globalStorage', 'emptyWindowChatSessions')
   const seen = new Set<string>()
   try {
-    yield* vsCodeChatsUnder(storage, seen)
+    for (const hash of dirs(storage))
+      yield* vsCodeChatsIn(join(storage, hash, 'chatSessions'), seen, join(storage, hash), hash)
+    yield* vsCodeChatsIn(empty, seen, null, null)
   } finally {
     // Deleted chats must not keep their slot forever. Scoped to the paths under THIS root, because
     // one cache serves every VS Code flavour on the machine (Code, Insiders, VSCodium) and each is
     // listed by its own call — a sweep of one is no evidence at all about another's files.
     for (const path of vsCodeChatCache.keys())
-      if (path.startsWith(storage) && !seen.has(path)) vsCodeChatCache.delete(path)
+      if ((path.startsWith(storage) || path.startsWith(empty)) && !seen.has(path))
+        vsCodeChatCache.delete(path)
   }
 }
 
-function* vsCodeChatsUnder(storage: string, seen: Set<string>): Generator<ForeignSession | null> {
-  for (const hash of dirs(storage)) {
-    const chats = join(storage, hash, 'chatSessions')
-    let names: string[]
+/** The chats in one folder: a workspace window's `chatSessions` (with its workspace folder and hash), or
+ *  the empty windows' folder (with neither). */
+function* vsCodeChatsIn(
+  chats: string,
+  seen: Set<string>,
+  workspace: string | null,
+  hash: string | null,
+): Generator<ForeignSession | null> {
+  let names: string[]
+  try {
+    names = readdirSync(chats).filter((n) => VSCODE_CHAT_FILE.test(n))
+  } catch {
+    return
+  }
+  // The folder the window had open: read once per folder, and only when a chat in it is parsed.
+  let folder: string | null | undefined
+  for (const name of names) {
+    const path = join(chats, name)
+    seen.add(path)
+    // mtime AND size: mtime alone can repeat within a filesystem's timestamp granularity, and
+    // an edit that keeps the byte count is exactly the case a coarse clock hides.
+    let stamp: string
+    let size = 0
     try {
-      names = readdirSync(chats).filter((n) => n.endsWith('.json'))
+      const st = statSync(path)
+      size = st.size
+      stamp = `${st.mtimeMs}:${st.size}`
     } catch {
+      yield null
       continue
     }
-    for (const name of names) {
-      const path = join(chats, name)
-      seen.add(path)
-      // mtime AND size: mtime alone can repeat within a filesystem's timestamp granularity, and
-      // an edit that keeps the byte count is exactly the case a coarse clock hides.
-      let stamp: string
-      let size = 0
-      try {
-        const st = statSync(path)
-        size = st.size
-        stamp = `${st.mtimeMs}:${st.size}`
-      } catch {
-        yield null
-        continue
-      }
-      const hit = vsCodeChatCache.get(path)
-      if (hit?.stamp === stamp) {
-        yield hit.session
-        continue
-      }
-      const doc = readJson<VsCodeChat>(path)
-      // A read that FAILED is not remembered. readJson answers null for a locked or half-written
-      // file exactly as it does for a malformed one, and VS Code is usually running while this
-      // sweep happens — so caching that null would drop a perfectly good chat out of the list
-      // until something happened to edit it again. An empty chat is a real, stable answer and IS
-      // remembered, so it is not re-parsed every sweep.
-      if (!doc) {
-        yield null
-        continue
-      }
-      if (!doc.requests?.length) {
-        vsCodeChatCache.set(path, { stamp, session: null })
-        yield null
-        continue
-      }
-      const first = doc.requests[0]?.message?.text ?? ''
-      const session: ForeignSession = {
-        session_id: doc.sessionId || name.replace(/\.json$/, ''),
-        path,
-        title: titleFromText(first, 'Copilot chat'),
-        cwd: '',
-        // VS Code identifies a workspace by an opaque hash, so that is the honest grouping key —
-        // inventing a folder name from it would be a guess the user cannot check.
-        project: hash,
-        created_at: doc.creationDate ?? null,
-        last_activity_at: doc.lastMessageDate ?? doc.creationDate ?? mtimeOf(path),
-        size_bytes: size,
-        archived: false,
-      }
-      vsCodeChatCache.set(path, { stamp, session })
-      yield session
+    const hit = vsCodeChatCache.get(path)
+    if (hit?.stamp === stamp) {
+      yield hit.session
+      continue
     }
+    const chat = vsCodeChat(path, true)
+    // A read that FAILED is not remembered. vsCodeChat answers null for a locked or half-written
+    // file exactly as it does for a malformed one, and VS Code is usually running while this
+    // sweep happens — so caching that null would drop a perfectly good chat out of the list
+    // until something happened to edit it again. An empty chat is a real, stable answer and IS
+    // remembered, so it is not re-parsed every sweep.
+    if (!chat) {
+      yield null
+      continue
+    }
+    const requests = vsCodeRequests(chat)
+    if (!requests.length) {
+      vsCodeChatCache.set(path, { stamp, session: null })
+      yield null
+      continue
+    }
+    if (folder === undefined) folder = workspace ? vsCodeWorkspaceFolder(workspace) : null
+    const cwd = uriPath(strOf(chat.workingDirectory)) ?? folder ?? ''
+    const times = requests
+      .map((r) => epoch(r.timestamp))
+      .filter((t): t is number => t !== undefined)
+    const created = epoch(chat.creationDate)
+    const session: ForeignSession = {
+      session_id: strOf(chat.sessionId) || name.replace(VSCODE_CHAT_FILE, ''),
+      path,
+      title:
+        titleFromText(strOf(chat.customTitle), '') ||
+        titleFromText(strOf(requests[0]?.message?.text), 'Copilot chat'),
+      cwd,
+      // Without a folder, VS Code identifies a workspace only by an opaque hash, so that is the honest
+      // grouping key — inventing a folder name from it would be a guess the user cannot check.
+      project: cwd || hash || 'empty-window',
+      created_at: created ?? times[0] ?? null,
+      last_activity_at:
+        epoch(chat.lastMessageDate) ??
+        (times.length ? Math.max(...times) : undefined) ??
+        created ??
+        mtimeOf(path),
+      size_bytes: size,
+      archived: false,
+    }
+    vsCodeChatCache.set(path, { stamp, session })
+    yield session
   }
 }
 
@@ -421,10 +519,11 @@ const vscodeCopilot: Adapter = {
   },
   read(path) {
     const out: TailEvent[] = []
-    const doc = readJson<VsCodeChat>(path)
-    for (const req of doc?.requests ?? []) {
-      const at = iso(req.timestamp ?? doc?.creationDate ?? mtimeOf(path))
-      const asked = compact(req.message?.text ?? '')
+    const chat = vsCodeChat(path, false)
+    if (!chat) return out
+    for (const req of vsCodeRequests(chat)) {
+      const at = iso(epoch(req.timestamp) ?? epoch(chat.creationDate) ?? mtimeOf(path))
+      const asked = compact(strOf(req.message?.text))
       if (asked)
         out.push({
           role: 'user',
@@ -433,17 +532,11 @@ const vscodeCopilot: Adapter = {
           tool_name: null,
           timestamp: at,
         })
-      for (const part of req.response ?? []) {
+      for (const part of Array.isArray(req.response) ? req.response : []) {
         if (!part || typeof part !== 'object') continue
-        const { text, tool } = vsCodeResponseText(part)
+        const { text, kind, tool } = vsCodeResponsePart(part as Record<string, unknown>)
         if (!text) continue
-        out.push({
-          role: 'assistant',
-          kind: tool ? 'tool_use' : 'text',
-          text: truncate(text),
-          tool_name: tool,
-          timestamp: at,
-        })
+        out.push({ role: 'assistant', kind, text: truncate(text), tool_name: tool, timestamp: at })
       }
     }
     return out

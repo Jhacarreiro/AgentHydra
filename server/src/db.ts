@@ -461,6 +461,25 @@ create table if not exists session_cwd_mark (
 );
 `)
 
+// Where the sessions that ran in a folder in no repository worked (session-work.ts): how far each of their
+// files was read (bytes, and for a rollout the turn's cwd there), and per file and repository root how many
+// of its tool calls' paths are in that repository (n).
+db.exec(`
+create table if not exists session_work_read (
+  key        text primary key,
+  session_id text not null,
+  bytes      integer not null,
+  cwd        text not null default ''
+);
+create table if not exists session_work_vote (
+  key        text not null,
+  session_id text not null,
+  root       text not null,
+  n          integer not null,
+  primary key (key, root)
+);
+`)
+
 // The skill listings Claude Code injected into sessions, stored ONCE per distinct listing. A
 // listing is ~140 skill names; storing it per session would multiply the analytics tier's size
 // several times over, while a machine sees only a handful of distinct listings. Sessions keep the

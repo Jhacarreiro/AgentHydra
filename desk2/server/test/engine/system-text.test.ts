@@ -6,7 +6,7 @@ import type { TranscriptItem } from '@shared/protocol'
 import { createMediaCache, type MediaCache } from '../../src/media/cache'
 import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
-import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, userTurns, type InjectedPart } from '../../src/engine/system-text'
+import { advisorStandInFor, classifyUserText, continuationOf, noteOf, standInShown, taskItemFrom, userTurn, userTurns, type InjectedPart } from '../../src/engine/system-text'
 
 // Real samples, from the owner's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
@@ -394,6 +394,22 @@ describe('notes and picture lines', () => {
     expect(noteOf(PING)).toEqual({ from: 'AgentHydra · CliMayte', text: 'Ping 3-4, 2 updates since 09:00:\n• worker 12 finished: tests pass\n• worker 13 waits on a reply' })
     expect(noteOf('please fix the build')).toBeNull()
     expect(noteOf('he wrote "[AgentHydra] Not from the user." in the log')).toBeNull()
+  })
+
+  test("the Urgency Advisor's queued message shows as his dimmed note, and his worker copy finds its stand-in", () => {
+    const text = "[Urgency Advisor · Ada] Sent on the owner's behalf.\n\nThe report is overdue. Wrap up and send it."
+    const nudge = 'The report is overdue. Wrap up and send it.'
+    // A plain chat's queued send and a CliMayte stand-in: his bubble with its queued state, never the owner's plain one.
+    expect(userTurn({ ...user(text), queued: true }, null)).toEqual({ kind: 'note', id: 'u1', ts: 5, from: 'Ada', text: nudge, advisor: true, queued: true })
+    const standIn = { kind: 'user' as const, id: 'desk-sent:1', ts: 5, text, queued: true }
+    expect(standInShown(standIn, null)).toEqual({ kind: 'note', id: 'desk-sent:1', ts: 5, from: 'Ada', text: nudge, advisor: true, queued: true })
+    expect(standInShown({ kind: 'user', id: 'desk-sent:2', ts: 5, text: 'my own words', queued: true }, null)).toEqual({ kind: 'user', id: 'desk-sent:2', ts: 5, text: 'my own words', queued: true })
+    // The worker's copy is his note: it replaces his stand-in only, by its words, never the owner's queued message.
+    const owner = { kind: 'user' as const, id: 'desk-sent:0', ts: 4, text: 'my own words', queued: true }
+    const copy = { kind: 'note' as const, id: 'w1', ts: 6, from: 'Ada', text: `${nudge}\n`, advisor: true as const }
+    expect(advisorStandInFor([owner, standIn], copy)).toBe(1)
+    expect(advisorStandInFor([owner], copy)).toBe(-1)
+    expect(advisorStandInFor([standIn], { ...copy, text: 'Something else.' })).toBe(-1)
   })
 
   test('the Urgency Advisor nudge is an advisor note: its name, the nudge, never the owner bubble or a plain note', () => {

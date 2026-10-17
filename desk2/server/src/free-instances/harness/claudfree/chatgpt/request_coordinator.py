@@ -174,15 +174,13 @@ class Coordinator:
             store = ChatGPTState(directory / 'chatgpt')
             with self.leases.acquire(store.directory, cancel=cancel,
                     deadline=min(deadline, time.monotonic() + 210)) as lease:
-                def quarantine():
-                    lease.quarantine()
-                    self.draining = True
+                # An unconfirmed phase holds only its own account. Draining the coordinator too
+                # refused every other account's sends until the process was killed (2026-10-17).
                 try:
-                    result = self.account(store, request, cancel, deadline, quarantine=quarantine)
+                    result = self.account(store, request, cancel, deadline, quarantine=lease.quarantine)
                 except ClaudeError as error:
                     if error.code == 'phase_cleanup_unconfirmed':
                         lease.quarantine()
-                        self.draining = True
                     raise
         except ClaudeError as error:
             result = failure(error)
@@ -507,7 +505,10 @@ async def serve(directory, version, root, python, browser_endpoint, *, cache_dir
             temporary.write_text(json.dumps({'port': port, 'token': coordinator.token, 'version': version, 'pid': os.getpid()}), encoding='utf-8')
             temporary.chmod(0o600)
             temporary.replace(endpoint)
-            while coordinator.active or coordinator.leases.quarantined or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
+            # A quarantined lease is held until this process exits, so it never keeps the process up:
+            # waiting on one meant it never exited (2026-10-17). Exit closes the owner job, which ends
+            # any unconfirmed phase, and frees the reserved account for the next coordinator.
+            while coordinator.active or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
                 await asyncio.sleep(1)
         finally:
             endpoint.unlink(missing_ok=True)

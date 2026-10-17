@@ -7,7 +7,8 @@
 // leading back to the main repository, so every worktree counts as its main checkout. The key is the
 // origin remote's `owner/name` (any host), so two clones of one repository are one project; a
 // repository with no remote is its own folder, shown by name. A folder in no repository stays the
-// folder: a parent folder chats were started in is not credited to any repository under it.
+// folder here; a session started in a parent folder of checkouts is credited to the repository its
+// tool calls worked in by session-work.ts.
 
 import { readFile, stat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'

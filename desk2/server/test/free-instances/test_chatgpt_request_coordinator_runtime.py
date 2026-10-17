@@ -9,11 +9,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from claudfree.chatgpt import request_coordinator as coordinator
 from claudfree.chatgpt import request_ownership as ownership
+from claudfree.errors import ClaudeError
 
 
 async def exchange(endpoint, value):
@@ -129,6 +132,67 @@ class CoordinatorRuntimeTests(unittest.TestCase):
             self.assertTrue(value['phase_cleanup'])
             self.assertEqual(value['phases'], 0)
             self.assertTrue(value['endpoint_removed'])
+
+
+class UncertainAccountTests(unittest.IsolatedAsyncioTestCase):
+    async def test_an_unconfirmed_phase_holds_only_its_account_and_the_idle_coordinator_still_retires(self):
+        # 2026-10-17: sends on a wedged Chrome ended phase_cleanup_unconfirmed. The coordinator then
+        # refused every account's sends and, waiting on the held account, never exited (7 hours).
+        uncertain, other = str(uuid4()), str(uuid4())
+
+        def account(_coordinator, store, _request, _cancel, _deadline, *, quarantine=None):
+            if store.directory.parent.name == uncertain:
+                raise ClaudeError('Synthetic browser cleanup is unconfirmed', code='phase_cleanup_unconfirmed')
+            return {'ok': True}
+
+        def outcome(frames):
+            return json.loads(frames[-1]['stdout'])
+
+        retained = len(ownership._QUARANTINED)
+        with tempfile.TemporaryDirectory(prefix='synthetic-uncertain-account-') as folder:
+            root = Path(folder)
+            directory, accounts = root / 'service', root / 'accounts'
+            endpoint_path = directory / 'endpoint.json'
+
+            def run(identity):
+                return {'op': 'run', 'request_id': str(uuid4()), 'state_dir': str(accounts / identity),
+                    'request': {'provider': 'chatgpt', 'command': 'chat', 'prompt': 'Synthetic prompt'}}
+
+            with patch.object(coordinator, 'OwnerJob', return_value=SimpleNamespace(assert_idle=lambda: None)), \
+                    patch.object(coordinator.Coordinator, 'account', account):
+                service = asyncio.create_task(coordinator.serve(directory, 'synthetic-uncertain', accounts,
+                    'synthetic-python', root / 'no-browser-endpoint.json', cache_dir=root / 'cache', idle_seconds=1))
+                try:
+                    for _ in range(200):
+                        if endpoint_path.is_file() or service.done():
+                            break
+                        await asyncio.sleep(.02)
+                    endpoint = json.loads(endpoint_path.read_text(encoding='utf-8'))
+                    unconfirmed = await exchange(endpoint, run(uncertain))
+                    ping = await exchange(endpoint, {'op': 'ping'})
+                    served = await exchange(endpoint, run(other))
+                    again = await exchange(endpoint, run(uncertain))
+                    retired = True
+                    try:
+                        await asyncio.wait_for(asyncio.shield(service), 10)
+                    except TimeoutError:
+                        retired = False
+                    endpoint_left = endpoint_path.exists()
+                finally:
+                    if not service.done():
+                        service.cancel()
+                    await asyncio.gather(service, return_exceptions=True)
+                    # This process keeps a held account's lock until it exits; release it for the folder.
+                    for entry in ownership._QUARANTINED[retained:]:
+                        entry[1].__exit__(None, None, None)
+                    del ownership._QUARANTINED[retained:]
+        self.assertEqual(outcome(unconfirmed)['error']['code'], 'phase_cleanup_unconfirmed')
+        self.assertTrue(ping[0]['ok'])
+        self.assertTrue(served[0]['accepted'])
+        self.assertTrue(outcome(served)['ok'])
+        self.assertEqual(outcome(again)['error']['code'], 'chat_busy')
+        self.assertTrue(retired, 'The coordinator never retired while it held an uncertain account.')
+        self.assertFalse(endpoint_left)
 
 
 if __name__ == '__main__':

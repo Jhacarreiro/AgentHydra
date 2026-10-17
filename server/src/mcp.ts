@@ -1930,7 +1930,7 @@ export const TOOLS: HydraTool[] = [
   {
     name: 'orchestrator_run',
     description:
-      "Runs one orchestrator script by its menu name (chats, migrate_chat, dossier, audit_twins, archive_chat, census, and the rest), with its own arguments, exactly as python orch.py script would. Observe scripts are read-only. Act scripts mutate, and keep every rail they have on the command line. Nothing acts unless the tray icon is up; orchestrator_switch armed says whether it is. A live chat is never moved or archived, and every attempt is counted. force is the owner's word for one act: pass it only when the owner asked for that act. Two scripts are hand-run and do not need the icon, migrate_chat and chats --move-to, because the icon gates the unattended lanes, not the owner's own move. So for a targeted move, do not arm first: arming resumes saturate, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet for 300 seconds. Pass --idle-wait 330 with --stop-idle and the command waits that window itself; a working or stuck engine still refuses at once. The answer returns stdout, stderr, the exit code and what the driver's code means: 0 ok, 2 something failed, 3 refused, unknown or not armed, 1 daemon failure. A script's own codes are in its --help, which you can run here with args ['--help']. timeout_secs defaults to 600 (server cap 3600), but your client's transport gives up at about 60 seconds, so a blocking call that outlives it loses the report while the daemon keeps running. Any run declared longer than 50 seconds is detached: you get an operationId and a poll line at once. Any other run answers inline if it finishes within 45 seconds, and otherwise the same way, with the id. orchestrator_operation {id} returns the same verdict the blocking call would have, kept for an hour while the daemon that ran it stays up. Lost a call? orchestrator_operation with no id lists recent runs. A restart wipes those records, and the run may have finished or died with the daemon. If a poll says reason daemon-restarted, never re-fire it: read the toolbox's ledger and verify the effect directly. For a move (migrate_batch, migrate_chat), run migrate_reconcile, which lists chats left half-moved; migrate_reconcile --finish <id> settles each. A restart does not wait for a move: a run that moves chats (migrate_batch, migrate_chat, undo, chats --move-to X --yes, groundskeeper --yes, sweep --yes with --moves, --land-console or --all, loop --live, migrate_reconcile --reverse) runs on through it, and the next daemon answers its id.",
+      "Runs one orchestrator script by its menu name (chats, migrate_chat, dossier, audit_twins, archive_chat, census, and the rest), with its own arguments, exactly as python orch.py script would. Observe scripts are read-only. Act scripts mutate, and keep every rail they have on the command line. Nothing acts unless the tray icon is up; orchestrator_switch armed says whether it is. A live chat is never moved or archived, and every attempt is counted. force is the owner's word for one act: pass it only when the owner asked for that act. Two scripts are hand-run and do not need the icon, migrate_chat and chats --move-to, because the icon gates the unattended lanes, not the owner's own move. So for a targeted move, do not arm first: arming resumes saturate, which wakes dormant chats, and a chat with a live engine cannot move until it has been quiet for 300 seconds. Pass --idle-wait 330 with --stop-idle and the command waits that window itself; a working or stuck engine still refuses at once. The answer returns stdout, stderr, the exit code and what the driver's code means: 0 ok, 2 something failed, 3 refused, unknown or not armed, 1 daemon failure. A script's own codes are in its --help, which you can run here with args ['--help']. timeout_secs defaults to 600 (server cap 3600), but your client's transport gives up at about 60 seconds, so a blocking call that outlives it loses the report while the daemon keeps running. Any run declared longer than 50 seconds is detached: you get an operationId and a poll line at once. Any other run answers inline if it finishes within 45 seconds, and otherwise the same way, with the id. orchestrator_operation {id} returns the same verdict the blocking call would have, kept for an hour while the daemon that ran it stays up. Lost a call? orchestrator_operation with no id lists recent runs. A restart wipes those records, and the run may have finished or died with the daemon. If a poll says reason daemon-restarted, never re-fire it: read the toolbox's ledger and verify the effect directly. For a move (migrate_batch, migrate_chat), run migrate_reconcile, which lists chats left half-moved; migrate_reconcile --finish <id> settles each. A restart does not wait for a run that acts on chats one after another: a move (migrate_batch, migrate_chat, undo, chats --move-to X --yes, groundskeeper --yes, migrate_reconcile --reverse), sweep --yes with any lane or --all, loop --live, and fan_out's spawn, send, recover and delete run on through it, and the next daemon answers its id.",
     inputSchema: S(
       {
         script: {
@@ -1998,7 +1998,7 @@ export const TOOLS: HydraTool[] = [
     name: 'orchestrator_operation',
     listed: true,
     description:
-      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A run that moves chats (the list in orchestrator_run) keeps running and keeps its record through a daemon restart. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
+      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A run that acts on chats one after another (the list in orchestrator_run) keeps running and keeps its record through a daemon restart. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
     inputSchema: S({
       id: {
         type: 'string',
@@ -2292,9 +2292,11 @@ Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained
 
 Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.${
   // Seen only as a name among hundreds of deferred tools, price_check read as a shop-price lookup
-  // and pages went out unpriced (2026-10-16); it is price_tag since. Only when the private price check is installed.
-  PRICECHECK_TOOLS.some((t) => t.name === 'price_tag')
-    ? '\n\nBefore and after you build, change or review a page or screen, price it with price_tag { mode: "page", page }: what it costs the person looking (words, controls, fields). Cheaper wins; say both prices.'
+  // and pages went out unpriced (2026-10-16); it was price_tag, and is eli (explain like I'm 12) since
+  // 2026-10-17, when it also began pricing how hard the words are for a child. Only when the private
+  // price check is installed.
+  PRICECHECK_TOOLS.some((t) => t.name === 'eli')
+    ? '\n\nBefore and after you build, change or review a page or screen, price it with eli { mode: "page", page }: what it costs the person looking (words, controls, fields) and whether a child could follow its words (eli.age). Text works too: eli { mode: "text", text }. Cheaper and younger win; say both prices.'
     : ''
 }`
 
@@ -2320,15 +2322,16 @@ export function runMcp(): Promise<void> {
  *  but its MCP process restarts onto new code with the daemon, so after a rename every call by the
  *  old name failed with "Unknown tool" mid-run (2026-10-01, Corch -> CliMayte: the orchestrator of
  *  a live run lost every corch_* tool and carried on through the HTTP routes). price_check* became
- *  price_tag* on 2026-10-16 (the owner: a name that says what it is for). */
+ *  price_tag* on 2026-10-16 (the owner: a name that says what it is for), and price_tag* became eli*
+ *  on 2026-10-17 (ELI, explain like I'm 12): both old names answer. */
 export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries([
   ...TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
     t.name.replace(/^climayte_/, 'corch_'),
     t.name,
   ]),
-  ...PRICECHECK_TOOLS.filter((t) => t.name.startsWith('price_tag')).map((t) => [
-    t.name.replace(/^price_tag/, 'price_check'),
-    t.name,
+  ...PRICECHECK_TOOLS.filter((t) => /^eli(_|$)/.test(t.name)).flatMap((t) => [
+    [t.name.replace(/^eli/, 'price_tag'), t.name],
+    [t.name.replace(/^eli/, 'price_check'), t.name],
   ]),
 ])
 

@@ -33,7 +33,8 @@ const advisorItems: TranscriptItem[] = [
   { id: 'au', ts: Date.now() - 300_000, kind: 'user', text: 'Please draft the quarterly summary and check the totals.' },
   { id: 'aa', ts: Date.now() - 290_000, kind: 'assistant_text', text: 'Started. The draft has three sections so far.' },
   { id: 'an', ts: Date.now() - 60_000, kind: 'note', from: 'Duke', advisor: true, text: 'This has run a while. Wrap up the totals first, then send what you have.' },
-  { id: 'ar', ts: Date.now(), kind: 'assistant_text', text: 'Understood. The totals are checked and the summary goes out next.' },
+  { id: 'ar', ts: Date.now() - 30_000, kind: 'assistant_text', text: 'Understood. The totals are checked and the summary goes out next.' },
+  { id: 'aq', ts: Date.now(), kind: 'note', from: 'Duke', advisor: true, queued: true, text: 'Good. Now send the summary before you start anything else.' },
 ]
 // Browser cards: one saved browser's calls around a command row are one card ("4 calls"), its picture an invented page
 // drawn here; a second chat's card has no picture (no full-screen button). The chats have a folder, so the gallery can

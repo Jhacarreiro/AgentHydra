@@ -129,6 +129,8 @@ export interface FreePoolAdmission {
   plan: 'free' | 'go'
   limit: number
   existing: boolean
+  /** New Go imports replace an idle Free identity by default; absent on older admissions means true. */
+  replaceFreeWithGo?: boolean
   targetId?: string
   state: 'pending' | 'committed' | 'aborted'
   /** Metadata only; the importing caller restores its original cookie bytes before aborting a renewal. */

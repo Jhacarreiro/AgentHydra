@@ -1,6 +1,7 @@
 /**
- * A chat-moving toolbox run outside the daemon (orchestrator.ts movesChats): started under a
- * runner, read back only from files, and so carried on by the next daemon after a restart.
+ * A toolbox run that acts on chats at length, outside the daemon (orchestrator.ts outlivesDaemon:
+ * a move, an acting sweep, a fan_out spawn): started under a runner, read back only from files, and
+ * so carried on by the next daemon after a restart.
  *
  * ⛔ WHY (owner, 2026-10-17: each part of AgentHydra must restart on its own without blocking or
  * breaking the others). A move ran as the daemon's own child, and Bun on Windows ends its children

@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Restarting AgentHydra's window server no longer cuts off a Free message on its way.** A message sent to a Free account now goes on by itself while the server restarts or updates, and the restarted server picks it up and returns its reply. Asking again for the same message returns that send instead of sending it twice.
+
+- **VS Code Copilot Chat counts in Stats and Analytics.** Copilot chats in VS Code are now their own source, one call per request, and Cost by project places them by the folder the VS Code window had open. Copilot bills requests rather than tokens and most requests record no token count, so its row is there so every tool you use is counted, not for its volume.
+
+- **Chat search finds what was said in every account's chats, and answers from its index.** Searching chat contents now covers the chats of every CLI account, CliMayte's workers included, and each hit says which store and account it is in. It answers from the conversation index even while chats are running, instead of falling back to a slow scan that gave up after a few dozen files. The index now keeps itself up to date in the background.
+
+- **Killing every bun process no longer takes AgentHydra down.** On Windows, AgentHydra's window server and its running chats now run as `AgentHydra-desk.exe`, and a source checkout's service as `AgentHydra-daemon.exe`: copies of bun under their own names, kept up to date when bun changes. A chat that cleans up its dev servers with `taskkill /IM bun.exe` stops only those.
+
+- **AgentHydra's window server comes back when it dies.** If the server behind the AgentHydra window stops without being shut down, AgentHydra starts it again after 45 seconds. Quitting, Restart to update and updates are left alone, and a busy server is never touched.
+
+- **"Starting AgentHydra..." starts it again on Windows.** When the window server was down, AgentHydra's own start of it ran nothing, so that page gave up after 30 seconds. It now starts the server.
+
+- **A busy AgentHydra is no longer restarted as if it had crashed.** When the computer is full of work, AgentHydra can stop answering for half a minute, and the tray took 15 seconds of silence for a crash and restarted it, ending what it was doing. The tray now waits up to two minutes while AgentHydra's port is still open, and restarts it at once only when it is really gone.
+
+- **Spawning, messaging and sweeping chats keep going through a restart.** Opening a group of chats with fan_out, sending to or deleting them, and a sweep that archives chats or delivers messages now finish when AgentHydra restarts or updates part-way. The restarted AgentHydra reports their results, and a cancel you asked for before the restart still holds.
+
 - **Restarting AgentHydra no longer waits for a chat move.** A move between accounts keeps running through a restart or an update, and the restarted AgentHydra reports its result under the same operation. Restart is no longer refused while chats are being moved.
 
 - **Project dashboards come from a built-in template.** A project names its sections (stat tiles, waiting lists, grouped errors, breakdowns) and the MCP tool or HTTP endpoint that fills them in `.agenthydra/dashboard.json`, and AgentHydra draws them in its own look, reads the source itself and keeps the last numbers when it is down. No agent-built page or localhost address is needed; projects without a spec keep their page.

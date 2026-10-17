@@ -16,7 +16,11 @@
     "",
     "Quit takes the window with it (owner, 2026-10-15: quitting AgentHydra closes Hydra Desk; closing",
     "Hydra Desk leaves AgentHydra running): quitCommand runs Desk 2's stop.ps1 -Window, which closes the",
-    "window and stops Desk's server, the chats running on for the next start."
+    "window and stops Desk's server, the chats running on for the next start.",
+    "",
+    "The first runtime candidate is the daemon's own-name copy of bun (server/src/core/own-name.ts), which the",
+    "daemon keeps current: AgentHydra-daemon.exe, so a chat's `taskkill /IM bun.exe` passes the daemon by. Until",
+    "the daemon has made it, the tray starts plain bun as before."
   ],
 
   "displayName": "AgentHydra",
@@ -54,7 +58,11 @@
   "compiledExe": "AgentHydra.exe",
   "startCommandCompiled": "\"{COMPILED}\"",
   "startCommand": "{RUNTIME} server/src/index.ts",
-  "runtimeCandidates": ["~\\.bun\\bin\\bun.exe", "%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"],
+  "runtimeCandidates": [
+    "%AGENTHYDRA_HOME|~\\.agenthydra%\\bin\\AgentHydra-daemon.exe",
+    "~\\.bun\\bin\\bun.exe",
+    "%APPDATA%\\npm\\node_modules\\bun\\bin\\bun.exe"
+  ],
   "runtimeFallback": "bun",
 
   "firstRun": [

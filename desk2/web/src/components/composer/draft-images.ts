@@ -8,6 +8,9 @@ export interface DraftImage {
   mediaType: string
   dataBase64: string
   url: string // data: URL for the thumbnail
+  /** The size it had before the window shrank it (shrink.ts); absent when it was attached as it was. */
+  originalWidth?: number
+  originalHeight?: number
 }
 
 /** Undo puts a message back in its chat's box: the window event, whose detail is a PutBack. */

@@ -91,7 +91,7 @@ function Find-Daemon {
   }
   foreach ($conn in (Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) {
     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-    if ($proc -and $proc.ProcessName -in @('bun', 'node')) { $ports.Add([int]$conn.LocalPort) }
+    if ($proc -and $proc.ProcessName -in @('bun', 'node', 'AgentHydra-daemon')) { $ports.Add([int]$conn.LocalPort) }
   }
 
   foreach ($port in ($ports | Select-Object -Unique)) {
