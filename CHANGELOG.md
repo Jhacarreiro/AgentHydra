@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Claude verification refusals preserve saved logins.** A temporary verification page no longer marks an account signed out. Explicit expired or invalid sessions still require renewal.
+
 - **Fresh ChatGPT logins finish importing when cookies refresh.** The account check now proves the saved login after a legitimate refresh, while still rejecting a different account or a later change. A valid renewal no longer stays pending just because ChatGPT rotated its cookies.
 - **Logging out on one PC is no longer undone by another.** A Claude session or Desktop app still running on the other PC refreshes its login, and login sync took that refresh for a new sign-in and signed the account back in everywhere; now only a real sign-in after the logout does. A Desktop copy is also judged newer by its own sign-in grant, not by a year-long one beside it.
 - **People sync keeps a newer CrAInium edit over an unchanged copy here.** A checkout, copy or restore that rewrote a person's files without changing them made that old copy look newer and replace the edit; now a copy unchanged since the last sync never wins.
