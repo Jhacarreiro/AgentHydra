@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { ProjectDashboard, SourceState } from '@shared/project-dashboard'
 import { hasDashboard } from '@/components/dashboard/logic'
-import { age, freshness, tileValue } from '@/components/dashboard/template/format'
+import { age, freshness, sharedReasons, tileValue } from '@/components/dashboard/template/format'
 
 const NOW = Date.parse('2026-10-17T12:00:00Z')
 const min = (n: number) => new Date(NOW - n * 60_000).toISOString()
@@ -32,4 +32,10 @@ it("a row's age and a tile's value read as the person reads them", () => {
 it('a folder inside a checkout with a spec has a dashboard', () => {
   expect(hasDashboard([], ['C:/Users/me/atlas'], 'c:\\users\\me\\atlas\\web')).toBe(true)
   expect(hasDashboard([], ['C:/Users/me/atlas'], 'C:/Users/me/atlas-two')).toBe(false)
+})
+
+it('a source that could not be read is said once for all its sections; a reason only one section has stays with it', () => {
+  const down = 'Could not read HTTP api.example.com: api.example.com answered HTTP 503'
+  const sections = [{ missing: down }, { missing: null }, { missing: down }, { missing: 'HTTP api.example.com has no todo in its answer' }]
+  expect(sharedReasons(sections)).toEqual([down])
 })

@@ -71,3 +71,10 @@ export function freshness(d: ProjectDashboard, now: number): Freshness {
 
 /** A bar's width on a shared scale: never thinner than 4% so a small count still shows. */
 export const barWidth = (value: number, max: number): string => `${Math.max(4, (value / Math.max(1, max)) * 100)}%`
+
+/** Why sections could not be filled, when two or more share it (one source that could not be read): said once above them. */
+export function sharedReasons(sections: readonly { missing: string | null }[]): string[] {
+  const seen = new Map<string, number>()
+  for (const s of sections) if (s.missing) seen.set(s.missing, (seen.get(s.missing) ?? 0) + 1)
+  return [...seen].filter(([, n]) => n > 1).map(([why]) => why)
+}

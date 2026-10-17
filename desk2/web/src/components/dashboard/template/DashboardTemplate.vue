@@ -9,7 +9,7 @@ import ErrorsSection from './ErrorsSection.vue'
 import ListSection from './ListSection.vue'
 import SectionCard from './SectionCard.vue'
 import StatsSection from './StatsSection.vue'
-import { freshness } from './format'
+import { freshness, sharedReasons } from './format'
 import { ICON } from './icons'
 
 // A project's dashboard drawn from the template: how fresh its numbers are and the range they cover on one line, then
@@ -36,11 +36,14 @@ const options = computed(() => props.dashboard.ranges.map((r) => ({ value: r, la
 const fresh = computed(() => freshness(props.dashboard, props.now))
 const reading = computed(() => props.dashboard.sources.some((s) => s.reading))
 
+const sharedMissing = computed(() => sharedReasons(props.dashboard.sections))
+
 /** Each section with what it shows for the range: its data, or the line that says why there is none. */
 const shown = computed(() =>
   props.dashboard.sections.map((s) => {
     const got = s.feed ? forRange(s.feed, range.value ?? 'today') : null
-    const empty = s.missing ?? (isMissing(got) ? got.missing : !s.feed ? (reading.value ? 'Reading…' : 'Waiting for its source') : !got ? `No numbers for ${RANGE_LABEL[range.value ?? 'today']}` : null)
+    const missing = s.missing && sharedMissing.value.includes(s.missing) ? 'Not read yet' : s.missing
+    const empty = missing ?? (isMissing(got) ? got.missing : !s.feed ? (reading.value ? 'Reading…' : 'Waiting for its source') : !got ? `No numbers for ${RANGE_LABEL[range.value ?? 'today']}` : null)
     return { s, data: empty ? null : (got as StatsData | ListData | ErrorsData | BreakdownData), empty }
   })
 )
@@ -67,6 +70,16 @@ const problemsOpen = ref(false)
       <ul v-if="problemsOpen" class="mt-1.5 flex flex-col gap-1 ps-6 text-ui-sm leading-4.5 text-text-2">
         <li v-for="(p, i) in dashboard.problems" :key="i" class="wrap-break-word">{{ p }}</li>
       </ul>
+    </div>
+
+    <div
+      v-for="why in sharedMissing"
+      :key="why"
+      class="flex items-start gap-2 rounded-(--radius-10) bg-[color-mix(in_srgb,var(--warning-bg)_70%,transparent)] px-3.5 py-2.5 text-ui leading-5 text-warning-text shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warning)_30%,transparent)]"
+      data-testid="dashboard-source-down"
+    >
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <span class="min-w-0 wrap-break-word">{{ why }}</span>
     </div>
 
     <template v-for="{ s, data, empty } in shown" :key="s.id">
