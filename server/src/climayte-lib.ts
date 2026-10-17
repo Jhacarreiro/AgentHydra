@@ -1699,7 +1699,18 @@ function jsonlUnder(dir: string, depth: number): string[] {
   )
 }
 
-const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)
+function oneLine(s: string, n: number): string {
+  if (s.length <= 65_536) return s.replace(/\s+/g, ' ').trim().slice(0, n)
+  const text = s.trim()
+  if (!text) return ''
+  const k = Math.max(n * 8, 4096)
+  const head = text.slice(0, k).replace(/\s+/g, ' ')
+  // An extra normalized character proves the requested prefix is complete, even at a space.
+  // Sparse text falls back after one small probe instead of repeatedly rescanning long gaps.
+  const normalized = head.length >= n + 1 || text.length <= k ? head : text.replace(/\s+/g, ' ')
+  // Copy only the retained UTF-16 units, so a tiny stored summary cannot keep the body alive.
+  return normalized.slice(0, n).split('').join('')
+}
 
 export function summarizeEvent(raw: unknown): string | null {
   const ev = raw as any
@@ -1711,8 +1722,9 @@ export function summarizeEvent(raw: unknown): string | null {
   if (ev?.type === 'system' && ev.subtype === 'init') return `started (${ev.model ?? 'unknown'})`
   if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) return null
   for (const b of ev.message.content) {
-    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-      return `said: ${oneLine(b.text, 140)}`
+    if (b?.type === 'text' && typeof b.text === 'string') {
+      const preview = oneLine(b.text, 140)
+      if (preview) return `said: ${preview}`
     }
     if (b?.type === 'tool_use') {
       const i = b.input ?? {}
