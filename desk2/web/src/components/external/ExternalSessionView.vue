@@ -363,6 +363,7 @@ onUnmounted(() => {
         :session-id="sessionId"
         :session="session ?? null"
         :items="items"
+        :index="externalIndexBySession.get(sessionId) ?? null"
         :shown="shown"
         :search="searchSession"
         :reveal="revealItem"

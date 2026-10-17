@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Restarting AgentHydra no longer waits for a chat move.** A move between accounts keeps running through a restart or an update, and the restarted AgentHydra reports its result under the same operation. Restart is no longer refused while chats are being moved.
+
+- **Project dashboards come from a built-in template.** A project names its sections (stat tiles, waiting lists, grouped errors, breakdowns) and the MCP tool or HTTP endpoint that fills them in `.agenthydra/dashboard.json`, and AgentHydra draws them in its own look, reads the source itself and keeps the last numbers when it is down. No agent-built page or localhost address is needed; projects without a spec keep their page.
+
 - **ChatGPT Free sends no longer stop working after the browser service goes idle.** On Windows the background browser could get stuck while shutting down, and every ChatGPT send then failed after about 25 seconds until it was killed by hand. It now always finishes shutting down, and a failed send says why instead of only "interrupted".
 
 - **A central routine can run on every computer at once.** `"eachRunner": true` in a routine document makes every runner carrying its `runsOn` labels run its own copy over its own data, unclaimed and of any kind, status routines included. It is signed with the rest of the document, and a Desk older than this lists such a document as broken rather than running it.

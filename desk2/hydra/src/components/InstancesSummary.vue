@@ -28,7 +28,6 @@ import { useFreeInstances } from '@/composables/useFreeInstances'
 import type { KindView } from '@/composables/useInstanceFilter'
 import { freeStatDays, refreshFreeStats, useFreeStats } from '@/composables/useFreeStats'
 import { usagePeriod, useUsageSpan } from '@/composables/useUsagePeriod'
-import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { getFleetUsageHistory, getSpend, getTokensByDay } from '@/lib/api'
 import { axisMax, seriesColor, ticks } from '@/lib/chart'
 import { answeredShare, summarizeFree } from '@/lib/free-stats'
@@ -48,18 +47,17 @@ const isAll = computed(() => props.view === 'all')
 // The Free record is read again whenever an account's numbers move (a message ended), while the Free rows show.
 const { instances: freeInstances, tokens: freeTokens, health: freeHealth } = useFreeInstances()
 const { rows: freeRows, failed: freeStatsFailed } = useFreeStats()
-const tokenWindow = useDesktopTokenWindow()
 watch([showFree, freeTokens, freeHealth, freeStatDays], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
 const { span, freeSpan } = useUsageSpan()
 // The windows are days, so a minute's tick keeps the Free "now" from freezing at the moment it was first read.
 const now = useTimestamp({ interval: 60_000 })
-// The Free accounts' record over the period's days; null with no Free accounts. Its totals are in the Free card's own
-// window; the All line adds its days, the same period as Desktop and CLI (only All time differs: Free keeps 30 days).
+// The Free accounts' record over the period's days; null with no Free accounts. Its totals are the tiles' numbers, the
+// same period as Desktop and CLI (only All time differs: Free keeps 30 days).
 const freeSummary = computed(() =>
-  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, freeStatDays.value, now.value) : null,
+  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeStatDays.value, now.value) : null,
 )
 const freeAll = computed(() => freeSummary.value?.totals.all ?? null)
-const freeInDays = computed(() => (freeSummary.value?.days ?? []).reduce((n, d) => n + d.claude + d.chatgpt, 0))
+const freeInDays = computed(() => freeAll.value?.tokens ?? 0)
 const freeLine = computed(() => {
   const all = freeAll.value
   if (!all) return ''

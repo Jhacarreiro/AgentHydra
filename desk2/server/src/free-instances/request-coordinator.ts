@@ -373,12 +373,21 @@ export async function runCoordinatedFree(
   options: { platform?: NodeJS.Platform; ensure?: EnsureCoordinator } = {},
 ): Promise<RunOutput | undefined> {
   if (signal.aborted) throw new Error('stopped')
-  if (
-    (options.platform ?? process.platform) !== 'win32' ||
-    request.provider !== 'chatgpt' ||
-    (request.command !== 'chat' && request.command !== 'resume')
-  )
-    return undefined
+  if (request.provider !== 'chatgpt' || (request.command !== 'chat' && request.command !== 'resume')) return undefined
+  const endpoint = await coordinatorEndpoint(config, browserEndpoint, signal, options)
+  if (!endpoint) return undefined
+  return runCoordinatorRequest(endpoint, request, config.stateDir, signal)
+}
+
+/** The coordinator a ChatGPT message beyond the browser slots goes through, or undefined when there is none: the
+ *  message then runs on its own, as before any dispatch. A Free operation's runner (job-runner.ts) sends it. */
+export async function coordinatorEndpoint(
+  config: FreeConfig,
+  browserEndpoint: string,
+  signal: AbortSignal,
+  options: { platform?: NodeJS.Platform; ensure?: EnsureCoordinator } = {},
+): Promise<RequestCoordinatorEndpoint | undefined> {
+  if ((options.platform ?? process.platform) !== 'win32') return undefined
   let endpoint: RequestCoordinatorEndpoint
   try {
     endpoint = await (options.ensure ?? ensureRequestCoordinator)(config, browserEndpoint, signal)
@@ -387,5 +396,5 @@ export async function runCoordinatedFree(
     return undefined
   }
   if (signal.aborted) throw new Error('stopped')
-  return runCoordinatorRequest(endpoint, request, config.stateDir, signal)
+  return endpoint
 }

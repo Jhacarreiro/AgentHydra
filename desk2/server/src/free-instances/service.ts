@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreePoolAdmission, type FreePoolCommit, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
+import { JobFiles, LeftRunning, outputOf, watchRunner, type JobRecord } from './jobs'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
 import { failure, parseResult } from './results'
-import { runFree, type FreeRunner } from './runner'
+import { admitChatGPT, runFree, type FreeDetach, type FreeRunner, type RunOutput } from './runner'
 import { ManagedFreeRuntime, SetupRefused, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
 import { readLogin, type FreeSyncHost } from './sync'
@@ -30,6 +31,8 @@ const isUuid = (v: unknown): boolean => typeof v === 'string' && UUID.test(v)
 /** Operations running at once, and operations kept (running, and finished ones waiting to be read; see start). */
 const MAX_RUNNING = 16
 const MAX_KEPT = 200
+/** How long a finished operation stays for its caller to read, across a Desk restart too (jobs.ts). */
+const KEEP_MS = 15 * 60_000
 /** How long a shutdown waits for aborted jobs to save their last state, ms. */
 const STOP_WAIT_MS = 2000
 function checkIdentity(r: FreeRequest): void {
@@ -70,6 +73,14 @@ export class FreeInstances {
   private jobs = new Map<string, FreeJob>()
   private fingerprints = new Map<string, string>()
   private controllers = new Map<string, AbortController>()
+  /** Each operation a person or a chat asked for, as kept on disk (jobs.ts): the next Desk answers it, and carries on
+   *  one still running. Desk's own reads (FreeJob.auto) are not kept: the next Desk reads again. */
+  private kept = new Map<string, JobRecord>()
+  private files: JobFiles
+  /** Operations whose runner was asked for: Desk's stop leaves them running. */
+  private launched = new Set<string>()
+  /** Aborted by stop(): each watch lets its runner go on, and a kept operation still being set up is left to the next Desk. */
+  private leaving = new AbortController()
   /** Accounts whose log out is running: no operation may start on them meanwhile. */
   private forgetting = new Set<string>()
   private poolTail: Promise<unknown> = Promise.resolve()
@@ -106,9 +117,99 @@ export class FreeInstances {
     // (2026-10-08), where the plugin's failure alone costs only Free.
     this.keeper = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
     this.refresher = setTimeout(() => { this.refreshNext(); this.refresher = setInterval(() => this.refreshNext(), REFRESH_TICK_MS).unref() }, 90_000).unref()
+    this.files = new JobFiles(join(home, 'free', 'jobs'))
+    this.adopt()
   }
   private prune(): void {
-    for (const [id, job] of this.jobs) if (job.finishedAt && Date.now() - job.finishedAt > 15 * 60_000) { this.jobs.delete(id); this.fingerprints.delete(id) }
+    for (const [id, job] of this.jobs) if (job.finishedAt && Date.now() - job.finishedAt > KEEP_MS) this.forgetJob(id)
+  }
+  private forgetJob(id: string): void {
+    this.jobs.delete(id)
+    this.fingerprints.delete(id)
+    if (this.kept.delete(id)) this.files.drop(id)
+  }
+  /** Keeps an operation's record on disk. One that cannot be written runs as before this was kept: in memory only, and
+   *  ended by Desk's stop. */
+  private keep(record: JobRecord): void {
+    try { this.files.save(record); this.kept.set(record.job.id, record) } catch { this.kept.delete(record.job.id) }
+  }
+  /**
+   * The operations the last Desk kept (jobs.ts). A finished one is answered until it expires, so its caller still reads
+   * its reply; a running one goes on: watched to its end when its runner was started, else run from the start (it never
+   * reached the provider), a sign-in excepted (its window was this Desk's child and closed with it). A repeated request
+   * id finds it either way (start's fingerprint).
+   */
+  private adopt(): void {
+    let noted = false
+    for (const record of this.files.load()) {
+      const { job } = record
+      if (job.state === 'done') {
+        if (!job.finishedAt || Date.now() - job.finishedAt > KEEP_MS) { this.files.drop(job.id); continue }
+        this.jobs.set(job.id, job); this.fingerprints.set(job.id, record.fingerprint); this.kept.set(job.id, record)
+        continue
+      }
+      // Another service on this home in this process (a test's) runs it, and has not stopped: its own to finish.
+      if (record.desk === process.pid && !record.left) continue
+      if (!this.store.data.instances.some(i => i.id === job.instanceId)) { this.files.drop(job.id); continue }
+      const r = record.request
+      this.jobs.set(job.id, job)
+      this.fingerprints.set(job.id, record.fingerprint)
+      this.keep({ ...record, desk: process.pid, left: undefined })
+      const controller = new AbortController()
+      this.controllers.set(job.id, controller)
+      // The store read it as cut off by the restart (storage.ts load); it runs on.
+      if (this.noteThread(r, 'running')) noted = true
+      const run = this.execute(job, r, controller, { adopted: true }).then(() => undefined, () => undefined)
+      this.runs.set(job.id, run)
+      void run.then(() => this.runs.delete(job.id))
+    }
+    if (noted) this.store.save()
+  }
+  /** What runFree needs to run a kept operation under a runner of its own; a sign-in runs here, its window this Desk's. */
+  private detachFor(job: FreeJob): FreeDetach | undefined {
+    if (!this.kept.get(job.id)?.detached) return undefined
+    return {
+      paths: this.files.paths(job.id),
+      leave: this.leaving.signal,
+      launching: () => {
+        if (this.leaving.signal.aborted) return false
+        this.launched.add(job.id)
+        return true
+      },
+    }
+  }
+  /** Desk is stopping and the operation is the next Desk's (adopt): its wait or setup ends here, nothing is recorded. */
+  private leaveCheck(job: FreeJob): void {
+    if (this.leaving.signal.aborted && this.kept.get(job.id)?.detached) throw new LeftRunning()
+  }
+  /** A running operation the last Desk left: watched to its end when its runner was started. Undefined when no runner
+   *  ever took it: it then runs from the start. */
+  private async reattach(job: FreeJob, r: FreeRequest, controller: AbortController): Promise<RunOutput | undefined> {
+    if (!this.kept.get(job.id)?.detached) throw new Error('stopped')
+    if (!this.files.launched(job.id)) return undefined
+    this.launched.add(job.id)
+    job.phase = 'working'
+    const admitted = r.provider === 'chatgpt' && (r.command === 'chat' || r.command === 'resume') ? admitChatGPT() : undefined
+    try {
+      const watched = await watchRunner(this.files.paths(job.id), job.id, { cancel: controller.signal, leave: this.leaving.signal })
+      if (watched.end !== 'not-taken') return outputOf(watched)
+      this.launched.delete(job.id)
+      job.phase = 'setup'
+      return undefined
+    } finally { admitted?.release() }
+  }
+  /** The record of an operation that ended: its result, without its message. Its runner's files go once it is on disk. */
+  private ended(job: FreeJob, r: FreeRequest): void {
+    this.launched.delete(job.id)
+    const record = this.kept.get(job.id)
+    if (!record) return
+    const { prompt: _, ...request } = r
+    try {
+      const done: JobRecord = { ...record, job: { ...job }, request, left: undefined }
+      this.files.save(done)
+      this.kept.set(job.id, done)
+      this.files.clearRunner(job.id)
+    } catch { /* the record still says running: the next Desk reads the result from the runner's files */ }
   }
   private instance(id: string): FreeInstance {
     const instance = this.store.data.instances.find(i => i.id === id)
@@ -433,7 +534,7 @@ export class FreeInstances {
         await this.runtime.ensure(instance.provider)
         await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000))
       } catch { /* deleted regardless */ }
-      for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
+      for (const [jobId, job] of this.jobs) if (job.instanceId === id) this.forgetJob(jobId)
       this.historyRevision++
       this.store.remove(id, opts.tombstone ?? true)
       this.threadSummary = undefined
@@ -621,16 +722,17 @@ export class FreeInstances {
       throw new FreeError(`Desk already has ${MAX_RUNNING} operations running.`, 409)
     if (this.jobs.size >= MAX_KEPT) {
       const done = [...this.jobs.values()].filter(j => j.state === 'done').sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))
-      for (const old of done.slice(0, this.jobs.size - MAX_KEPT + 1)) { this.jobs.delete(old.id); this.fingerprints.delete(old.id) }
+      for (const old of done.slice(0, this.jobs.size - MAX_KEPT + 1)) this.forgetJob(old.id)
     }
     const job: FreeJob = { id: r.requestId, instanceId: r.instanceId, provider: r.provider, command: r.command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: r.chatId, ...(auto ? { auto: true } : {}) }
     this.jobs.set(job.id, job)
     this.fingerprints.set(job.id, fingerprint)
+    if (!auto) this.keep({ job, fingerprint, request: r, detached: r.command !== 'login', desk: process.pid })
     const controller = new AbortController()
     this.controllers.set(job.id, controller)
     this.markThread(r, 'running')
     const before = running.length ? Promise.all(running.map(j => this.runs.get(j.id))).then(() => undefined) : undefined
-    const run = this.execute(job, r, controller, before).then(() => undefined, () => undefined)
+    const run = this.execute(job, r, controller, { before }).then(() => undefined, () => undefined)
     this.runs.set(job.id, run)
     void run.then(() => this.runs.delete(job.id))
     return job
@@ -669,42 +771,61 @@ export class FreeInstances {
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
   }
-  private async execute(job: FreeJob, r: FreeRequest, controller: AbortController, before?: Promise<void>): Promise<void> {
+  /** `before`: Desk's own read on the account, which ends first. `adopted`: an operation the last Desk left (adopt). */
+  private async execute(job: FreeJob, r: FreeRequest, controller: AbortController, o: { before?: Promise<void>; adopted?: boolean }): Promise<void> {
     let spent: TokenEntry | null = null
+    let left = false
     try {
-      // Desk's own read on this account ends first: one operation per account at a time. A cancel ends the wait.
-      if (before) await Promise.race([before, new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }))])
-      controller.signal.throwIfAborted()
-      try { await this.runtime.ensure(r.provider) }
-      catch (e) { job.result = failure('setup_failed', e instanceof SetupRefused ? e.message : 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
-      controller.signal.throwIfAborted()
-      job.phase = 'working'
+      let output = o.adopted ? await this.reattach(job, r, controller) : undefined
       const config = this.runtime.config(r.instanceId)
-      job.result = parseResult(r.command, await this.runner(config, r, controller.signal))
+      if (!output) {
+        // Desk's own read on this account ends first: one operation per account at a time. A cancel ends the wait, and
+        // so does Desk's stop.
+        if (o.before) await Promise.race([o.before, ...[controller.signal, this.leaving.signal].map(s => new Promise(resolve => s.addEventListener('abort', resolve, { once: true })))])
+        this.leaveCheck(job)
+        controller.signal.throwIfAborted()
+        try { await this.runtime.ensure(r.provider) }
+        catch (e) { job.result = failure('setup_failed', e instanceof SetupRefused ? e.message : 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
+        this.leaveCheck(job)
+        controller.signal.throwIfAborted()
+        job.phase = 'working'
+        output = await this.runner(config, r, controller.signal, this.detachFor(job))
+      }
+      // The harness has ended: what follows (an account check's reads) runs here, and Desk's stop ends it.
+      this.launched.delete(job.id)
+      job.result = parseResult(r.command, output)
       const instance = this.instance(r.instanceId)
       if (r.command === 'auth' || r.command === 'login') await this.afterAuth(r, job.result, instance, config, controller.signal)
       if (r.command === 'nudge') await this.afterNudge(r, job.result, instance, config, controller.signal)
       // finally saves the result together with its stats. Serializing here too
       // copied the entire history twice with no asynchronous work in between.
       spent = this.apply(r, job.result, false)
-    } catch (error) {
+    } catch (e) {
+      // Desk is stopping: the operation is the next Desk's, which records it (adopt).
+      if (e instanceof LeftRunning) { left = true; return }
       // The cause rides in the message: dropped, every ChatGPT send read only "interrupted" for an hour while the
       // runner threw browser_pool_unavailable (2026-10-17). Only a leading code is carried ('browser_pool_unavailable',
       // 'request_coordinator_unavailable: ...'), never the rest of a message, which could hold anything.
-      const cause = error instanceof Error ? /^[a-z][a-z0-9_]{2,63}(?=:|$)/.exec(error.message)?.[0] : undefined
+      const cause = e instanceof Error ? /^[a-z][a-z0-9_]{2,63}(?=:|$)/.exec(e.message)?.[0] : undefined
       job.result = failure('operation_interrupted', `The operation was interrupted${cause ? ` (${cause})` : ''}. Refresh the chat list and read the chat before sending again.`, r.chatId)
       // finally persists this recovery state together with the completed job's accounting.
       this.noteThread(r, 'failed', r.chatId, job.result.error!.message)
     } finally {
-      job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
-      // A cancel is the asker's doing, not the account's.
-      if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted) {
-        this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
-        const ok = job.result?.ok === true
-        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, code: job.result?.error?.code, input: spent?.input ?? 0, output: spent?.output ?? 0 })
-      }
-      this.store.save()
+      if (left) this.controllers.delete(job.id)
+      else this.recordEnd(job, r, controller, spent)
     }
+  }
+  /** An operation's end: its state, the account's outcomes and stats, the store, and its record. */
+  private recordEnd(job: FreeJob, r: FreeRequest, controller: AbortController, spent: TokenEntry | null): void {
+    job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
+    // A cancel is the asker's doing, not the account's.
+    if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted) {
+      this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
+      const ok = job.result?.ok === true
+      addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, code: job.result?.error?.code, input: spent?.input ?? 0, output: spent?.output ?? 0 })
+    }
+    this.store.save()
+    this.ended(job, r)
   }
   private async afterAuth(r: FreeRequest, result: FreeResult, instance: FreeInstance, config: ReturnType<FreeRuntime['config']>, signal: AbortSignal): Promise<void> {
     // Only an answer moves the login: the site took it, or said it needs one (login_required or login_expired). A check that failed
@@ -810,11 +931,15 @@ export class FreeInstances {
   }
   /** Resolves once everything saved so far is on disk (tests). */
   settled(): Promise<void> { return this.store.settled() }
-  /** Aborts the running jobs, waits for their last saves (STOP_WAIT_MS at most), then writes what is still queued and
-   *  waits out a write already in flight, so nothing touches the folder after the service stopped. */
+  /** Leaves each kept operation to the next Desk (adopt): one under its runner runs on, one still being set up is run by
+   *  the next Desk from the start. Aborts the other running jobs, waits for their last saves (STOP_WAIT_MS at most), then
+   *  writes what is still queued and waits out a write already in flight, so nothing touches the folder after the service
+   *  stopped. */
   async stop(): Promise<void> {
     this.stopping = true; clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher)
-    for (const controller of this.controllers.values()) controller.abort()
+    this.leaving.abort()
+    for (const [id, record] of this.kept) if (record.detached && this.jobs.get(id)?.state === 'running') this.keep({ ...record, left: true })
+    for (const [id, controller] of this.controllers) if (!this.launched.has(id)) controller.abort()
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([Promise.all(this.runs.values()), new Promise(resolve => { timer = setTimeout(resolve, STOP_WAIT_MS) })])
     clearTimeout(timer)

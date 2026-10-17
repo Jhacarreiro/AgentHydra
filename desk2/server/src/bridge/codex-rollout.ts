@@ -4,7 +4,7 @@
 // enough for a share. Desk reaches an outside Codex chat's transcript through AgentHydra's tail, which carries neither.
 
 import { statSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readTail, TAIL_BYTES } from './session-jsonl'
 
@@ -86,4 +86,46 @@ export function codexTurnOpen(path: string): boolean {
     return mark === 'task_started'
   }
   return size > TURN_TAIL_BYTES
+}
+
+/** A turn's opening mark as the rollout's bytes hold it: an event whose own type it is (one nesting the type deeper is not a
+ *  mark, as in codexTurnOpen). Its quotes are JSON's own: inside a message's text they are escaped (\"), so a message that
+ *  mentions the mark never counts. Read 2026-10-17 over the 12 newest rollouts: the same count as parsing each line. */
+const TURN_STARTED = Buffer.from('"payload":{"type":"task_started"')
+const COUNT_READ_BYTES = 4 * 1024 * 1024
+/** Per rollout: the bytes counted, the turns in them, and their last bytes, where a mark the next read completes begins. */
+const counted = new Map<string, { size: number; turns: number; carry: Buffer }>()
+const COUNTED_KEPT = 200
+
+/** The thread's turns: its rollout's `task_started` marks over the whole file, as Codex counts them, where AgentHydra's usage does
+ *  not count Codex and the transcript Desk holds is only the thread's newest part (2026-10-17: a 124-turn thread read "15 turns",
+ *  the prompts in its loaded page). Kept per file, so a count reads only what was appended since the last one (a long thread's
+ *  rollout runs to hundreds of MB); a file that shrank was replaced, and is counted again. */
+export async function codexTurnCount(path: string): Promise<number> {
+  const size = (await stat(path)).size
+  let at = counted.get(path)
+  if (!at || size < at.size) at = { size: 0, turns: 0, carry: Buffer.alloc(0) }
+  let { turns, carry } = at
+  let pos = at.size
+  if (pos < size) {
+    const fh = await open(path, 'r')
+    try {
+      const chunk = Buffer.allocUnsafe(Math.min(COUNT_READ_BYTES, size - pos))
+      while (pos < size) {
+        const { bytesRead } = await fh.read(chunk, 0, Math.min(chunk.length, size - pos), pos)
+        if (!bytesRead) break
+        pos += bytesRead
+        const bytes = Buffer.concat([carry, chunk.subarray(0, bytesRead)])
+        for (let i = bytes.indexOf(TURN_STARTED); i !== -1; i = bytes.indexOf(TURN_STARTED, i + TURN_STARTED.length)) turns++
+        // Shorter than the mark, so no mark is counted twice; copied, so the chunk is not held.
+        carry = Buffer.from(bytes.subarray(Math.max(0, bytes.length - (TURN_STARTED.length - 1))))
+      }
+    } finally {
+      await fh.close()
+    }
+  }
+  counted.delete(path)
+  counted.set(path, { size: pos, turns, carry })
+  while (counted.size > COUNTED_KEPT) counted.delete(counted.keys().next().value!)
+  return turns
 }

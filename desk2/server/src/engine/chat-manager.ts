@@ -148,6 +148,8 @@ export class ChatManager {
   private itemsBodyBytes = 0
   /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
   private closing = false
+  /** The branch reads under way (refreshBranch), each running git in a chat's folder: closeAll waits for them. */
+  private readonly branchReads = new Set<Promise<void>>()
   private readonly titleGen: TitleGenerator | null
   private readonly retryDelays: RetryDelays
   private readonly codexDir: CodexDirectory | null
@@ -1916,6 +1918,7 @@ export class ChatManager {
   async closeAll(o: { chats?: boolean } = {}): Promise<void> {
     this.closing = true
     await this.workers.syncing?.catch(() => {})
+    await Promise.allSettled([...this.branchReads])
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.pinned?.close() : e.pinned?.shutdown())?.catch(() => {})))
     closeAppServers()
@@ -2234,15 +2237,21 @@ export class ChatManager {
     if (e) this.turnEnded(e)
   }
 
-  /** Reads the chat folder's branch in the background (kept per folder, git/branch.ts) and sends the chat when it changed. */
+  /** Reads the chat folder's branch in the background (kept per folder, git/branch.ts) and sends the chat when it changed.
+   *  The read runs git in that folder, which Windows will not let anyone remove while it runs, so closeAll waits for every
+   *  read still under way and none starts once it has begun (2026-10-17: Windows CI's account-failover tests failed with
+   *  EBUSY removing a chat's folder right after closeAll, 22 of them on every run since 91a3826e). */
   private refreshBranch(e: Entry): void {
     const cwd = e.chat.cwd
-    if (!cwd) return
-    void branchOf(cwd).then((branch) => {
+    if (!cwd || this.closing) return
+    const read = branchOf(cwd).then((branch) => {
       if ((e.chat.gitBranch ?? null) === branch && e.chat.gitBranch !== undefined) return
       e.chat.gitBranch = branch
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
     })
+    this.branchReads.add(read)
+    const done = () => void this.branchReads.delete(read)
+    read.then(done, done)
   }
 
   /** A chat that was live and no longer is ends its turn once: AgentHydra tells the chats waiting on it (completions.ts). */

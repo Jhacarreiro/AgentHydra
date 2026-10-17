@@ -27,4 +27,7 @@ export default {
   accountWas: '{name} (was #{num})',
   accountSignedOut: '{name} (signed out)',
   accountUnknown: 'Not signed in on this PC',
+  accountMainEarlier: '{name}, earlier login',
+  accountMainTitle:
+    'Chats run in the main ~/.claude folder: plain claude, the VS Code extension, and desktop chats whose record is gone. Credited to the account signed in there when AgentHydra read them.',
 }

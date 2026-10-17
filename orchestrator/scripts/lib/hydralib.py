@@ -87,6 +87,16 @@ _DEFAULT_BASE = f"http://127.0.0.1:{DEFAULT_PORT}"
 _SIDE_RUN_ANNOUNCED = False
 TIMEOUT_SECS = float(os.environ.get("AGENTHYDRA_TIMEOUT_SECS", "30"))
 
+# A toolbox run the daemon started under a runner (a chat move, server/src/orchestrator.ts
+# MOVE_SCRIPTS) has its operation id here. Such a run outlives a daemon restart (2026-10-17), so a
+# call that meets the handover waits it out instead of failing a move step half-way: the outgoing
+# daemon answers 503 with x-agenthydra-restarting (the call did not run; server/src/toolbox-calls.ts),
+# then the port refuses connections until the next daemon binds it (a refused connect sent nothing).
+# Either is sent again every second, for up to RESTART_WAIT_SECS. A script run from a shell has no id
+# and fails at once, as before.
+OPERATION = os.environ.get("AGENTHYDRA_OPERATION", "").strip()
+RESTART_WAIT_SECS = float(os.environ.get("AGENTHYDRA_RESTART_WAIT_SECS", "120"))
+
 # THE TEST SEAM, AND WHY THE SUITE NEEDS ONE (measured 2026-09-05). The unit tests' stub daemon
 # answered over a real loopback socket, so every call here opened one TCP connection and left it
 # in TIME_WAIT for about two minutes. Windows hands out 16,384 ephemeral ports; the 908-test
@@ -198,41 +208,58 @@ def _send(method: str, path: str, data: bytes | None, timeout: float,
             raise
         except Exception as e:  # a stub route that blows up is the daemon hanging up mid-answer
             raise DaemonError(path, None, f"stub route failed: {e!r}") from None
-    req = urllib.request.Request(
-        f"{BASE}{path}",
-        data=data,
-        method=method,
-        headers={"accept": "application/json", "content-type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
-            _note_side_run(res.headers.get("x-agenthydra-side-run"))
-            return res.status, res.read()
-    except urllib.error.HTTPError as e:
+    headers = {"accept": "application/json", "content-type": "application/json"}
+    if OPERATION:
+        headers["x-agenthydra-operation"] = OPERATION
+    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method, headers=headers)
+    since = time.monotonic()
+    while True:
         try:
-            detail = e.read()
+            with urllib.request.urlopen(req, timeout=timeout) as res:
+                _note_side_run(res.headers.get("x-agenthydra-side-run"))
+                return res.status, res.read()
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if _restart_gap(e) and time.monotonic() - since < RESTART_WAIT_SECS:
+                if isinstance(e, urllib.error.HTTPError):
+                    e.close()
+                time.sleep(1)
+                continue
+            failed = e
+            break
+    if isinstance(failed, urllib.error.HTTPError):
+        try:
+            detail = failed.read()
         except Exception:
             detail = b""
-        return e.code, detail
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        if not retry_stale_pointer:
-            raise DaemonError(path, None, f"{e} - mutation was not retried") from None
-        stale = _stale_pointer_note()
-        if stale and retry_stale_pointer and _default_port_answers():
-            sys.stderr.write(
-                f"hydralib: {stale}; the default port answers as agenthydra, so this process uses "
-                f"{_DEFAULT_BASE} from here on. Do NOT start another daemon.\n"
-            )
-            BASE = _DEFAULT_BASE
-            return _send(method, path, data, timeout)
-        if stale:
-            raise DaemonError(
-                path,
-                None,
-                f"{e} - {stale}, and the default port did not answer either. Is the daemon "
-                f"running? try: curl {_DEFAULT_BASE}/api/health",
-            ) from None
-        raise DaemonError(path, None, f"{e} - is the daemon running? try: curl {BASE}/api/health") from None
+        return failed.code, detail
+    if not retry_stale_pointer:
+        raise DaemonError(path, None, f"{failed} - mutation was not retried") from None
+    stale = _stale_pointer_note()
+    if stale and retry_stale_pointer and _default_port_answers():
+        sys.stderr.write(
+            f"hydralib: {stale}; the default port answers as agenthydra, so this process uses "
+            f"{_DEFAULT_BASE} from here on. Do NOT start another daemon.\n"
+        )
+        BASE = _DEFAULT_BASE
+        return _send(method, path, data, timeout)
+    if stale:
+        raise DaemonError(
+            path,
+            None,
+            f"{failed} - {stale}, and the default port did not answer either. Is the daemon "
+            f"running? try: curl {_DEFAULT_BASE}/api/health",
+        ) from None
+    raise DaemonError(path, None, f"{failed} - is the daemon running? try: curl {BASE}/api/health") from None
+
+
+def _restart_gap(err: Exception) -> bool:
+    """Is this the daemon handing over to its successor, with nothing run? Only a run under a
+    runner (OPERATION) waits one out; see RESTART_WAIT_SECS."""
+    if not OPERATION:
+        return False
+    if isinstance(err, urllib.error.HTTPError):
+        return err.code == 503 and bool(err.headers.get("x-agenthydra-restarting"))
+    return isinstance(getattr(err, "reason", err), ConnectionRefusedError)
 
 
 def _request(method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict | list:

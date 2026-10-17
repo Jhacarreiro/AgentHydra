@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The Free accounts' part of the Usage history card (owner, 2026-10-08: "total tokens ... Claude and ChatGPT ... per
-// each ... also the success rate across which models ... were used on each"): the token totals in the table's window,
-// the success rate by model, and Free tokens per day. A list of every account with its models was here briefly and
+// each ... also the success rate across which models ... were used on each"): the token totals over the card's period
+// (the header's number; lib/free-stats.ts), the success rate by model, and Free tokens per day. A list of every account with its models was here briefly and
 // came out the same day (owner: "don't need this"); each account's tokens are the table's own column. On All the models
 // are one list of every source's (CombinedModels), so `hideModels` leaves out the answered-by-model list.
 import type { FreeProvider } from '@desk/shared/free-instances'
@@ -14,7 +14,6 @@ import SeriesLegend from '@/components/SeriesLegend.vue'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { freeStatDays, useFreeStats } from '@/composables/useFreeStats'
 import { useUsageSpan } from '@/composables/useUsagePeriod'
-import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { seriesColor } from '@/lib/chart'
 import { freeLogo } from '@/lib/free-instances'
 import { answeredShare, type FreeTally, summarizeFree } from '@/lib/free-stats'
@@ -23,14 +22,12 @@ import { dayLabel } from '@/lib/usage-history'
 
 defineProps<{ hideModels?: boolean }>()
 const { t } = useI18n()
-const { instances, tokens } = useFreeInstances()
+const { instances } = useFreeInstances()
 const { rows, failed } = useFreeStats()
-const tokenWindow = useDesktopTokenWindow()
 
 // The windows are days, so a minute's tick keeps the summary's "now" from freezing at the moment it was first read.
 const now = useTimestamp({ interval: 60_000 })
-const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, tokens.value, tokenWindow.value, freeStatDays.value, now.value))
-const windowLabel = computed(() => ({ '5h': t('freeInstances.stats.window5h'), week: t('freeInstances.stats.windowWeek'), total: t('freeInstances.stats.windowTotal') })[tokenWindow.value])
+const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, freeStatDays.value, now.value))
 const providerLabel = (p: FreeProvider) => (p === 'claude' ? 'Claude' : 'ChatGPT')
 const pct = (x: Pick<FreeTally, 'sent' | 'failed'>) => {
   const share = answeredShare(x)
@@ -80,7 +77,7 @@ const messagesTip = (x: FreeTally) => {
         </p>
         <p class="text-base font-semibold tabular-nums">
           {{ formatTokens(tile.tokens) }}
-          <span class="text-2xs font-normal text-muted-foreground">{{ $t('freeInstances.stats.tokensIn', { window: windowLabel }) }}</span>
+          <span class="text-2xs font-normal text-muted-foreground">{{ $t('freeInstances.stats.tokensIn', { span: freeSpan }) }}</span>
         </p>
         <p class="text-2xs tabular-nums text-muted-foreground" :title="messagesTip(tile)">
           <span :class="rateClass(tile)">{{ pct(tile) }}</span>

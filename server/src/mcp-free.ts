@@ -133,6 +133,13 @@ async function desk<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T
 }
 
+/** Desk 2 away for a moment rather than refusing: not answering (a restart, a timeout) or a server error (it
+ *  answers 503 "Desk is stopping" during a restart). What waits on it stays queued, within the batch's limit. */
+function deskAway(e: unknown): boolean {
+  const status = (e as DeskError).status
+  return status === 0 || status >= 500
+}
+
 /** Overlapping batches and status callers share only the read already in flight, never a cached
  *  answer: a send made after it settles must see the account's new busy state. */
 let statusRead: Promise<FreeStatus> | null = null
@@ -1109,8 +1116,7 @@ async function accountFor(
           threadLookupPath(cache.chatIds ?? [it.task.chat_id]),
         )
       } catch (e) {
-        const status = (e as DeskError).status
-        if (status === 0 || status >= 500) return undefined
+        if (deskAway(e)) return undefined
         reason = ` (${(e as Error).message})`
       }
     }
@@ -1178,7 +1184,13 @@ function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
   }
 }
 
-async function startTask(b: Batch, it: Item, account: FreeInstance, busy: Set<string>) {
+/** Posts one queued task. Returns Desk 2's error when it is away (the task stays queued), else null. */
+async function startTask(
+  b: Batch,
+  it: Item,
+  account: FreeInstance,
+  busy: Set<string>,
+): Promise<Error | null> {
   // A send an earlier daemon left half-way goes out under its own request id again (Item.sendingAt).
   const requestId = it.sendingAt && it.requestId ? it.requestId : randomUUID()
   const body = jobBody(it.task, account, requestId)
@@ -1223,20 +1235,27 @@ async function startTask(b: Batch, it: Item, account: FreeInstance, busy: Set<st
       thread: it.task.name,
     })
     busy.add(account.id)
+    return null
   } catch (e) {
-    // Desk 2 answered, so it started nothing: the task is free to go anywhere next tick.
+    // Desk 2 answered, so it started nothing (it answers a request id it holds with that operation, even while
+    // it stops): the task is free to go anywhere next tick.
     if ((e as DeskError).status)
       for (const k of ['requestId', 'instanceId', 'sendingAt'] as const) delete it[k]
     // Busy since the status was read (another chat, a keepalive nudge): the next tick tries again.
     if ((e as DeskError).status === 409) busy.add(account.id)
+    // Desk 2 restarting (503 while it stops, then no answer until the next is up): the next tick tries again,
+    // until the batch's queue limit. A send it never answered keeps its request id, so the next try reaches the
+    // operation it may hold (2026-10-17: each such task failed).
+    else if (deskAway(e)) return e as Error
     else Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+    return null
   }
 }
 
 /** A send an earlier daemon left half-way: resent to its own account under its own request id (Desk 2
  *  answers with the operation if it has it, so nothing is sent twice), or reported unknown once Desk 2
  *  may have forgotten it. */
-async function resumeSend(b: Batch, it: Item, tick: Tick): Promise<void> {
+async function resumeSend(b: Batch, it: Item, tick: Tick): Promise<Error | null> {
   const account = tick.byId.get(it.instanceId ?? '')
   if (account && Date.now() - (it.sendingAt ?? 0) <= RESEND_WINDOW_MS)
     return startTask(b, it, account, tick.busy)
@@ -1246,6 +1265,7 @@ async function resumeSend(b: Batch, it: Item, tick: Tick): Promise<void> {
       'operation_unconfirmed: AgentHydra restarted while this send was being made, and it can no longer be checked. The provider operation may have happened: check free_threads and free_read before sending again. No automatic resend was made.',
   })
   delete it.sendingAt
+  return null
 }
 
 /** Sends a batch: each queued task starts on an idle account (a continuation on its thread's own),
@@ -1286,9 +1306,9 @@ async function tickBatch(b: Batch, cache: BatchReads, until: number): Promise<Er
   try {
     status = await readStatus()
   } catch (e) {
-    // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
-    if (Date.now() > until || (e as DeskError).status !== 0)
-      failQueued(b, String((e as Error).message))
+    // Desk 2 away (a restart, a 503 while it stops): the queued tasks wait for it until the queue limit, and a
+    // running send may still land. A refusal gives up only the tasks not yet started.
+    if (Date.now() > until || !deskAway(e)) failQueued(b, String((e as Error).message))
     releaseFreeBatchInputs(b.items, cache)
     return e as Error
   }
@@ -1298,17 +1318,23 @@ async function tickBatch(b: Batch, cache: BatchReads, until: number): Promise<Er
   // task order as before, even when Desk answers them in a different order.
   const replies = await readJobs(running, cache)
   for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
+  let away: Error | null = null
   for (const it of b.items.filter((x) => x.s.state === 'queued')) {
     // A restart began: nothing new is sent here; the next daemon starts it.
     if (freeBatchHandover.isParked()) break
-    if (it.sendingAt) {
-      await resumeSend(b, it, tick)
-      continue
+    let turnedAway: Error | null = null
+    if (it.sendingAt) turnedAway = await resumeSend(b, it, tick)
+    else {
+      const account = await accountFor(it, tick, cache)
+      if (account) turnedAway = await startTask(b, it, account, tick.busy)
     }
-    const account = await accountFor(it, tick, cache)
-    if (account) await startTask(b, it, account, tick.busy)
+    away ??= turnedAway
+    // Desk 2 stopped answering mid-tick: the rest wait for the next tick rather than each meet it too.
+    if ((turnedAway as DeskError | null)?.status === 0) break
   }
-  if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+  // Past the limit a task Desk 2 kept turning away names why, not a want of idle accounts.
+  if (Date.now() > until)
+    failQueued(b, away?.message ?? 'No Free account was idle within 30 minutes.')
   // Retry decisions and queued starts are settled before any input is released.
   releaseFreeBatchInputs(b.items, cache)
   return null

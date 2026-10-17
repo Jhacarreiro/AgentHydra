@@ -155,6 +155,13 @@ export function statsAnswers(): FakeState['stats'] {
       pricesAsOf: '2026-10-01',
       priceSource: 'bundled',
       coverage: { sessions: 50, total: 60, refreshing: true, bytes: 0 },
+      // Where each source's record begins; `newtool` has none.
+      kitCoverage: {
+        sources: {
+          desktop: { events: 500, firstTs: new Date(2026, 5, 30, 9).getTime(), lastTs: Date.now() },
+          climayte: { events: 300, firstTs: new Date(2026, 8, 30, 23).getTime(), lastTs: Date.now() },
+        },
+      },
       notes: [],
     },
     activity: { hours, tools: [], agentMinutes: 321, health: [], editSurvival: { sessions: 0, average: null, overdue: 0 } },

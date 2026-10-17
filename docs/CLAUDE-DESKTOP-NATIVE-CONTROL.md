@@ -479,6 +479,9 @@ settles it undelivered after 90 s, silently. The receipt stays `queued` for the 
 therefore never sends a message to a chat with work in flight: `nativeChatBusy` (native-program.ts)
 covers a running or starting query, a losable turn, held input, a pending cycle, a next cycle and a
 pending turn result, and a busy send answers `dispatch: 'not-sent', busy: true`, with nothing sent.
+A background task alone is not busy (the app's `losableWorkKind` is asked with `ignoreBackgroundTasks`): the
+app queues a peer send only behind a turn in progress or an absent host, and on 2026-10-17 counting one held
+every babysitter continue to a chat a usage limit stopped mid-command until that command ended.
 
 `server/src/claude-native-send.ts` (`tryNativeSend`) runs the send. `sendOrHold` is what callers use:
 a busy chat is journalled in `DATA_DIR/claude-native/held-sends.json` by

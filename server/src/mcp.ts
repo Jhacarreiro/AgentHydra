@@ -1998,7 +1998,7 @@ export const TOOLS: HydraTool[] = [
     name: 'orchestrator_operation',
     listed: true,
     description:
-      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
+      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A chat move (migrate_batch, migrate_chat) keeps running and keeps its record through a daemon restart. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
     inputSchema: S({
       id: {
         type: 'string',

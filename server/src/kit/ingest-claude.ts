@@ -9,7 +9,8 @@
 //  * ACCOUNT: a CLI instance's is the holder of its config dir at the message's own time
 //    (core/account-holders.ts: account-holders.json, holderAt). A desktop chat: the account folder its chat
 //    record sits in, whatever the time. Anything else in the shared store (a plain `claude` run on the
-//    default login): the account signed in to the default dir now (no history is kept for it).
+//    default login): the holder of the default dir at the message's time, recorded the same way since
+//    2026-10-17; before its first record, nobody.
 //  * INSTANCE `cli:<id>`, `desktop:<profile dir name>` or `default`. SOURCE `climayte` when the session
 //    is an attempt of CliMayte's (corch/workers.json, corch/done/*.json), else `desktop` / `cli`.
 //    `agent` is `subagent` for `<session>/subagents/*.jsonl`, whose session is the parent's.
@@ -28,7 +29,7 @@
 import { createHash } from 'node:crypto'
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join, relative, resolve, sep } from 'node:path'
-import { CLAUDE_PROJECTS_ROOT } from '../config'
+import { CLAUDE_MAIN_DIR, CLAUDE_PROJECTS_ROOT } from '../config'
 import {
   accountUuidOfClaudeJson,
   holderAt,
@@ -44,7 +45,7 @@ import { intern } from '../core/intern'
 import { hswarmAccountId } from '../hswarm'
 import { POINTER_DIR } from '../instance'
 import { pricesAsOf, priceTokens, promptSize } from '../pricing'
-import { accumulateUsageLine, defaultConfigDir, emptySpend } from '../usage-tokens'
+import { accumulateUsageLine, emptySpend } from '../usage-tokens'
 import { sessionAddSql, sessionAggSql } from './schema'
 import { CLAUDE_SOURCES, ensureSettledPart, subtractFromHour } from './settled-part'
 import {
@@ -84,6 +85,9 @@ const FLUSH_BYTES = 64 * 1024 * 1024
 export const DEFAULT_MAX_BYTES_PER_SEC = 40 * 1024 * 1024
 const DAY_MS = 86_400_000
 const QUIET_MS = 3_600_000
+/** At the main folder's first record, its login is taken to have held it this long already: a sweep runs every
+ *  minute while the app is open, so the lines the first sweep after an update or restart reads keep their account. */
+const MAIN_SEED_BACK_MS = 3_600_000
 const STAT_WORKERS = 32
 
 /** Who a transcript belongs to; `accountAt` returns an account uuid (null: nobody). */
@@ -179,7 +183,21 @@ export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
     roots.push({ dir: join(inst.configDir, 'projects'), owner: () => owner })
     await yieldLoop()
   }
+  // The main folder (~/.claude) is tracked the same way since 2026-10-17. Before, its calls went to whoever was
+  // signed in when they were read, so the ledger's first sweep (2026-10-03) credited the folder's whole history,
+  // back to 2026-07-22, to that day's login (owner: "why is this one account ... significantly higher"). What ran
+  // before its first record is credited to nobody: no file says who held the folder then.
+  const mainDir = CLAUDE_MAIN_DIR
+  const mainUuid = await accountUuidOf(mainDir)
+  let mainHistory = holders[mainDir]
+  if (!mainHistory) {
+    mainHistory = [{ uuid: null, since: 0 }]
+    if (mainUuid) mainHistory.push({ uuid: mainUuid, since: at - MAIN_SEED_BACK_MS })
+    holders[mainDir] = mainHistory
+    holdersChanged = true
+  } else if (noteHolder(mainHistory, mainUuid, at)) holdersChanged = true
   if (holdersChanged) writeHolders(holders)
+  const mainHolders = mainHistory
 
   // The shared store: desktop chats write here. A chat record names the profile and the account (the
   // folder it is filed in); the newest non-archived record wins.
@@ -198,11 +216,10 @@ export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
     for (const id of lineageIdsOf(c))
       if (rank >= (chats.get(id)?.rank ?? '')) chats.set(id, { rank, owner })
   }
-  const defaultUuid = await accountUuidOf(defaultConfigDir())
   const fallback: ClaudeFileOwner = {
     instance: 'default',
     source: 'cli',
-    accountAt: () => defaultUuid,
+    accountAt: (ts) => holderAt(mainHolders, ts),
   }
   roots.push({ dir: CLAUDE_PROJECTS_ROOT, owner: (sid) => chats.get(sid)?.owner ?? fallback })
   return roots

@@ -1,7 +1,7 @@
 // The session rail's last-seen numbers, kept per session so a revisit paints at once and the fresh read replaces them a moment
 // later (stale-while-revalidate; owner, 2026-10-17: the rail's cards "pop in slowly"). In memory, and in this browser's
 // localStorage under a versioned key so a reload keeps them too. Only numbers and labels are kept (the tokens summary, the
-// delegation stats, the connectors' names and states): never transcript text, a prompt or a secret. The newest RAIL_KEPT
+// turn count, the delegation stats, the connectors' names and states): never transcript text, a prompt or a secret. The newest RAIL_KEPT
 // sessions stay; the least recently used go first. Nothing here is sent anywhere.
 import type { ServiceStats } from './delegation'
 import type { AhUsage } from '@/components/session-header/logic'
@@ -15,6 +15,8 @@ export type CachedConnector = Pick<ConnectorView, 'id' | 'name' | 'givesChats'> 
 
 export interface RailFacts {
   usage?: AhUsage
+  /** An outside Codex chat's turns over its whole thread (the index's sessionTurns), shown until the index arrives. */
+  codexTurns?: number
   delegation?: ServiceStats[]
 }
 

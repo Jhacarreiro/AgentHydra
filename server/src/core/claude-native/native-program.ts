@@ -287,6 +287,12 @@ function nativeLineageIds(manager: any): (session: any) => string[] {
  * turn, input held for it, or a cycle or turn result still pending. A message sent into such a chat
  * is answered `queued` and can be dropped unrun (2026-10-12: the app drained it at the query's end
  * and settled it undelivered after 90s), so the send refuses it and the caller holds it.
+ *
+ * A background task alone is not work a message waits behind: the app's peer send queues only for a
+ * turn in progress or an absent host, and a chat with a background command still running takes a
+ * message as a new turn. Counted (the app's own `ignoreBackgroundTasks` skips them), it held every
+ * continue to a chat a usage limit stopped mid-command until that command ended: 2026-10-17, three
+ * babysitter continues held 17 minutes past the reset (isRunning false, losableWork background_task).
  */
 function nativeChatBusy(manager: any, session: any): boolean {
   return (
@@ -295,7 +301,7 @@ function nativeChatBusy(manager: any, session: any): boolean {
     session.nextCycleUuid != null ||
     session.awaitingTurnResultSince != null ||
     nativeStartingIds(manager).has(session.sessionId) ||
-    manager.losableWorkKind(session.sessionId) != null ||
+    manager.losableWorkKind(session.sessionId, { ignoreBackgroundTasks: true }) != null ||
     nativePendingInput(manager)(session)
   )
 }

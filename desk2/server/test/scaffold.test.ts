@@ -6,6 +6,9 @@ import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import { createServer, type DeskServer } from '../src/index'
 import { DEFAULT_SETTINGS } from '../src/settings'
 
+// A Desk on a temp home is a throwaway: the managers that act on the real AgentHydra's chats start off there.
+const THROWAWAY = { ...DEFAULT_SETTINGS, babysitter: false, instanceManager: false }
+
 const temps: string[] = []
 const servers: DeskServer[] = []
 
@@ -53,7 +56,7 @@ describe('scaffold server', () => {
   test('settings: defaults, PUT merges one field, persists across a fresh server', async () => {
     const home = tempDir('desk-home-')
     const desk = await boot(home)
-    expect(await (await fetch(`${desk.url}/api/settings`)).json()).toEqual(DEFAULT_SETTINGS)
+    expect(await (await fetch(`${desk.url}/api/settings`)).json()).toEqual(THROWAWAY)
 
     const put = await fetch(`${desk.url}/api/settings`, {
       method: 'PUT',
@@ -61,7 +64,7 @@ describe('scaffold server', () => {
       body: JSON.stringify({ idleCloseMinutes: 45 }),
     })
     expect(put.status).toBe(200)
-    expect(await put.json()).toEqual({ ...DEFAULT_SETTINGS, idleCloseMinutes: 45 })
+    expect(await put.json()).toEqual({ ...THROWAWAY, idleCloseMinutes: 45 })
 
     const bad = await fetch(`${desk.url}/api/settings`, {
       method: 'PUT',
@@ -75,13 +78,13 @@ describe('scaffold server', () => {
     servers.splice(servers.indexOf(desk), 1)
     const again = await boot(home)
     const settings = (await (await fetch(`${again.url}/api/settings`)).json()) as DeskSettings
-    expect(settings).toEqual({ ...DEFAULT_SETTINGS, idleCloseMinutes: 45 })
+    expect(settings).toEqual({ ...THROWAWAY, idleCloseMinutes: 45 })
   })
 
   test('/ws sends a hello event carrying the settings, and no chat list before the engine has one', async () => {
     const desk = await boot(tempDir('desk-home-'))
     const hello = await firstMessage(desk.url)
-    expect(hello).toEqual({ type: 'hello', version: desk.ctx.version, settings: DEFAULT_SETTINGS })
+    expect(hello).toEqual({ type: 'hello', version: desk.ctx.version, settings: THROWAWAY })
   })
 
   test('loads a plugin from pluginsDir with (app, ctx), in file-name order', async () => {

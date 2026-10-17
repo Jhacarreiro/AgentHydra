@@ -421,7 +421,10 @@ create table if not exists session_stats (
 )
 `)
 db.exec('create index if not exists session_stats_last_ts on session_stats(last_ts)')
-db.exec('create index if not exists session_stats_gone on session_stats(gone_at)')
+// Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66% of rows match, so the
+// planner scans regardless. Dropped on every open, not in the user_version step below: this line created it on every
+// open until 2026-10-17, so each start after that step's one run put it back.
+db.exec('drop index if exists session_stats_gone')
 
 // The recent-edits feed. Its own table, and the only unbounded-per-session list in the tier, so it
 // carries a GLOBAL row cap (analytics.ts pruneEdits) rather than growing with the store.
@@ -437,6 +440,25 @@ create table if not exists session_edits (
   ts         integer
 );
 create index if not exists idx_session_edits_key on session_edits(cache_key);
+`)
+
+// Where the sessions the two tables above never saw ran (session-cwds.ts): one row per source file a
+// cwd was read from (a Claude transcript, a Codex rollout or zip entry), or per HSwarm caller session
+// and cwd with how many jobs it ran there (n). cwd '' marks a file read that names none, so it is not
+// read again. session_cwd_mark keeps how far a source's own table was read (HSwarm's rowid).
+db.exec(`
+create table if not exists session_cwd_seen (
+  source     text not null,
+  key        text not null,
+  session_id text not null,
+  cwd        text not null,
+  n          integer not null default 1,
+  primary key (source, key)
+);
+create table if not exists session_cwd_mark (
+  source text primary key,
+  value  integer not null
+);
 `)
 
 // The skill listings Claude Code injected into sessions, stored ONCE per distinct listing. A
@@ -557,9 +579,6 @@ if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_v
     // The edits cap delete orders by (ts desc, id desc); the old ts-only index could not serve it.
     db.exec('create index if not exists idx_session_edits_ts_id on session_edits(ts desc, id desc)')
     db.exec('drop index if exists idx_session_edits_ts')
-    // Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66%
-    // of rows match, so the planner scans regardless.
-    db.exec('drop index if exists session_stats_gone')
     db.exec('pragma user_version = 1')
   })()
 }

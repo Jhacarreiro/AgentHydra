@@ -165,12 +165,12 @@ export function demoHomeStats(range: HomeStatsRange): HomeStats {
   const f = range === 'all' ? 1 : range === '30d' ? 0.4 : 0.1
   const n = (x: number) => Math.round(x * f)
   const sources = [
-    { key: 'desktop', label: 'Claude desktop', sessions: n(1800), messages: n(410_000), tokens: n(120e9), costUsd: n(42_000) },
-    { key: 'climayte', label: 'CliMayte', sessions: n(2600), messages: n(96_000), tokens: n(18e9), costUsd: n(9_400) },
-    { key: 'cli', label: 'Claude Code CLI', sessions: n(240), messages: n(30_000), tokens: n(9e9), costUsd: n(3_700) },
-    { key: 'hswarm', label: 'HSwarm', sessions: n(1100), messages: n(61_000), tokens: n(6e9), costUsd: n(5_100) },
-    { key: 'opencode', label: 'OpenCode', sessions: n(12), messages: n(40), tokens: n(1.1e9), costUsd: n(20) },
-    { key: 'codex', label: 'Codex', sessions: n(60), messages: n(4_000), tokens: n(0.9e9), costUsd: n(700) }
+    { key: 'desktop', label: 'Claude desktop', sessions: n(1800), messages: n(410_000), tokens: n(120e9), costUsd: n(42_000), since: '2026-06-30' },
+    { key: 'climayte', label: 'CliMayte', sessions: n(2600), messages: n(96_000), tokens: n(18e9), costUsd: n(9_400), since: '2026-09-30' },
+    { key: 'cli', label: 'Claude Code CLI', sessions: n(240), messages: n(30_000), tokens: n(9e9), costUsd: n(3_700), since: '2026-04-03' },
+    { key: 'hswarm', label: 'HSwarm', sessions: n(1100), messages: n(61_000), tokens: n(6e9), costUsd: n(5_100), since: '2026-09-15' },
+    { key: 'opencode', label: 'OpenCode', sessions: n(12), messages: n(40), tokens: n(1.1e9), costUsd: n(20), since: '2026-06-26' },
+    { key: 'codex', label: 'Codex', sessions: n(60), messages: n(4_000), tokens: n(0.9e9), costUsd: n(700), since: '2026-02-06' }
   ]
   const sum = (pick: (s: (typeof sources)[number]) => number) => sources.reduce((t, s) => t + pick(s), 0)
   const total = sum((s) => s.tokens)

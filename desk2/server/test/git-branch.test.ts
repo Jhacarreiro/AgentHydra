@@ -1,6 +1,6 @@
-// branchOf: one git read per folder inside its fresh window, shared by chats in the same folder.
+// branchOf: one HEAD read per folder inside its fresh window, shared by chats in the same folder.
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { branchOf, resetBranchCache } from '../src/git/branch'
@@ -19,11 +19,26 @@ test('the branch is read once per folder while fresh, and read again once stale'
   let clock = 1_000
   expect(await branchOf(dir, () => clock)).toBe('topic-one')
   writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/topic-two\n') // what `git symbolic-ref HEAD` writes, without a spawn
-  expect(await branchOf(dir, () => clock)).toBe('topic-one') // kept, git not asked again
+  expect(await branchOf(dir, () => clock)).toBe('topic-one') // kept, HEAD not read again
   clock += 60_000
   expect(await branchOf(dir, () => clock)).toBe('topic-two')
-  // Three git spawns: past Bun's 5 s default on a loaded Windows box (5006 ms in the full suite, 2026-10-17).
 }, 20_000)
+
+test('a worktree and a subfolder name the branch of the checkout they are in', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk-worktree-'))
+  temps.push(dir)
+  // A linked worktree's `.git` is a file naming its own git dir, whose HEAD is the worktree's branch.
+  const gitDir = join(dir, 'main', '.git', 'worktrees', 'wt')
+  mkdirSync(gitDir, { recursive: true })
+  writeFileSync(join(gitDir, 'HEAD'), 'ref: refs/heads/feature/rail\n')
+  mkdirSync(join(dir, 'wt', 'src'), { recursive: true })
+  writeFileSync(join(dir, 'wt', '.git'), 'gitdir: ../main/.git/worktrees/wt\n')
+  expect(await branchOf(join(dir, 'wt', 'src'))).toBe('feature/rail')
+  // A detached head holds a commit id: no branch.
+  writeFileSync(join(gitDir, 'HEAD'), 'a3da0e61f00dfeedfacecafe0000000000000000\n')
+  resetBranchCache()
+  expect(await branchOf(join(dir, 'wt'))).toBeNull()
+})
 
 test('a folder outside a repository has no branch', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'desk-nobranch-'))

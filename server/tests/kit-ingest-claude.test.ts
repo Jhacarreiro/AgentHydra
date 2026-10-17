@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CLAUDE_MAIN_DIR, CLAUDE_PROJECTS_ROOT } from '../src/config'
 import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
 import { hswarmAccountId } from '../src/hswarm'
 import {
@@ -500,6 +501,38 @@ describe('ingestClaude', () => {
       order.map((n) => rootOf(join(f.dir, n), () => cliOwner(() => UUID_A, n)))
     await ingestClaude(f.store, mk(['B', 'A']), { maxBytesPerSec: Number.POSITIVE_INFINITY })
     expect(events(f.store).map((r) => r.instance)).toEqual(['cli:A'])
+  })
+
+  test('the main folder is credited to the login that held it then, and to nobody before its first record', async () => {
+    // Before 2026-10-17 every call read from ~/.claude went to whoever was signed in at the read, so the
+    // ledger's first sweep credited months of the folder to one account.
+    const claudeJson = join(CLAUDE_MAIN_DIR, '.claude.json')
+    const signIn = (uuid: string, at: number) => {
+      mkdirSync(CLAUDE_MAIN_DIR, { recursive: true })
+      writeFileSync(claudeJson, JSON.stringify({ oauthAccount: { accountUuid: uuid } }))
+      utimesSync(claudeJson, new Date(at), new Date(at)) // the cache revalidates by mtime
+    }
+    const mainOwner = async () => {
+      const r = (await discoverClaudeRoots()).find((x) => x.dir === CLAUDE_PROJECTS_ROOT)
+      return r?.owner('a-session-no-desktop-chat-names') as ClaudeFileOwner
+    }
+    try {
+      signIn(UUID_A, NOW - 10_000)
+      const first = await mainOwner()
+      const t1 = Date.now()
+      expect(first.instance).toBe('default')
+      expect(first.accountAt(t1)).toBe(UUID_A)
+      expect(first.accountAt(NOW - 30 * DAY)).toBeNull()
+
+      await new Promise((r) => setTimeout(r, 5))
+      signIn(UUID_B, NOW - 5000)
+      const second = await mainOwner()
+      expect(second.accountAt(Date.now() + 1)).toBe(UUID_B)
+      expect(second.accountAt(t1)).toBe(UUID_A) // what ran before the switch stays with A
+      expect(second.accountAt(NOW - 30 * DAY)).toBeNull()
+    } finally {
+      rmSync(claudeJson, { force: true })
+    }
   })
 
   test('a CLI instance signed in to another account between two sweeps is attributed to it from then on', async () => {

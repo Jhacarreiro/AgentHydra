@@ -17,6 +17,14 @@ export function hasSite(list: DashboardSummary[] | null, path: string): boolean 
   return (findDashboard(list, path)?.files ?? 0) > 0
 }
 
+/** A project has a dashboard: a template spec in its checkout, or a site its chats wrote. */
+export function hasDashboard(list: DashboardSummary[] | null, templates: string[] | null, path: string): boolean {
+  if (hasSite(list, path)) return true
+  if (!templates) return false
+  const key = workspaceKey(path)
+  return templates.some((t) => key === workspaceKey(t) || key.startsWith(`${workspaceKey(t)}/`))
+}
+
 /** The dashboard page is open on this folder: its group head's button then closes the page instead of opening it. */
 export function showingDashboard(open: boolean, openCwd: string | null, path: string): boolean {
   return open && openCwd !== null && workspaceKey(openCwd) === workspaceKey(path)
@@ -35,4 +43,4 @@ export function timeAgo(iso: string | null | undefined, now: number): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-export const EXAMPLE_PROMPT = "Build this project's dashboard: a page that shows me where it stands."
+export const EXAMPLE_PROMPT = "Set up this project's dashboard from AgentHydra's template: write .agenthydra/dashboard.json and the data source it reads."

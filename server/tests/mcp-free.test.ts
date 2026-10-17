@@ -178,6 +178,12 @@ describe('free_chat through a stand-in Desk 2', () => {
   /** A continuation's lookup by chat id (`view=lookup`) answers 503 this many more times. */
   let lookupFailures = 0
   let statusFailures = 0
+  /** Status reads that answer before statusFailures begin (a batch's own read, after free_chat's). */
+  let statusPasses = 0
+  /** The next sends answer 503 as a stopping Desk 2 does (desk2 service.ts start). */
+  let stoppingSends = 0
+  /** 503s answered to a status read or a send. */
+  let turnedAway = 0
   let jobReadDelay = 0
   let activeJobReads = 0
   let peakJobReads = 0
@@ -199,8 +205,10 @@ describe('free_chat through a stand-in Desk 2', () => {
         if (path === '/status') {
           statusReads++
           if (statusDelay) await Bun.sleep(statusDelay)
-          if (statusFailures-- > 0)
+          if (statusPasses-- <= 0 && statusFailures-- > 0) {
+            turnedAway++
             return Response.json({ error: 'status unavailable' }, { status: 503 })
+          }
           return Response.json({ ready: true, instances: INSTANCES, jobs: [...jobs.values()] })
         }
         if (path === '/threads') {
@@ -233,6 +241,13 @@ describe('free_chat through a stand-in Desk 2', () => {
             prompt: string
             name?: string
             model?: string
+          }
+          if (stoppingSends-- > 0) {
+            turnedAway++
+            return Response.json(
+              { error: 'Desk is stopping. Read the chat after reconnecting.' },
+              { status: 503 },
+            )
           }
           if (
             [...jobs.values()].some((j) => j.instanceId === r.instanceId && j.state === 'running')
@@ -519,6 +534,59 @@ describe('free_chat through a stand-in Desk 2', () => {
       expect(out.tasks[0]).toMatchObject({ state: 'done', chat_id: THREAD, response: 're: later' })
     } finally {
       lookupFailures = 0
+    }
+  }, 30_000)
+
+  // 2026-10-17: a task still queued when Desk 2 restarted failed, though Desk was back seconds later. While it
+  // stops, Desk answers 503; once it exits, nothing answers until the next one is up. The task waits, then goes once.
+  test.each([
+    ['its send is answered 503', () => (stoppingSends = 1)],
+    ["the batch's status read is answered 503", () => (statusPasses = statusFailures = 1)],
+  ])(
+    'a queued task Desk 2 turns away while it stops is sent once it is back: %s',
+    async (_, stop) => {
+      resetFreeHealth()
+      const before = turnedAway
+      const prompt = `queued while Desk stops ${before}`
+      stop()
+      try {
+        const out = await run('free_chat', { tasks: [{ prompt }] })
+        expect(turnedAway - before).toBe(1)
+        expect(out.tasks[0]).toMatchObject({ state: 'done', response: `re: ${prompt}` })
+        expect(ran.filter((r) => r.prompt === prompt)).toHaveLength(1)
+      } finally {
+        stoppingSends = statusPasses = statusFailures = 0
+        resetFreeHealth()
+      }
+    },
+    30_000,
+  )
+
+  test('a send Desk 2 never answered (connection refused) goes again under its own request id', async () => {
+    resetFreeHealth()
+    const prompt = 'queued while Desk is gone'
+    const gone = Bun.serve({ port: 0, fetch: () => new Response(null) })
+    const gonePort = gone.port
+    gone.stop(true)
+    const realFetch = globalThis.fetch
+    let refused: string | undefined
+    // That one send really is refused: it goes to a port nothing listens on any more.
+    const send = spyOn(globalThis, 'fetch').mockImplementation(((input, init) => {
+      const url = String(input)
+      if (refused || init?.method !== 'POST' || !url.endsWith('/api/free/jobs'))
+        return realFetch(input, init)
+      refused = JSON.parse(String(init.body)).requestId
+      return realFetch(url.replace(`:${server.port}/`, `:${gonePort}/`), init)
+    }) as typeof fetch)
+    try {
+      const out = await run('free_chat', { tasks: [{ prompt }] })
+      expect(refused).toBeDefined()
+      expect(out.tasks[0]).toMatchObject({ state: 'done', response: `re: ${prompt}` })
+      expect(ran.filter((r) => r.prompt === prompt)).toHaveLength(1)
+      expect(jobs.get(refused!)?.state).toBe('done')
+    } finally {
+      send.mockRestore()
+      resetFreeHealth()
     }
   }, 30_000)
 

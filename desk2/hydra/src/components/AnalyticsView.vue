@@ -62,6 +62,7 @@ import { useAnalyticsPrefs } from '@/composables/useAnalyticsPrefs'
 import { useShellWidth } from '@/composables/useShellWidth'
 import {
   ANALYTICS_SOURCE_LABEL_KEY,
+  EXTRA_SOURCE_LABEL_KEY,
   ANALYTICS_SOURCES,
   type AnalyticsSource,
 } from '@/lib/analytics-sources'
@@ -97,7 +98,7 @@ const TOP = 5
 const accountNames = shallowRef<Record<string, HswarmAccountName>>({})
 
 function sourceLabel(value: string): string {
-  const key = ANALYTICS_SOURCE_LABEL_KEY[value as AnalyticsSource]
+  const key = ANALYTICS_SOURCE_LABEL_KEY[value as AnalyticsSource] ?? EXTRA_SOURCE_LABEL_KEY[value]
   return key ? t(key) : value
 }
 /** The menu lists the sources that have data; before the first answer, every known one. */
@@ -298,7 +299,8 @@ const projectBuckets = computed(() =>
   largestFirst(
     (spend.value?.byProject ?? []).map((b) => ({
       key: b.key,
-      label: baseName(b.key) || b.key,
+      // A repository comes named (`owner/name`); a folder in none is shown by its last part.
+      label: b.label || baseName(b.key) || b.key,
       value: metricOf(b),
       detail: b.key,
     })),
@@ -314,6 +316,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   hermes: 'sessions.sourceHermes',
   dsh: 'sessions.sourceDsh',
   zswarm: 'sessions.sourceZswarm',
+  foreign: 'sessions.sourceForeign',
 }
 /** Every provider that has usage, so "my stats only show Claude" is answerable at a glance. */
 const providerRows = computed(() =>

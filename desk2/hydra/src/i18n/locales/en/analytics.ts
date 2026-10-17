@@ -122,6 +122,7 @@ export default {
   sourceDsh: 'DSH',
   sourceHermes: 'Hermes',
   sourceHswarm: 'HydraSwarm',
+  sourceVscodeCopilot: 'VS Code Copilot',
   // --- hover cards ---
   tipReplies: 'Replies',
   tipShare: 'Share of week',

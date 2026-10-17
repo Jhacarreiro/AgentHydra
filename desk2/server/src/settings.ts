@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { CollapseMode, DeskSettings, Effort, PermissionMode } from '@shared/protocol'
 import { isOrchestratorModel } from '@shared/orchestrator'
 import { AsyncFile } from './async-file'
+import { isRealHome } from './real-home'
 
 export const DEFAULT_SETTINGS: DeskSettings = {
   defaultModel: null,
@@ -74,9 +75,17 @@ export function settingsPath(home: string): string {
   return join(home, 'settings.json')
 }
 
+/** The defaults for a Desk on `home`. A throwaway home (real-home.ts: every e2e script and probe) starts with the
+ *  babysitter and the instance manager off: its bridge reaches the real AgentHydra, so on by default they continued
+ *  and moved the real chats from an empty memory (2026-10-17: a continue no babysitter act accounts for reached a
+ *  stopped chat three minutes after the real one's). A person can still switch either on there. */
+export function defaultSettings(home: string): DeskSettings {
+  return isRealHome(home) ? { ...DEFAULT_SETTINGS } : { ...DEFAULT_SETTINGS, babysitter: false, instanceManager: false }
+}
+
 /** Reads settings.json over the defaults; a missing file, bad JSON or an invalid field falls back to the default. */
 export function loadSettings(home: string): DeskSettings {
-  const settings = { ...DEFAULT_SETTINGS }
+  const settings = { ...defaultSettings(home) }
   const file = settingsPath(home)
   let saved: unknown
   try {
