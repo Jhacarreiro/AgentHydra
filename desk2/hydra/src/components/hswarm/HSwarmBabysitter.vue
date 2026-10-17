@@ -8,11 +8,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { Managers } from '@/composables/useManagers'
 import { timeAgo } from '@/lib/format'
 import { EMBEDDED, openSettingsInDesk } from '@/lib/desk-embed'
+import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, babysitterActDot, babysitterChatDot, babysitterDot } from '@/lib/managers'
 
 const props = defineProps<{ managers: Managers }>()
 const { t } = useI18n()
 
 const s = computed(() => props.managers.babysitter)
+// The stopped count takes the Babysitter's own colour while any chat is stopped (amber waiting, red needs a person).
+const stoppedClass = computed(() => {
+  const dot = babysitterDot(s.value)
+  return s.value?.stopped.length && dot ? MANAGER_TEXT_CLASS[dot] : ''
+})
 const sourceName = (src: string) => t(`hswarm.v.managers.babysitter.source.${src}`, src)
 const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.babysitter.noReset') : t('hswarm.v.managers.babysitter.resets', { when: new Date(ms).toLocaleString() }))
 </script>
@@ -40,7 +46,7 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
         <div class="grid grid-cols-2 gap-2">
           <div class="min-w-0 rounded-lg border bg-card px-3 py-2">
             <div class="text-xs text-muted-foreground">{{ t('hswarm.v.managers.babysitter.stopped') }}</div>
-            <div class="text-2xl font-semibold leading-8">{{ s.stopped.length }}</div>
+            <div class="text-2xl font-semibold leading-8" :class="stoppedClass">{{ s.stopped.length }}</div>
           </div>
           <div class="min-w-0 rounded-lg border bg-card px-3 py-2">
             <div class="text-xs text-muted-foreground">{{ t('hswarm.v.managers.babysitter.accounts') }}</div>
@@ -57,17 +63,23 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
           <TableHeader>
             <TableRow>
               <TableHead>{{ t('hswarm.v.managers.babysitter.chatHead') }}</TableHead>
+              <TableHead>{{ t('hswarm.v.managers.babysitter.stateHead') }}</TableHead>
               <TableHead>{{ t('hswarm.v.managers.babysitter.resetHead') }}</TableHead>
               <TableHead>{{ t('hswarm.v.managers.babysitter.accountHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.stateHead') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <TableRow v-for="c in s.stopped" :key="c.id">
               <TableCell class="max-w-[16rem]" truncate>{{ c.title }}</TableCell>
+              <!-- State sits beside the chat so its colour shows without scrolling the table sideways. -->
+              <TableCell size="xs" :title="c.reason">
+                <span class="inline-flex items-center gap-1.5 font-medium" :class="MANAGER_TEXT_CLASS[babysitterChatDot(c.state)]">
+                  <span class="size-2 rounded-full" :class="MANAGER_DOT_CLASS[babysitterChatDot(c.state)]" />
+                  {{ t(`hswarm.v.managers.babysitter.chatState.${c.state}`, c.state) }}
+                </span>
+              </TableCell>
               <TableCell size="xs" muted>{{ resetText(c.resetsAt) }}</TableCell>
               <TableCell size="xs">{{ sourceName(c.source) }} · {{ c.account }}</TableCell>
-              <TableCell size="xs" :title="c.reason">{{ t(`hswarm.v.managers.babysitter.chatState.${c.state}`, c.state) }}</TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -87,8 +99,8 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
               <TableCell size="xs" class="whitespace-nowrap">{{ timeAgo(a.at) }}</TableCell>
               <TableCell class="max-w-[16rem]" truncate>{{ a.title }}</TableCell>
               <TableCell size="xs">
-                {{ t(`hswarm.v.managers.babysitter.did.${a.did}`, a.did) }}
-                <span class="text-muted-foreground">· {{ a.detail }}</span>
+                <span class="font-medium" :class="MANAGER_TEXT_CLASS[babysitterActDot(a.did)]">{{ t(`hswarm.v.managers.babysitter.did.${a.did}`, a.did) }}</span>
+                <span class="text-muted-foreground"> · {{ a.detail }}</span>
               </TableCell>
             </TableRow>
           </TableBody>

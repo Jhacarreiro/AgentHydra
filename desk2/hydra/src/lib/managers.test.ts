@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { canRunRoutine, jobOfRoutine, managerDot, routineDot, workerOfRoutine } from './managers'
+import type { BabysitterChatState, BabysitterStatus } from '@desk/shared/babysitter'
+import { babysitterDot, canRunRoutine, jobOfRoutine, managerDot, routineDot, workerOfRoutine } from './managers'
 
 describe('a routine\'s work', () => {
   test('a CliMayte worker belongs to the routine when its group begins with the id and a dash', () => {
@@ -34,6 +35,44 @@ describe('the dots', () => {
     expect(managerDot(undefined, false)).toBeUndefined()
     expect(managerDot(false, false)).toBe('off')
     expect(managerDot(true, false)).toBe('ok')
+  })
+
+  // Owner, 2026-10-16: with chats stopped by a limit, the Babysitter still read plain on/off.
+  test('the Babysitter reads amber while chats wait on a limit and red when one needs a person', () => {
+    const look = (states: BabysitterChatState[], extra: Partial<BabysitterStatus> = {}): BabysitterStatus => ({
+      enabled: true,
+      everyMs: 300_000,
+      checkedAt: 0,
+      nextCheckAt: null,
+      accounts: [],
+      acts: [],
+      error: null,
+      stopped: states.map((state, i) => ({
+        id: `chat-${i}`,
+        session: null,
+        title: 'Example chat',
+        cwd: 'C:/Users/me/work',
+        source: 'desktop',
+        account: 'example',
+        stoppedAt: 0,
+        notice: null,
+        resetsAt: null,
+        state,
+        reason: '',
+        tries: 0,
+      })),
+      ...extra,
+    })
+    expect(babysitterDot(null)).toBeUndefined()
+    expect(babysitterDot(look([]))).toBe('ok')
+    expect(babysitterDot(look([], { enabled: false }))).toBe('off')
+    expect(babysitterDot(look(['resumed']))).toBe('ok')
+    expect(babysitterDot(look(['waiting', 'resumed']))).toBe('warn')
+    expect(babysitterDot(look(['waiting'], { enabled: false }))).toBe('warn')
+    for (const needsPerson of ['failed', 'no-engine', 'gave-up'] as const) {
+      expect(babysitterDot(look(['waiting', needsPerson]))).toBe('bad')
+    }
+    expect(babysitterDot(look([], { error: 'Desk chats did not load' }))).toBe('bad')
   })
 })
 

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { Managers } from '@/composables/useManagers'
 import { EMBEDDED, openSettingsInDesk } from '@/lib/desk-embed'
-import { MANAGER_DOT_CLASS, managerDot } from '@/lib/managers'
+import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, babysitterDot, managerDot } from '@/lib/managers'
 
 const props = defineProps<{ managers: Managers }>()
 const emit = defineEmits<{ open: [path: string[]] }>()
@@ -15,12 +15,15 @@ const { t } = useI18n()
 
 const rows = computed(() => {
   const m = props.managers
+  const bsDot = babysitterDot(m.babysitter)
   return [
     {
       id: 'babysitter',
       title: t('hswarm.v.managers.babysitter.title'),
-      dot: managerDot(m.babysitter?.enabled, false),
+      dot: bsDot,
       line: m.babysitter ? `${m.babysitter.stopped.length} ${t('hswarm.v.managers.babysitter.stopped').toLowerCase()}` : '',
+      // Stopped chats colour the line (amber waiting, red needs a person); none leaves it grey.
+      lineClass: m.babysitter?.stopped.length && bsDot ? `font-medium ${MANAGER_TEXT_CLASS[bsDot]}` : '',
     },
     {
       id: 'orchestrator',
@@ -59,7 +62,7 @@ const rows = computed(() => {
           />
           <span class="min-w-0 flex-1">
             <span class="block truncate text-sm font-medium">{{ r.title }}</span>
-            <span class="block truncate text-xs text-muted-foreground">{{ r.line }}</span>
+            <span class="block truncate text-xs" :class="r.lineClass || 'text-muted-foreground'">{{ r.line }}</span>
           </span>
           <ChevronRight class="size-4 shrink-0 text-muted-foreground" />
         </button>

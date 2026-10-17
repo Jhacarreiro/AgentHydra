@@ -2,6 +2,7 @@
 // it is. A routine's work is found by its id: a CliMayte worker whose group begins `routine-<id>-`, an HSwarm
 // job whose label begins `<id>`.
 
+import type { BabysitterAct, BabysitterChatState, BabysitterStatus } from '@desk/shared/babysitter'
 import type { RoutineOutcome, RoutineState } from '@desk/shared/routines'
 
 /** The dot a node or a row shows, as the tree draws it (HSwarmView's DOT_CLASS). */
@@ -21,6 +22,29 @@ export function managerDot(on: boolean | undefined, failed: boolean): ManagerDot
   if (failed) return 'bad'
   if (on === undefined) return undefined
   return on ? 'ok' : 'off'
+}
+
+/** A stopped chat's dot: waiting for its limit to reset is amber, resumed is green, and a continue that was refused,
+ * had no app to take it or was given up on is red, since a person may have to step in. */
+export function babysitterChatDot(state: BabysitterChatState): ManagerDot {
+  if (state === 'waiting') return 'warn'
+  if (state === 'resumed') return 'ok'
+  return 'bad'
+}
+
+/** The Babysitter's own dot (owner, 2026-10-16: chats needing its attention read in plain grey): red when its last
+ * look failed or a stopped chat needs a person, amber while chats wait on a limit, else on or off. */
+export function babysitterDot(s: BabysitterStatus | null | undefined): ManagerDot | undefined {
+  if (s?.error) return 'bad'
+  const dots = (s?.stopped ?? []).map((c) => babysitterChatDot(c.state))
+  if (dots.includes('bad')) return 'bad'
+  if (dots.includes('warn')) return 'warn'
+  return managerDot(s?.enabled, false)
+}
+
+/** What the Babysitter did, as its dot: a delivered continue is green, anything else is red. */
+export function babysitterActDot(did: BabysitterAct['did']): ManagerDot {
+  return did === 'resumed' ? 'ok' : 'bad'
 }
 
 /** Whether a CliMayte worker in this group is a routine's work: the group starts `routine-<id>-`. */
@@ -45,6 +69,15 @@ export const MANAGER_DOT_CLASS: Record<ManagerDot, string> = {
   off: 'bg-muted-foreground/50',
   run: 'bg-primary animate-pulse',
   bad: 'bg-destructive',
+}
+
+/** The text colour that goes with a dot, for the count or state word beside it. */
+export const MANAGER_TEXT_CLASS: Record<ManagerDot, string> = {
+  ok: 'text-success',
+  warn: 'text-warning',
+  off: 'text-muted-foreground',
+  run: 'text-primary',
+  bad: 'text-destructive',
 }
 
 /** The outcome's tone class: a failure is red, a busy look is muted. */

@@ -52,7 +52,7 @@ import { hswarmNodeAsk } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
 import { deskSwarmAsk, deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
-import { managerDot, routineDot } from '@/lib/managers'
+import { babysitterDot, managerDot, routineDot } from '@/lib/managers'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmCostRouting from './hswarm/HSwarmCostRouting.vue'
@@ -211,8 +211,12 @@ function managersNode(): TreeNode {
       {
         id: 'managers/babysitter',
         label: t('hswarm.v.managers.babysitter.title'),
-        dot: managerDot(bs?.enabled, !!bs?.error),
-        dotTitle: bs ? (bs.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')) : undefined,
+        dot: babysitterDot(bs),
+        dotTitle: bs
+          ? bs.stopped.length
+            ? `${bs.stopped.length} ${t('hswarm.v.managers.babysitter.stopped').toLowerCase()}`
+            : bs.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')
+          : undefined,
       },
       {
         id: 'managers/orchestrator',
