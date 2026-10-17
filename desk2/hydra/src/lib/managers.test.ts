@@ -69,6 +69,8 @@ describe('the dots', () => {
     expect(babysitterDot(look([], { enabled: false }))).toBe('off')
     expect(babysitterDot(look(['resumed']))).toBe('ok')
     expect(babysitterDot(look(['waiting', 'resumed']))).toBe('limit')
+    // A continue held until the chat's app is idle waits on its own: it needs no person.
+    expect(babysitterDot(look(['resumed', 'held']))).toBe('limit')
     expect(babysitterDot(look(['waiting'], { enabled: false }))).toBe('limit')
     for (const needsPerson of ['failed', 'no-engine', 'gave-up'] as const) {
       expect(babysitterDot(look(['waiting', needsPerson]))).toBe('bad')

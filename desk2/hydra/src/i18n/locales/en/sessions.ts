@@ -11,6 +11,8 @@ export default {
   sourceHermes: 'Hermes',
   sourceDsh: 'DeepSeek',
   sourceZswarm: 'HSwarm',
+  // The tools foreign-sessions.ts reads (VS Code Copilot, Copilot CLI, Zed, ...).
+  sourceForeign: 'Other tools',
   // --- the multi-select filter submenus: the All / None actions and the trigger summary ---
   selectionAll: 'All',
   selectionNone: 'None',

@@ -349,6 +349,10 @@ export interface TranscriptIndex {
   /** An outside Codex session's: the tokens its thread has used so far (its rollout's total_token_usage), which AgentHydra's
    *  usage route does not count for Codex; null when the rollout has none, absent on a Claude Code session. */
   sessionTokens?: number | null
+  /** An outside Codex session's: its thread's turns (its rollout's task_started marks over the whole file), which AgentHydra's
+   *  usage route does not count and the items Desk holds, the thread's newest part, cannot; null when no rollout was found,
+   *  absent on a Claude Code session. */
+  sessionTurns?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
   /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,
@@ -439,6 +443,10 @@ export interface DesktopMessageResult {
   /** How it got there ('peer': the chat's own input queue over the native peer channel). */
   route: string
   delivered: true
+  /** The app started a turn on it. */
+  started: boolean
+  /** Not sent yet: the chat's app shows work running in it, so AgentHydra holds it and sends it once the chat is idle. */
+  held: boolean
   detail: string
 }
 
@@ -1045,11 +1053,14 @@ export interface HomeStatsSource {
   messages: number
   tokens: number
   costUsd: number | null
+  /** The source's first recorded day (YYYY-MM-DD): older use was never logged, or its logs were deleted before
+   *  AgentHydra kept them (Claude Code removes chats after 30 days unless told otherwise). Null when unknown. */
+  since: string | null
 }
 
 /**
  * One square of the stats card's activity grid: its local day (YYYY-MM-DD), that day's figure and its
- * shade 0-4 against the busiest day shown, so a hover can name the day and its number (owner, 2026-10-05:
+ * shade 0-4 by where the day ranks among the grid's active days, so a hover can name the day and its number (owner, 2026-10-05:
  * "Each of the squares ... need to have a number I can read when I hover over them").
  */
 export interface HeatCell {

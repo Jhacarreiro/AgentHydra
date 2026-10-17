@@ -164,6 +164,8 @@ if (
  *  out a 5 s test that CI, with an empty home, passed). */
 export const CLAUDE_PROJECTS_ROOT =
   appEnv('CLAUDE_PROJECTS_ROOT')?.trim() || join(HOME, '.claude', 'projects')
+/** The main config folder that holds it (~/.claude): its `.claude.json` names who is signed in to the default login. */
+export const CLAUDE_MAIN_DIR = dirname(CLAUDE_PROJECTS_ROOT)
 
 /**
  * The DEFAULT Codex install's home. Active rollouts live in date folders under `sessions/`,

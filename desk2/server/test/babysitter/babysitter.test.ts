@@ -2,15 +2,15 @@
 // from stand-in routes on the same app (as the orchestrator's test does), and the stand-ins record every continue the
 // babysitter sends. Its memory goes to a temp home; nothing outside it is read or written.
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, setSystemTime, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
-import type { ChatSummary, DeskSettings, ExternalLimit, ExternalSession } from '@shared/protocol'
+import type { ChatSummary, DeskSettings, DesktopMessageRequest, DesktopMessageResult, ExternalLimit, ExternalSession } from '@shared/protocol'
 import { BABYSITTER_FROM, type BabysitterStatus } from '@shared/babysitter'
 import type { ServerContext } from '../../src/context'
-import { QUICK_MS } from '../../src/babysitter/decide'
+import { HOLD_MS, QUICK_MS, SETTLE_MS } from '../../src/babysitter/decide'
 import plugin from '../../src/plugins/72-babysitter'
 
 const NOW = Date.now()
@@ -19,6 +19,7 @@ const LEAD = `[${BABYSITTER_FROM}] Not from the user.\nYour account's usage limi
 const temps: string[] = []
 const stops: (() => void | Promise<void>)[] = []
 afterEach(async () => {
+  setSystemTime()
   for (const s of stops.splice(0)) await s()
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
 })
@@ -49,6 +50,10 @@ interface World {
   delivered: { id: string; text: string }[]
   /** The status AgentHydra answers a delivery with (409: nothing runs the chat). */
   delivery: number
+  /** What a delivery's answer says: the app started a turn on it, or AgentHydra holds it while the chat is busy. */
+  receipt: { started?: boolean; held?: boolean }
+  /** The hold limit each delivery asked for, seconds. */
+  holdSecs: (number | undefined)[]
   /** Every request that would change something. */
   sent: string[]
   home: string
@@ -58,7 +63,7 @@ interface World {
 function world(own: ChatSummary[], others: ExternalSession[] = []): World {
   const home = mkdtempSync(join(tmpdir(), 'desk-babysitter-'))
   temps.push(home)
-  return { own, outside: others, queued: [], delivered: [], delivery: 200, sent: [], home, settings: { babysitter: true } }
+  return { own, outside: others, queued: [], delivered: [], delivery: 200, receipt: {}, holdSecs: [], sent: [], home, settings: { babysitter: true } }
 }
 
 /** The babysitter over stand-in routes reading `w`. Two calls on one world are a Desk restart. */
@@ -83,8 +88,10 @@ function desk(w: World): Hono {
   })
   app.post('/api/external/sessions/:id/message', async (c) => {
     if (w.delivery !== 200) return c.json({ error: 'no running engine holds this chat' }, w.delivery as 409)
-    w.delivered.push({ id: c.req.param('id'), text: ((await c.req.json()) as { text: string }).text })
-    return c.json({ ok: true })
+    const body = (await c.req.json()) as DesktopMessageRequest
+    w.delivered.push({ id: c.req.param('id'), text: body.text })
+    w.holdSecs.push(body.holdSecs)
+    return c.json({ ok: true, route: 'native', delivered: true, started: w.receipt.started === true, held: w.receipt.held === true, detail: '' } satisfies DesktopMessageResult)
   })
   const ctx = {
     home: w.home,
@@ -157,6 +164,42 @@ test('a Desktop chat nothing runs is not counted and is continued once something
   const later = await look(app)
   expect(w.delivered.map((d) => d.id)).toEqual(['d'])
   expect(later.stopped[0]).toMatchObject({ state: 'resumed', tries: 1 })
+})
+
+test('a continue AgentHydra holds reads held and is not sent again while held; a continue that does not move the chat is checked and sent again', async () => {
+  // 2026-10-17: a chat stopped with a background command still running; its continue was held, the page said
+  // "resumed", and ten minutes later a second continue went into the same hold.
+  const w = world([], [outside('d', { limit: reset })])
+  w.receipt = { held: true }
+  const app = desk(w)
+  const first = await look(app)
+  expect(w.delivered).toHaveLength(1)
+  // The hold is given the babysitter's window, so a copy the app never frees is dropped rather than sent late.
+  expect(w.holdSecs).toEqual([HOLD_MS / 1000])
+  expect(first.stopped[0]).toMatchObject({ id: 'd', state: 'held', tries: 1 })
+  expect(first.acts.map((a) => a.did)).toEqual(['held'])
+
+  setSystemTime(new Date(Date.now() + SETTLE_MS + 60_000))
+  expect((await look(app)).stopped[0]).toMatchObject({ state: 'held', tries: 1 })
+  expect(w.delivered).toHaveLength(1)
+
+  // The hold is over and the chat is still at its stop: the check sends it again and says why.
+  w.receipt = {}
+  setSystemTime(new Date(Date.now() + HOLD_MS))
+  const held = await look(app)
+  expect(w.delivered).toHaveLength(2)
+  expect(held.stopped[0]).toMatchObject({ state: 'resumed', tries: 2 })
+  expect(held.acts[0]).toMatchObject({ did: 'resumed' })
+  expect(held.acts[0].detail).toStartWith('the continue held at')
+
+  // Taken with no turn start, and still not moved when its check comes: sent once more.
+  setSystemTime(new Date(Date.now() + SETTLE_MS - 60_000))
+  await look(app)
+  expect(w.delivered).toHaveLength(2)
+  setSystemTime(new Date(Date.now() + 2 * 60_000))
+  const sent = await look(app)
+  expect(w.delivered).toHaveLength(3)
+  expect(sent.acts[0].detail).toContain('had not moved it')
 })
 
 test('a chat that stops again at once after each continue is left to a person after three; one that later stops anew is continued', async () => {

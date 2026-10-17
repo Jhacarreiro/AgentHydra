@@ -1,7 +1,7 @@
 // The dashboard page's state and the list every entry point reads (the home grid's glyphs, the session header's count).
 import { ref, shallowRef } from 'vue'
 import type { DashboardSummary } from '@shared/dashboards'
-import { listDashboards } from './api'
+import { listDashboards, listTemplates } from './api'
 
 /** The page on screen (or sliding out), and the folder it shows. */
 export const dashboardOpen = ref(false)
@@ -25,16 +25,27 @@ export function openDashboardTab(cwd: string, url: string): void {
 
 /** Replaced whole on each read, so shallow. null until the first answer. */
 export const dashboardList = shallowRef<DashboardSummary[] | null>(null)
+/** The checkouts with a template dashboard spec; null until the first answer. */
+export const templateList = shallowRef<string[] | null>(null)
 
 let inFlight: Promise<void> | null = null
 export function refreshDashboards(): Promise<void> {
-  inFlight ??= listDashboards()
-    .then((res) => {
-      dashboardList.value = res.dashboards
-    })
-    .catch(() => {
-      // Entry points keep the last list; the page shows its own error line.
-    })
+  // Entry points keep the last list on a failed read; the page shows its own error line.
+  inFlight ??= Promise.all([
+    listDashboards()
+      .then((res) => {
+        dashboardList.value = res.dashboards
+      })
+      .catch(() => {}),
+    listTemplates()
+      .then((res) => {
+        const next = res.dashboards.map((d) => d.workspace)
+        const was = templateList.value
+        if (!was || was.length !== next.length || next.some((w, i) => w !== was[i])) templateList.value = next
+      })
+      .catch(() => {})
+  ])
+    .then(() => {})
     .finally(() => {
       inFlight = null
     })

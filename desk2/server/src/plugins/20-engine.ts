@@ -637,6 +637,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   folderRoutes(app, ctx, manager, folders)
   const projects = projectList(ctx, manager, folders)
   ctx.deps.projectMenu = projectMenu(ctx, manager, projects)
+  // The project dashboard plugin (47) finds which of the person's projects have a dashboard spec.
+  ctx.deps.projectFolders = async (): Promise<string[]> => (await projects.list({ hidden: true })).projects.map((p) => p.path)
   projectRoutes(app, ctx, projects)
   keepProjectsSwept(ctx, projects, folders)
   mcpRoutes(app, ctx, manager)

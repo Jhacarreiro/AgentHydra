@@ -128,7 +128,12 @@ test('the Desk server keeps serving while a chat places its slot: a timer fires 
   let placedMs = 0
   const slot = coreSlot({ chat: CHAT, session: 'c1d2e3f4-0000-4000-8000-000000000002', fresh: true, cwd: 'C:/Users/me/app', prompt: 'sketch the dashboard layout', rest: 0 })
   void slot.then(() => { placedMs = performance.now() - started })
-  const tickMs = await new Promise<number>((r) => setTimeout(() => r(performance.now() - started), 10))
+  // Timed from coreSlot's return: its synchronous part is starting the child, and on a loaded box spawn() alone took
+  // 7-718 ms to return while a 10 ms timer armed after it fired at 10-11 ms (2026-10-17; timed from before the call,
+  // this read 314-818 ms and failed). What must stay free is the loop while the child places the pack; a synchronous
+  // placement is caught by placedMs, set before any timer could fire.
+  const returned = performance.now()
+  const tickMs = await new Promise<number>((r) => setTimeout(() => r(performance.now() - returned), 10))
   expect(placedMs).toBe(0)
   expect(tickMs).toBeLessThan(200)
   expect(await slot).toContain('Ada Example')

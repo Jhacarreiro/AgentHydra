@@ -32,6 +32,7 @@ import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayt
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
+import { runnerHandoffsSettled } from './climayte-runner'
 import { flushCliMayteStore } from './climayte-store-writer'
 import { startCommandPacks } from './command-packs'
 import {
@@ -164,7 +165,7 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
+import { adoptOrchestratorRuns, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { getPeopleAddon, peopleAddon, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
@@ -178,6 +179,7 @@ import {
   sendTestNotification,
   startResetWatch,
 } from './reset-watch'
+import { restartRefusal } from './restart-refusal'
 import { jsonBody } from './route-helpers'
 import { openSearchIndex } from './search-index'
 import { warmSessionScanCache } from './sessions'
@@ -192,6 +194,12 @@ import {
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
 import { warmToolIntentInBackground } from './tool-intent'
+import {
+  PARK_WAIT_MS,
+  parkToolboxCalls,
+  resumeToolboxCalls,
+  toolboxCallGate,
+} from './toolbox-calls'
 import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -342,6 +350,9 @@ app.use('/api/*', apiBodyLimit())
 // A daemon with a relocated store stamps every answer with that store (side-run.ts), so no client
 // can mistake a scratch database for the fleet's.
 app.use('/api/*', sideRunHeader())
+// A chat move's calls (hydralib marks them) are held off while a restart hands over, so none is cut
+// half-way; the move itself runs on through the restart (toolbox-calls.ts).
+app.use('/api/*', toolboxCallGate())
 
 // --- health (also the single-instance probe: body.service must equal SERVICE_NAME) ---
 // `dataDir`/`dbPath` are here for one reason: a daemon started from a checkout and the installed
@@ -601,17 +612,6 @@ app.post('/api/update/apply', async (c) => {
   )
 })
 
-/** Why restarting now would lose work, or null: a CliMayte worker this daemon spawned itself (before runners,
- *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
- *  (orchestrator.ts). `force` restarts past both. Free batches never hold it (2026-10-17, owner: "each thing can be
- *  restarted individually"): they are saved and the next daemon carries them on (mcp-free.ts adoptFreeBatches). */
-function restartRefusal(force: boolean): string | null {
-  const climayte = climayteRunningCount()
-  if (climayte > 0 && !force)
-    return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
-  return moveRestartRefusal(force)
-}
-
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
 //
 // ⛔ THIS IS NOT misc/Restart-Daemon.ps1, AND NEITHER REPLACES THE OTHER. Read the difference
@@ -633,9 +633,10 @@ app.post('/api/daemon/restart', async (c) => {
   const body = await jsonBody(c)
   // Only work a restart would LOSE says no here (owner, 2026-10-02: "I thought we were supposed to
   // have decoupling from tasks running and my ability to restart"). Dispatch runs, CliMayte workers
-  // and their checks all run under detached runners and are read on by the next daemon, so a person's
-  // click restarts past them; the unattended auto-update loop still waits for them
-  // (setAutoUpdateHooks.hasActiveRuns below), because there nobody decided. What is left is restartRefusal's.
+  // and their checks, and chat moves (since 2026-10-17) all run under detached runners and are read on
+  // by the next daemon, so a person's click restarts past them; the unattended auto-update loop still
+  // waits for dispatch runs and CliMayte workers (setAutoUpdateHooks.hasActiveRuns below), because
+  // there nobody decided. What is left is restartRefusal's (restart-refusal.ts).
   const active = activeCount() + climayteRunningCount()
   const refusal = restartRefusal(body.force === true)
   if (refusal) return c.json({ ok: false, error: refusal, activeRuns: active }, 409)
@@ -1442,6 +1443,13 @@ function relaunchDaemon(): Promise<boolean> {
     // Free batches stop sending and are saved, so the successor carries them on; a tick under way
     // is let finish first (bounded). Nothing waits for a batch to END.
     await parkFreeBatches()
+    // A chat move runs on through the restart; only its calls into this daemon are held off, and one
+    // already under way is let finish (bounded), so no move step is cut half-way.
+    const cut = await parkToolboxCalls()
+    if (cut > 0)
+      console.error(
+        `[agenthydra] relaunch: ${cut} chat move call(s) still running after ${PARK_WAIT_MS / 1000} s; handing over anyway`,
+      )
     // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
     // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
     if (IS_RELEASE) {
@@ -1449,6 +1457,13 @@ function relaunchDaemon(): Promise<boolean> {
       if (r.ok) console.log('[agenthydra] relaunch: the launcher confirmed its runtime is on disk')
       else console.error(`[agenthydra] relaunch: launcher --ensure-bun failed: ${r.reason}`)
     }
+    // A runner hand-off (a move's, a CliMayte worker's) dies with this daemon while its powershell
+    // still runs, and its runner then never starts: let those under way finish (seconds, bounded).
+    const unstarted = await runnerHandoffsSettled(30_000)
+    if (unstarted > 0)
+      console.error(
+        `[agenthydra] relaunch: ${unstarted} runner hand-off(s) still under way after 30 s; handing over anyway`,
+      )
     return relaunchWithHandoff({
       spawnSuccessor: spawnRelaunchSuccessor,
       ackDir: POINTER_DIR,
@@ -1470,12 +1485,14 @@ function relaunchDaemon(): Promise<boolean> {
       if (!handedOver) {
         relaunchInFlight = null
         resumeFreeBatches()
+        resumeToolboxCalls()
       }
       return handedOver
     },
     (error) => {
       relaunchInFlight = null
       resumeFreeBatches()
+      resumeToolboxCalls()
       throw error
     },
   )
@@ -1538,11 +1555,6 @@ setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
-  // Work a restart would LOSE holds the update for as long as it runs, as restartRefusal does for a
-  // person's restart: a chat move, which a restart leaves half-done (orchestrator.ts moveRestartRefusal).
-  // A Free batch held it until 2026-10-17; batches now outlive the daemon (mcp-free.ts adoptFreeBatches),
-  // and with new ones arriving from other chats every few seconds the update almost never found a gap.
-  hasUnsafeWork: () => moveRestartRefusal(false) !== null,
   relaunch: () => relaunchDaemon(),
 })
 
@@ -1771,6 +1783,11 @@ if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
 // via main.ts's dynamic import (where the default export would be silently inert — verified: the
 // daemon "booted", logged its URL, and listened on nothing).
+// The chat moves the last daemon left run on under their runners; take them on before the first request,
+// so a poll of a move's id or a second move finds them. The port is free, so their daemon has exited.
+const movesAdopted = await adoptOrchestratorRuns()
+if (movesAdopted > 0)
+  console.log(`[agenthydra] took on ${movesAdopted} chat move(s) from the last daemon`)
 renewBootWatchdog('listen')
 const server = Bun.serve({
   port: boundPort,
