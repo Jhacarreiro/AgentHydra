@@ -1,17 +1,25 @@
 # Urgency Advisor (a background loop)
 
 A local loop in the AgentHydra server (`server/src/urgency-advisor.ts`); never a cloud routine or anything on the
-claude.ai account. Default ON. A check runs each minute and does a pass when the interval (default 30 minutes) has passed.
+claude.ai account. Default ON. A look runs each minute and measures every chat's busy streak.
 
-- **Who gets a nudge:** every Desk 2 chat and Hydra Core seat whose status is `working` and whose current turn
-  (`turnStartedAt`) is 30+ minutes old. Not idle, stopped, waiting-on-owner (`needs_you`) or CliMayte drone-worker chats.
-  At most one nudge per chat per 30 minutes of running; what was sent is kept in `<data dir>/urgency-advisor.json`, so a
-  restart does not double-send.
-- **What is sent:** exactly `[Urgency Advisor · <Name>] Sent on the owner's behalf.`, a blank line, then one line from the
-  persona's `lines` (`{minutes}` and `{title}` filled in). Name and lines come at runtime from
-  `people/manager/duke-urgency-advisor/persona.json`; the repo holds only the neutral fallback "Urgency Advisor". No model call.
-- **Delivery:** `POST /api/chats/:id/messages` on Desk 2, which pushes the text into the chat's open input stream. The CLI
-  takes it at its next tool boundary; the turn is not stopped or relaunched.
+- **The clock:** a chat's busy streak runs from when it last sat idle for more than 5 minutes. The owner's messages never
+  reset it (one sent mid-turn, or a new turn within 5 minutes of the last one's end). Kept per chat in
+  `<data dir>/urgency-advisor.json`, so a restart keeps it.
+- **Who is visited:** every Desk 2 chat and Hydra Core seat that is `working` with a streak of 30+ minutes, again every
+  interval (30 by default), however many visits it has had; at most one visit per chat per interval. Not idle, stopped,
+  waiting-on-owner (`needs_you`) or CliMayte drone-worker chats.
+- **A visit:** a TL;DR of the chat (title, the owner's last 3 messages, the AI's last 3 replies, about 4,000 characters, from
+  Desk's transcript) goes with Duke's `brief.md` (read at runtime from `people/manager/duke-urgency-advisor/`, never
+  copied into the repo) to one short model call that writes his push. A failed call falls back to a `lines` template
+  from `persona.json`, else a neutral line. Then he watches for the chat's next AI text (up to 10 minutes) and may reply
+  (or answers SKIP when the answer is good), at most 2 replies per visit.
+- **Text:** every message is `[Urgency Advisor · <Name>] Sent on the owner's behalf.`, a blank line, then the words.
+- **Model route:** Desk 2's `POST /api/advisor/compose` (`desk2/server/src/engine/advisor-compose.ts`): the same route
+  as Desk's chat titles, Haiku 5.5 on the chat's own login, no tools. Never HSwarm or another provider for chat text.
+- **Delivery:** Desk 2's `POST /api/sessions/:sessionId/ping`. An SDK chat takes it into its open input stream at the CLI's
+  next tool boundary. Not `/messages` (its `now` stops a CliMayte worker's turn to deliver) and not send-now/interrupt.
+  A seat that is a CliMayte worker holds the message until its task ends; nothing is stopped.
 - **Setting:** `GET /api/urgency-advisor` and `POST /api/urgency-advisor {enabled?, intervalMinutes?}` (db settings
   `urgency_advisor_enabled`, `urgency_advisor_minutes`; interval 5-720).
-- **Log:** one line per nudge in the server log: `[urgency-advisor] chat=<id> minutes=<n> sent=ok|failed`.
+- **Log:** one line per message in the server log: `[urgency-advisor] chat=<id> minutes=<n> push|reply=<k> sent=ok|failed`.
