@@ -1,6 +1,7 @@
 // Pure sidebar logic (tested in web/test/shell). No Vue, no store.
 import type { ChatServiceInfo, ChatServiceKind, ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
 import { accountTitle } from '../accounts/format'
+import { sortRows, type RowFacts, type SidebarSort } from './sort'
 
 /** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
 export function folderLabel(cwd: string): string {
@@ -277,6 +278,36 @@ export function nestChildren(groups: SidebarGroups): SidebarGroups {
     pinned: kept(groups.pinned),
     folders: groups.folders.map(place).filter((g) => g.entries.length),
     archived: kept(groups.archived),
+    hiddenOut: groups.hiddenOut
+  }
+}
+
+/**
+ * The groups with their rows in the sort's order (sort.ts), after nestChildren: each top row is sorted, and its
+ * sub-chats follow it, sorted among themselves, so a nested row stays under its parent (owner, 2026-10-17). 'manual'
+ * returns them as they are: the saved order groupChats gave them. The groups keep their order.
+ */
+export function sortGroups(groups: SidebarGroups, mode: SidebarSort, facts: (e: SidebarEntry) => RowFacts): SidebarGroups {
+  if (mode === 'manual') return groups
+  const sortGroup = (g: ChatGroup): ChatGroup => {
+    const kids = new Map<string, SidebarEntry[]>()
+    for (const e of g.entries) {
+      if (!e.under) continue
+      const list = kids.get(e.under)
+      if (list) list.push(e)
+      else kids.set(e.under, [e])
+    }
+    const tops = sortRows(
+      g.entries.filter((e) => !e.under),
+      mode,
+      facts
+    )
+    return { ...g, entries: tops.flatMap((e) => [e, ...sortRows(kids.get(entryKey(e)) ?? [], mode, facts)]) }
+  }
+  return {
+    pinned: groups.pinned && sortGroup(groups.pinned),
+    folders: groups.folders.map(sortGroup),
+    archived: groups.archived && sortGroup(groups.archived),
     hiddenOut: groups.hiddenOut
   }
 }

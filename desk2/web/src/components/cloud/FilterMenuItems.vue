@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
+import { ArrowDownUp, Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   DropdownMenuItem,
@@ -13,6 +13,7 @@ import {
 import { FILTER_LABELS, type SidebarFilter } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
+import { SORT_LABELS, SORT_NAMES, useSidebarSort, type SidebarSort } from '@/components/sidebar/sort'
 import { SUB_KIND_LABELS, subModes, type SubKind, type SubMode } from '@/components/sidebar/subitems'
 import { openHydra } from '@/components/hydra/api'
 import {
@@ -139,6 +140,14 @@ const FILTER_TIPS: Record<SidebarFilter, string> = {
   archived: 'Show only the archived chats',
   all: 'Show every chat, the archived ones in a group at the end'
 }
+// The Sort by items' hover titles (every item in this menu has one).
+const SORT_TIPS: Record<SidebarSort, string> = {
+  started: 'Each row by when its chat started, the oldest on top; new chats join at the bottom',
+  name: 'Each row by its title, A-Z; numbers in number order',
+  activity: 'Each row by its last activity, the newest on top; a chat moves when it is used',
+  manual: 'Rows stay where you drag them, and a new row joins at the top'
+}
+const { sort: sortMode, set: setSort } = useSidebarSort()
 
 const ITEM = `${MENU_ITEM} pe-2`
 
@@ -194,6 +203,29 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     <span class="flex-1">{{ label }}</span>
     <component :is="icons.check" v-if="!cloud.on.value && props.filter === key" class="ms-3" />
   </DropdownMenuItem>
+
+  <!-- How the rows of both lists are ordered (sidebar/sort.ts; owner, 2026-10-17: the order should not keep changing). -->
+  <DropdownMenuSub>
+    <DropdownMenuSubTrigger :class="ITEM" title="The order of the rows in both lists: when each chat started, its name, or its last activity. Manual keeps the order you drag them into">
+      <component :is="ArrowDownUp" />
+      <span class="flex-1">Sort by</span>
+      <span class="ps-3 text-ui-sm text-text-muted">{{ SORT_NAMES[sortMode] }}</span>
+    </DropdownMenuSubTrigger>
+    <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-64`">
+      <DropdownMenuItem
+        v-for="(label, key) in SORT_LABELS"
+        :key="key"
+        role="menuitemradio"
+        :aria-checked="sortMode === key"
+        :title="SORT_TIPS[key]"
+        :class="MENU_ITEM"
+        @select="setSort(key)"
+      >
+        <span class="flex-1">{{ label }}</span>
+        <component :is="icons.check" v-if="sortMode === key" class="ms-3" />
+      </DropdownMenuItem>
+    </DropdownMenuSubContent>
+  </DropdownMenuSub>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuItem

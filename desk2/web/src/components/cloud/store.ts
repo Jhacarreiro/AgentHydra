@@ -8,6 +8,7 @@ import { useShellSource } from '@/components/shell/source'
 import { dropHidden, recordCloudOrder } from '@/components/sidebar/logic'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useSidebarOrder } from '@/components/sidebar/order'
+import { useSidebarSort } from '@/components/sidebar/sort'
 import { cloudOnlyKeys, cloudOnlyNarrowed, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, rowOrderKey, type CloudScopes } from './logic'
 
 /** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
@@ -145,6 +146,7 @@ ${rows}`
   const placed = computed(() => deskPlaces(desk.chats.value, desk.external.value))
   const answeredIds = computed(() => new Set(sessions.value.map((r) => r.id)))
   const { order, save: saveOrder } = useSidebarOrder()
+  const { sort: sortMode } = useSidebarSort()
 
   const searching = computed(() => !!answered.value.trim())
   // The groups the desk list hides are hidden here too (sidebar/hidden.ts); a search's answer is one group.
@@ -154,7 +156,8 @@ ${rows}`
       groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, {
         ranked: searching.value,
         desk: placed.value,
-        order: order.value
+        order: order.value,
+        sort: sortMode.value
       }),
       (g) => g.orderKey,
       hiddenGroups.hidden.value,

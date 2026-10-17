@@ -192,7 +192,7 @@ describe('groupCloud', () => {
         outside('moved-to-folder', { cwd: 'D:/work/gamma', group: 'ALPHA', source: 'cli' })
       ]
     )
-    expect(listed(groupCloud(cloudRows, all, 'PC', { desk }))).toEqual([
+    expect(listed(groupCloud(cloudRows, all, 'PC', { desk, sort: 'manual' }))).toEqual([
       ['alpha', ['went-deeper', 'plain', 'moved-to-folder']],
       ['Reading', ['moved-away']]
     ])
@@ -216,7 +216,7 @@ describe('groupCloud', () => {
       row('cloud-b', 'D:/other', 300),
       row('cloud-c', 'D:/new', 150)
     ]
-    const first = groupCloud(answer, all, 'PC', { desk, order })
+    const first = groupCloud(answer, all, 'PC', { desk, order, sort: 'manual' })
     expect(listed(first)).toEqual([
       ['new', ['split', 'vector', 'rust', 'cloud-a', 'cloud-c']],
       ['other', ['cloud-b']],
@@ -238,7 +238,7 @@ describe('groupCloud', () => {
       row('cloud-d', 'D:/new', 500),
       row('cloud-e', 'D:/zeta', 2000)
     ]
-    expect(listed(groupCloud(later, all, 'PC', { desk, order }))).toEqual([
+    expect(listed(groupCloud(later, all, 'PC', { desk, order, sort: 'manual' }))).toEqual([
       ['new', ['split', 'vector', 'rust', 'cloud-a', 'cloud-c', 'cloud-d']],
       ['other', ['cloud-b']],
       ['pub', ['pub']],
@@ -306,7 +306,7 @@ describe('groupCloud', () => {
   // Owner, 2026-10-05: "we should have one that says show only local".
   test('Show only local keeps this PC\'s sessions and leaves the other PC\'s out', () => {
     const answer = [row('here', 'D:/work/alpha', 2), { ...row('synced', 'D:/work/alpha', 3), fromPc: 'OTHER-PC' }]
-    const ids = (s: CloudScopes) => groupCloud(answer, s, 'PC').flatMap((g) => g.rows.map((r) => r.id))
+    const ids = (s: CloudScopes) => groupCloud(answer, s, 'PC', { sort: 'manual' }).flatMap((g) => g.rows.map((r) => r.id))
     expect(localOnly(all, 'PC')).toBe(false)
     expect(ids(all)).toEqual(['synced', 'here'])
     const local: CloudScopes = { ...all, pcs: ['PC'] }
@@ -352,8 +352,8 @@ describe('groupCloud', () => {
   test('a session the desk list shows is listed when AgentHydra leaves it out; only the period cannot drop it', () => {
     const desk = deskPlaces([deskChat('chat-1', 'chat-session', { cwd: 'D:/conn', updatedAt: 2 })], [outside('old-desktop', { cwd: 'D:/conn', lastActivityAt: 1 })])
     const answer = [row('recent', 'D:/conn', 50)]
-    const ids = (s: CloudScopes, ranked = false) => groupCloud(answer, s, 'PC', { desk, ranked }).flatMap((g) => g.rows.map((r) => r.id))
-    expect(listed(groupCloud(answer, all, 'PC', { desk }))).toEqual([['conn', ['recent', 'chat-session', 'old-desktop']]])
+    const ids = (s: CloudScopes, ranked = false) => groupCloud(answer, s, 'PC', { desk, ranked, sort: 'manual' }).flatMap((g) => g.rows.map((r) => r.id))
+    expect(listed(groupCloud(answer, all, 'PC', { desk, sort: 'manual' }))).toEqual([['conn', ['recent', 'chat-session', 'old-desktop']]])
     // App, archived and PC are read off the desk's facts.
     expect(ids({ ...all, apps: ['codex'] })).toEqual(['recent'])
     expect(ids({ ...all, archived: ['archived'] })).toEqual(['recent'])

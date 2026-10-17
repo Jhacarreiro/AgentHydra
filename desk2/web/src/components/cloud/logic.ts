@@ -7,6 +7,7 @@
 // and computer narrow the rows already fetched.
 import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
 import { folderKey, folderLabel, NO_FOLDER, namesakeFolder, sortFolders, stableOrder, type SidebarOrder } from '../sidebar/logic'
+import { sortRows, type RowFacts, type SidebarSort } from '../sidebar/sort'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 export function modelName(m: string | null | undefined): string | null {
@@ -416,6 +417,8 @@ export interface GroupCloudOptions {
   desk?: ReadonlyMap<string, DeskPlace>
   /** The order both lists keep (sidebar/order.ts); without one, groups by their newest row and rows newest first. */
   order?: SidebarOrder
+  /** How the rows sort (sidebar/sort.ts; the default, by date started). 'manual' keeps `order`. */
+  sort?: SidebarSort
 }
 
 /**
@@ -465,12 +468,21 @@ export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string,
   }
   for (const g of groups) g.rows.sort(newestFirst)
   const sorted = sortFolders(groups)
+  // The sort is the desk list's too (sidebar/sort.ts), so both lists order their rows the same way.
+  const mode = opts.sort ?? 'started'
+  if (mode !== 'manual') {
+    for (const g of sorted) g.rows = sortRows(g.rows, mode, cloudFacts)
+    return sorted
+  }
   const order = opts.order
   if (!order) return sorted
   const cloudOnly = (r: CloudSession) => !desk.has(r.id)
   for (const g of sorted) g.rows = stableOrder(g.rows, (r) => rowOrderKey(r, desk), order.rows, cloudOnly)
   return sorted
 }
+
+/** What the sort reads of a cloud row (sidebar/sort.ts): its title, when it started, its last activity. */
+const cloudFacts = (r: CloudSession): RowFacts => ({ title: r.title, started: r.createdAt ?? null, activity: r.lastActivityAt ?? 0 })
 
 /**
  * What the cloud list adds to the saved order, at its end (sidebar/logic.ts recordCloudOrder): its rows the desk

@@ -103,6 +103,7 @@ import {
   withThreads,
   recordCloudOrder,
   recordDeskOrder,
+  sortGroups,
   moveTarget,
   parseFilter,
   projectOfGroup,
@@ -129,6 +130,7 @@ import {
   UNASSIGNED
 } from './logic'
 import { useSidebarOrder } from './order'
+import { useSidebarSort, type RowFacts } from './sort'
 import { chatServices } from './services'
 import { useHiddenGroups } from './hidden'
 import { compactSidebar } from './compact'
@@ -225,6 +227,16 @@ function onCloudSearchKey(e: KeyboardEvent) {
 // order wanted), the one the cloud list keeps too (order.ts). New ones join at the top. Folder groups are not kept
 // in it: they are listed A-Z (logic.ts sortFolders).
 const { order, save: saveOrder } = useSidebarOrder()
+// The rows' order (sidebar/sort.ts, the owner's 2026-10-17 ask): the choice the Filter menu's Sort by sets, shared with the
+// cloud list. A Desk chat starts when it was created; an outside session starts as the cloud store's row for it says (the
+// store fetches the list with the cloud off too), else at its own last activity.
+const { sort: sortMode } = useSidebarSort()
+const cloudById = computed(() => new Map(cloud.sessions.value.map((r) => [r.id, r])))
+const sortFacts = (e: SidebarEntry): RowFacts => {
+  const row = e.kind === 'chat' ? undefined : cloudById.value.get(e.id)
+  const started = e.kind === 'chat' ? e.chat.createdAt : (row?.createdAt ?? e.session.lastActivityAt)
+  return { title: (e.kind === 'chat' ? e.chat : e.session).title ?? '', started: started ?? null, activity: e.at }
+}
 
 // While AgentHydra is open, a tab of it with a sidebar of its own (HSwarm's tree) has it drawn here.
 const hydraModel = computed(() => hydraShown.value?.model ?? null)
@@ -270,9 +282,10 @@ const ownGroups = computed<ChatGroup[]>(() => {
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active' || deskPcs.value !== null || activeOnly.value)
-// Rows drag to another place in their own group (rowDrag.ts); not while a search or a filter narrows the list.
+// Rows drag to another place in their own group (rowDrag.ts); only in Manual, where the order dragged into is the one
+// shown (the other sorts would undo a drag at once), and not while a search or a filter narrows the list.
 const rowDrag = useRowDrag()
-const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
+const rowsDraggable = (g: ChatGroup) => sortMode.value === 'manual' && !filtering.value && g.key !== 'archived'
 const rowLeave = leaveUnlessFiltered([query, filter, deskPcs])
 const emptyText = computed(() =>
   emptyListText({ searching: query.value.trim() !== '', hiddenOut: !!groups.value.hiddenOut, filter: filter.value, activeOnly: activeOnly.value })
@@ -405,8 +418,9 @@ const deskShown = computed<SidebarGroups>(() => {
   return { ...g, folders: others.length ? addRemoteToDeskGroups(withAdded, others, placing) : withAdded }
 })
 /** The desk list's groups before Active only leaves rows out: a row's threads count the nested rows among them, drawn or not. */
+const sortedDesk = computed(() => sortGroups(deskShown.value, sortMode.value, sortFacts))
 const allGroups = computed<ChatGroup[]>(() => {
-  const g = deskShown.value
+  const g = sortedDesk.value
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const groupList = computed<ChatGroup[]>(() => (activeOnly.value ? onlyActive(allGroups.value, entryGlyph) : allGroups.value))
