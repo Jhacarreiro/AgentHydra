@@ -733,7 +733,8 @@ optionally one per range of Today, 7 days and 30 days), and keeps every source's
 that is down still shows its last numbers, marked late (`server/src/project-dashboard/`, `GET /api/project-dashboard`,
 `GET /api/project-dashboards`, `POST /api/project-dashboard/refresh`). The page draws it in the window's own kit
 (`web/src/components/dashboard/template/`); Project Hydra draws the same answer. No agent, port or localhost site is
-involved, so it works for anyone whose data source answers the feed.
+involved, so it works for anyone whose data source answers the feed. A checkout with a spec gets the same entry points as
+a site (the dashboard icon beside its New session +, a project tile's "Open dashboard"), with no site written.
 
 A project with no spec keeps the older kind: a small static website per project, which its chats write. A chat builds it with
 `dashboard_write` on the agenthydra MCP (any HTML, CSS, JavaScript or data), and the daemon hosts it at
