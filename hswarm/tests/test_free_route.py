@@ -292,6 +292,9 @@ def test_a_task_no_free_account_had_room_for_says_so_on_its_ledger_line(fake, mo
     fake(accounts=[{**ACCOUNTS[0], "busy": True}])
     api = _Api()
     monkeypatch.setattr(free_route, "eligible", lambda task: True)  # pinned, so its API route needs no keys
+    # It still waits for room, polling a few times, but for 0.2 s rather than route_via_free_wait_s's 90 s.
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_WAIT_S", 0.2)
+    monkeypatch.setattr(free_route, "ROOM_POLL_S", 0.05)
     job = asyncio.run(JobManager(client=api).run_batch([_task(model="deepseek-flash")], concurrency=1))
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert api.calls == 1 and job.results["t0"].status == "ok"
