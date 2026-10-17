@@ -42,6 +42,10 @@ function parseQ2(t: string): Parsed | null {
   return /^mid\b/i.test(t) ? { kw: 'mid' } : /^new\b/i.test(t) ? { kw: 'new' } : null
 }
 
+function parseQ2b(t: string): Parsed | null {
+  return /^yes\b/i.test(t) ? { kw: 'yes' } : /^no\b/i.test(t) ? { kw: 'no' } : null
+}
+
 function parseQ3(t: string): Parsed | null {
   return /^myself\b/i.test(t)
     ? { kw: 'myself' }
@@ -84,6 +88,7 @@ function parseQ9(_t: string, raw: string): Parsed | null {
 
 const READERS: Partial<Record<Step, (t: string, raw: string) => Parsed | null>> = {
   q2: parseQ2,
+  q2b: parseQ2b,
   q3: parseQ3,
   q4: parseQ4,
   q5: parseQ5,
