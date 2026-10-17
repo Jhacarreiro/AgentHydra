@@ -11,7 +11,7 @@ conflicts with it.
 - **Run it:** `bun install --frozen-lockfile` at the root and in `desk2/`, then `cd fork-e2e && bun run test`. About 30 s on Linux.
 - **Five scenarios:** E1 boot and store, E2 CliMayte dispatch, E3 Origin/Host guards, E4 MCP over both transports, E6 idle egress.
 - **Hermetic:** every scenario runs in its own temp home with outbound traffic refused and counted, and ends by checking that the real `~/.claude.json`, `~/.claude`, `~/.codex` and their siblings did not change.
-- **Known bugs stay visible:** two upstream bugs are asserted as they should behave and marked `[known bug, fix proposed in <upstream pull request>]`. The lane stays green while they fail and goes red once upstream fixes one, as a cue to drop the marker.
+- **Known bugs stay visible:** an upstream bug the lane knows of is asserted as it should behave and marked `[known bug, fix proposed in <upstream pull request>]` (one today, in E2). The lane stays green while it fails and goes red once upstream fixes it, as a cue to drop the marker.
 - **Root suite untouched:** the files are `*.e2e.ts`, which a `bun test` at the root never picks up.
 - **CI:** `.github/workflows/fork-e2e.yml` on ubuntu-latest (push to main, pull requests, daily, manual), only in the fork's own repository.
 
@@ -60,7 +60,7 @@ of it is the idle window).
 <details>
 <summary><b>What each scenario guards</b></summary>
 
-**E1, two boots on one store** (`e1-boot-state.e2e.ts`). A fresh home boots with auto-update on by default. Settings written over `POST /api/settings` read back at once. A second daemon on the same store says "already running", exits 0 and leaves the first serving. SIGHUP ends the daemon with exit 1 and a `CRASH reason=signal:SIGHUP` record (index.ts treats it as fatal on purpose). The next boot keeps every setting, auto-update off included. The store's schema is read read-only from `sqlite_master` after each start. Covers from outside what `tests/settings.test.ts` covers in process.
+**E1, two boots on one store** (`e1-boot-state.e2e.ts`). A fresh home boots with auto-update on by default. Settings written over `POST /api/settings` read back at once. A second daemon on the same store says "already running", exits 0 and leaves the first serving. SIGHUP ends the daemon with exit 1 and a `CRASH reason=signal:SIGHUP` record (index.ts treats it as fatal on purpose). The next boot keeps every setting, auto-update off included. The store's schema is read read-only from `sqlite_master` after each start, and the `session_stats_gone` index must stay dropped after every one, the second daemon's included. Covers from outside what `tests/settings.test.ts` covers in process.
 
 **E2, CliMayte dispatch** (`e2-climayte-dispatch.e2e.ts`). A CLI instance created over `POST /api/cli-instances` lives inside the temp home. Seeded with a fake `.credentials.json` and a usage reading in `DATA_DIR/usage-cache.json`, it reads as signed in. One task over `POST /api/corch/workers` runs to done on the fake CLI, launched exactly once. The same `requestId` sent again answers the same worker with `repeat: true`. Once the store on disk has the worker done, a SIGKILL and a reboot keep it done, and the request still repeats without a second launch. A second task is then killed at the worst moment: the daemon is SIGKILLed as the runner's exit file goes (watched with `fs.watch`), before the worker's end reaches the disk. After the reboot the worker may read done or running (see the findings), but it is never launched again, never gets a second attempt, and its request still answers the same worker. This is what `server/tests/climayte-request-id.test.ts` and `climayte-steering.test.ts` check in process, with the instance store, the usage cache and HTTP in the path.
 
@@ -77,10 +77,13 @@ The numbering leaves gaps on purpose: E5 (the Codex hub) and E7 onward need code
 <details>
 <summary><b>Known findings</b></summary>
 
-Each known bug is one `knownBug(...)` test (harness.ts). While the bug is there it reports as `todo` and prints `known bug still present`, plus a `::warning` annotation on GitHub. Once fixed, bun fails it with "marked as todo but passes"; then delete the marker.
+Each known bug is one `knownBug(...)` test (harness.ts). While the bug is there it reports as `todo` and prints `known bug still present`, plus a `::warning` annotation on GitHub. Once fixed, bun fails it with "marked as todo but passes"; then turn it into a plain `test`, so the fix stays guarded.
 
-1. **The `session_stats_gone` index comes back on every start after the first** (E1). `server/src/db.ts:424` creates it on every start, and the schema's v1 step (`db.ts:562`) drops it only while `user_version < 1`. A second daemon that exits at once at the single-instance guard brings it back too, because the schema runs when db.ts is imported, before the guard. Fix proposed upstream: [LunarWerxs/AgentHydra#16](https://github.com/LunarWerxs/AgentHydra/pull/16).
-2. **A repeated request to an unnamed CliMayte group answers with a new group name** (E2). The workers are the right ones (`repeat: true`, same id), but the reply's `group` is a fresh `g-xxxxxx`, because `server/src/climayte.ts:1326` computes `named || g-<6 hex>` even when every task repeats. Fix proposed upstream: [LunarWerxs/AgentHydra#17](https://github.com/LunarWerxs/AgentHydra/pull/17).
+1. **A repeated request to an unnamed CliMayte group answers with a new group name** (E2). The workers are the right ones (`repeat: true`, same id), but the reply's `group` is a fresh `g-xxxxxx`, because `server/src/climayte.ts:1326` computes `named || g-<6 hex>` even when every task repeats. Fix proposed upstream: [LunarWerxs/AgentHydra#17](https://github.com/LunarWerxs/AgentHydra/pull/17).
+
+Fixed upstream, now plain tests:
+
+- **The `session_stats_gone` index came back on every start after the first** (E1). The base schema created it on every open and the schema's v1 step dropped it only while `user_version < 1`, so every later start brought it back, a second daemon that exits at once at the single-instance guard included (the schema runs when db.ts is imported, before the guard). Upstream fixed it in 3d7c1966: the base schema now drops it on every open (`server/src/db.ts:427`). E1 asserts it stays dropped across all three starts.
 
 Observations the lane asserts as they are, for upstream to weigh:
 

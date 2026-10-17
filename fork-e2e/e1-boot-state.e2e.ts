@@ -5,13 +5,13 @@
 import { Database } from 'bun:sqlite'
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { type Daemon, exitWithin, knownBug, REPO, scenario, start, tail } from './harness'
+import { type Daemon, exitWithin, REPO, scenario, start, tail } from './harness'
 
 const lane = scenario('E1')
 const home = lane.home()
 const db = home.env.AGENTHYDRA_DB as string
 
-/** Whether the store has the session_stats_gone index the schema's v1 step drops (server/src/db.ts:562). */
+/** Whether the store has the session_stats_gone index the schema drops (server/src/db.ts:427). */
 function hasGoneIndex(): boolean {
   const s = new Database(db, { readonly: true })
   try {
@@ -86,18 +86,11 @@ test('E1: the next boot on the same store keeps every setting, auto-update off i
   goneIndex.reboot = hasGoneIndex()
 }, 60_000)
 
-knownBug(
-  {
-    issue:
-      'db.ts recreates the session_stats_gone index on every boot after the v1 migration drops it',
-    where:
-      'server/src/db.ts:424 creates it unconditionally; db.ts:562 drops it only while user_version < 1',
-    fix: 'https://github.com/LunarWerxs/AgentHydra/pull/16',
-  },
-  'E1: no start after the first brings back the index the schema v1 step dropped',
-  () => {
-    expect(goneIndex).toEqual({ firstBoot: false, secondStart: false, reboot: false })
-  },
-)
+// Until upstream 3d7c1966 the base schema created this index on every open and the v1 step dropped
+// it only once, so every start after the first brought it back, the second daemon's too (the schema
+// runs on import, before the single-instance guard).
+test('E1: no start after the first brings back the index the schema v1 step dropped', () => {
+  expect(goneIndex).toEqual({ firstBoot: false, secondStart: false, reboot: false })
+})
 
 lane.realHomeUntouched()
