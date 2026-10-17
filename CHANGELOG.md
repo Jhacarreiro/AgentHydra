@@ -40,6 +40,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A login warning clears itself after you sign in.** A running app whose login could not be confirmed is checked again every few seconds, so its warning goes away soon after you sign back in.
 - **A closed app shows as closed within seconds.** Closing a Claude, Codex or CLI session outside AgentHydra now shows on its row in a few seconds instead of at the next refresh. A process check that times out no longer shows every Codex app as closed.
 - **Shared chats no longer fill the sync store.** Each PC keeps its own copy, so the store now lets go of a chat's transcript as soon as your other PCs have it, instead of keeping every chat whole until the store is full. A PC that joins later or lost its copy asks for the chat again and gets it whole, and when room is short your most recently active chats go first.
+- **HSwarm's routes now sit behind the same guard as every other API route.** HSwarm's status, its account names and the proxy to its console were set up before AgentHydra's check on where a request comes from. They now come after it, like the rest of the API.
 
 ## [2.0.5] - 2026-10-16
 

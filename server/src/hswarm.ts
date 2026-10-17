@@ -12,6 +12,7 @@
  * the daemon's exit leaves it running, and the next daemon adopts it as its own.
  */
 
+import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -39,6 +40,13 @@ export function hswarmDir(env: NodeJS.ProcessEnv = process.env, appRoot = APP_RO
 /** hswarm's state dir; the sidecar and the proxy must agree on it (the console token lives here). */
 export function hswarmHome(env: NodeJS.ProcessEnv = process.env): string {
   return env.HSWARM_HOME?.trim() || join(homedir(), '.hswarm')
+}
+
+/** The id hswarm prints for an account: hswarm/accounts.py account_id. It lives here, not in routes/hswarm.ts:
+ *  kit/ingest-claude.ts loads with index.ts's static imports, and importing a routes module from there registers
+ *  its routes ahead of index.ts's /api guard (server/tests/api-guard-order.test.ts). */
+export function hswarmAccountId(uuid: string): string {
+  return `acct-${createHash('sha256').update(uuid, 'utf8').digest('hex').slice(0, 8)}`
 }
 
 /** `<logDir>/hswarm.log`, rotated one generation past 5 MiB first. */

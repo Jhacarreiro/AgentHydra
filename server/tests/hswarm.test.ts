@@ -13,6 +13,7 @@ import { killProcessTree } from '../src/core/process'
 import { windowsTcpTable } from '../src/core/win-tcp-table'
 import {
   getHSwarmStatus,
+  hswarmAccountId,
   hswarmDir,
   resetHSwarmStateForTests,
   startHSwarm,
@@ -541,7 +542,7 @@ test('an account uuid maps to the acct id hswarm prints and to the instance sign
 })
 
 test('a signed-out account is named from known accounts and login history, never over a current login', async () => {
-  const { hswarmAccountMap, hswarmAccountId } = await import('../src/routes/hswarm')
+  const { hswarmAccountMap } = await import('../src/routes/hswarm')
   const current = '00000000-0000-0000-0000-0000000000a1'
   const moved = '00000000-0000-0000-0000-0000000000a2'
   const nameOnly = '00000000-0000-0000-0000-0000000000a3'
