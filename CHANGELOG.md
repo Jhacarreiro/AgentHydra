@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A CliMayte dispatch sent again answers with its workers' own group.** A dispatch retried with the same request ids and no group name returned the workers it had already started, but under a new group name that held none of them, so checking or cancelling that group found nothing. The retry now answers with the group they are in, and a task new in it joins that group.
+
 ## [2.0.5] - 2026-10-16
 
 **TL;DR**
