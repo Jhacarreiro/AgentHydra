@@ -1,6 +1,11 @@
 // E6: what an idle daemon sends out. Every proxy-aware outbound call goes to a counting listener
 // that refuses it (HTTPS_PROXY, HTTP_PROXY), both download bases go to another, and on Linux the
-// daemon's own sockets are read from /proc so a client that ignores the proxy is seen too.
+// daemon runs under strace, which records every connect, sendto, sendmsg and sendmmsg the daemon
+// and its children make as they happen, so a client that ignores the proxy is seen too, however
+// short its connection, and so is a UDP datagram or a DNS query (tracedAttempts). Without a working
+// strace the daemon's open TCP sockets are sampled from /proc every 250 ms of the idle window
+// instead, which misses a connection opened and closed between two samples and every datagram;
+// FORK_E2E_REQUIRE_STRACE=1 (CI) makes that a failure.
 //
 // A fresh store downloads two things at boot, by design: the model price list
 // (server/src/price-catalog.ts, raw.githubusercontent.com, when its cache is missing or a day old)
@@ -12,10 +17,31 @@
 // harness switches auto-update off at boot).
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs'
+import { join } from 'node:path'
 import { type Daemon, hitHost, scenario, waitFor } from './harness'
 
 const lane = scenario('E6')
 const home = lane.home()
+const STRACE = process.platform === 'linux' ? Bun.which('strace') : null
+const TRACE = join(home.dir, 'logs', 'strace.log')
+// -v prints a sendmmsg vector whole; without it strace stops after 32 messages and a later
+// message's address would not be in the log.
+const flags = ['-f', '--seccomp-bpf', '--kill-on-exit', '-qq', '-ttt', '-v']
+const calls = ['-e', 'trace=connect,sendto,sendmsg,sendmmsg']
+/** What the daemon runs under when strace can trace here (tried once on `true`), else null:
+ *  the daemon and every thread and child it starts, each call timestamped, into TRACE. */
+const TRACER =
+  STRACE && Bun.spawnSync([STRACE, ...flags, ...calls, '-o', '/dev/null', 'true']).exitCode === 0
+    ? [STRACE, ...flags, ...calls, '-o', TRACE]
+    : null
+/** CI wants the trace: with FORK_E2E_REQUIRE_STRACE=1 and none, the boot test fails and the idle
+ *  test does not run. */
+const REFUSED = !TRACER && process.env.FORK_E2E_REQUIRE_STRACE === '1'
+if (!TRACER && !REFUSED && process.platform === 'linux')
+  console.warn(
+    '\n  E6: no working strace, so the idle window samples open TCP sockets every 250 ms: a short' +
+      ' direct connection and any UDP datagram can slip through unseen\n',
+  )
 /** How long the daemon is left alone once its boot work has settled. */
 const IDLE_MS = 10_000
 /** Boot-time downloads a fresh store makes on purpose, and where each comes from. */
@@ -28,7 +54,9 @@ let daemon: Daemon
 let settledAt = 0
 
 test('E6: a fresh boot reaches only its two documented downloads, and nothing is fetched from the download bases', async () => {
-  daemon = await lane.boot(home)
+  if (REFUSED)
+    throw new Error('FORK_E2E_REQUIRE_STRACE=1, and strace is missing or cannot trace here')
+  daemon = await lane.boot(home, TRACER ? { prefix: TRACER } : {})
   // Boot work is settled once no new outbound attempt has appeared for 3 s.
   let seen = -1
   let quietSince = Date.now()
@@ -48,11 +76,34 @@ test('E6: a fresh boot reaches only its two documented downloads, and nothing is
   const hosts = [...new Set(home.egress.hits.map(hitHost))].sort()
   expect(hosts.filter((h) => !(h in BOOT_DOWNLOADS))).toEqual([])
   expect(home.downloads.hits).toEqual([])
+  if (TRACER) expect(tracedAttempts()).toEqual([])
   expect((await daemon.api('/api/update/settings')).body.enabled).toBe(false)
 }, 60_000)
 
-/** Linux: the remote ends of the TCP sockets held by `pid` and its descendants that are open (or
- *  opening) to anything other than this machine, read from /proc. */
+/** Every connect, sendto, sendmsg and sendmmsg in the strace log that names an IPv4 or IPv6
+ *  address other than loopback, or port 53 on any address (a DNS query, which a resolver on
+ *  loopback such as systemd-resolved's 127.0.0.53 sends on), as `address:port  <the strace line>`.
+ *  A failed attempt counts: the call was made. A call that another thread's output splits in two is
+ *  read on both halves: sendmmsg's addresses are printed only on its `<... sendmmsg resumed>` half.
+ *  AF_UNIX and AF_NETLINK calls, and sends on a connected socket, name none, so a lookup over a Unix
+ *  socket (nscd, systemd-resolved's varlink) is not seen itself; a connection to its answer is. */
+function tracedAttempts(): string[] {
+  const out: string[] = []
+  for (const line of readFileSync(TRACE, 'utf8').split('\n')) {
+    if (!/^(\d+ +)?\d+\.\d+ (<\.\.\. )?(connect|sendto|sendmsg|sendmmsg)( resumed>|\()/.test(line))
+      continue
+    for (const [, port, ip = ''] of line.matchAll(
+      /sa_family=AF_INET6?, sin6?_port=htons\((\d+)\)[^}]*?"([^"]+)"/g,
+    )) {
+      if (port !== '53' && /^(127\.|::1$|::ffff:127\.)/.test(ip)) continue
+      out.push(`${ip.includes(':') ? `[${ip}]` : ip}:${port}  ${line}`)
+    }
+  }
+  return out
+}
+
+/** Linux without strace: the remote ends of the TCP sockets held by `pid` and its descendants that
+ *  are open (or opening) to anything other than this machine, read from /proc. */
 function outboundSockets(pid: number): string[] {
   const kids = new Map<number, number[]>()
   for (const p of readdirSync('/proc')) {
@@ -105,19 +156,20 @@ function outboundSockets(pid: number): string[] {
   return out
 }
 
-test(
+test.skipIf(REFUSED)(
   `E6: left idle for ${IDLE_MS / 1000} s, the daemon makes no outbound attempt at all`,
   async () => {
     const direct = new Set<string>()
     const until = Date.now() + IDLE_MS
     while (Date.now() < until) {
-      if (process.platform === 'linux')
+      if (!TRACER && process.platform === 'linux')
         for (const s of outboundSockets(daemon.proc.pid)) direct.add(s)
       await Bun.sleep(250)
     }
     expect(home.egress.hits.slice(settledAt)).toEqual([])
     expect(home.downloads.hits).toEqual([])
-    expect([...direct]).toEqual([])
+    // The trace runs from the daemon's start, and the boot left none in it (above).
+    expect(TRACER ? tracedAttempts() : [...direct]).toEqual([])
   },
   IDLE_MS + 30_000,
 )

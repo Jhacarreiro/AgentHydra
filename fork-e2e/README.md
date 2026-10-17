@@ -18,7 +18,7 @@ conflicts with it.
 <details>
 <summary><b>Running it locally</b></summary>
 
-Linux, Bun 1.4. From the repository root:
+Linux, Bun 1.4, and `strace` for E6 (below). From the repository root:
 
 ```sh
 bun install --frozen-lockfile
@@ -33,7 +33,8 @@ Run from inside `fork-e2e/`: the root's `bunfig.toml` preload is for the root su
 or the known-bug assertions are listed but not run.
 
 - `FORK_E2E_TMP=<dir>`: where the temp homes go (default: the OS temp dir).
-- `FORK_E2E_KEEP=1`: keep every temp home, with its `logs/` (each daemon boot, the second daemon, Desk 2, the MCP stdio server). CI sets it and prints the logs when a run fails.
+- `FORK_E2E_KEEP=1`: keep every temp home, with its `logs/` (each daemon boot, the second daemon, Desk 2, the MCP stdio server, E6's strace). CI sets it and prints the logs when a run fails.
+- `FORK_E2E_REQUIRE_STRACE=1`: E6 fails instead of falling back to sampling when `strace` is missing or cannot trace here (its boot test fails, its idle test is skipped). CI sets it.
 - `FORK_E2E_STRICT_HOME=1`: compare the real home strictly even inside a Claude Code session (below).
 
 On a 4-core Linux box, three runs in a row took 29.7 s, 28.8 s and 28.2 s. Per scenario, roughly:
@@ -67,7 +68,7 @@ of it is the idle window).
 
 **E4, MCP over stdio and HTTP** (`e4-mcp.e2e.ts`). `bun server/src/mcp.ts` (stdio, relaying to the daemon) and `POST /api/mcp` initialize as the same server and list the same tools. `list_sessions` finds a seeded Claude transcript over both transports. `add_queue_item` is refused with HTTP 409 (no-headless) over both, and the queue stays empty. The stdio server exits 0 when its client closes stdin.
 
-**E6, idle egress** (`e6-idle-egress.e2e.ts`). A fresh boot may reach only its two documented downloads: the model price list (`server/src/price-catalog.ts`, raw.githubusercontent.com) and hydra_find's embedding model (`server/src/tool-intent.ts`, huggingface.co; `AGENTHYDRA_TOOL_INTENT=0` turns it off). Nothing may hit the download bases. Once the boot goes quiet, the daemon is left alone for 10 s and must make no outbound attempt at all, either through the proxy or as a direct socket from the daemon or any child (the remote ends of their TCP sockets, read from `/proc`). This catches a background fetch a synced upstream change starts at boot or on a short timer. A timer that first fires after the window is not seen: the update loop's first tick is hours out, so what keeps it from running here is the harness switching auto-update off, not E6.
+**E6, idle egress** (`e6-idle-egress.e2e.ts`). A fresh boot may reach only its two documented downloads: the model price list (`server/src/price-catalog.ts`, raw.githubusercontent.com) and hydra_find's embedding model (`server/src/tool-intent.ts`, huggingface.co; `AGENTHYDRA_TOOL_INTENT=0` turns it off). Nothing may hit the download bases. On Linux the daemon runs under `strace -f`, which records every `connect`, `sendto`, `sendmsg` and `sendmmsg` call the daemon, its threads and its children make from the moment it starts. None of them, during the boot or the idle window below, may name an IPv4 or IPv6 address other than loopback, or port 53 on any address (a DNS query, loopback included: on Ubuntu the resolver is systemd-resolved's stub on 127.0.0.53, which sends it on), and a failed call counts. That sees a client that ignores the proxy however briefly its connection is open, a UDP datagram to anything but loopback, and a DNS query through `resolv.conf`. A lookup made over a Unix socket (nscd, or systemd-resolved's own socket through glibc's `resolve` module) is not seen by itself; a connection to the address it returns is. Once the boot goes quiet, the daemon is left alone for 10 s and must make no outbound attempt at all, through the proxy or directly. This catches a background fetch a synced upstream change starts at boot or on a short timer. Without a working `strace` (missing, or unable to trace here), E6 prints a warning and samples the open TCP sockets of the daemon and its children from `/proc` every 250 ms during the idle window instead, which misses a connection opened and closed between two samples and every datagram; `FORK_E2E_REQUIRE_STRACE=1` (CI) turns that into a failure. A timer that first fires after the window is not seen: the update loop's first tick is hours out, so what keeps it from running here is the harness switching auto-update off, not E6.
 
 The numbering leaves gaps on purpose: E5 (the Codex hub) and E7 onward need code or seams that are not on this branch yet.
 

@@ -276,6 +276,12 @@ export async function exitWithin(proc: Subprocess, ms: number): Promise<number |
   return Promise.race([proc.exited, timer])
 }
 
+/** The parent of a running `pid`, read from /proc (Linux); throws once it has gone. */
+function parentOf(pid: number): number {
+  const stat = readFileSync(`/proc/${pid}/stat`, 'latin1')
+  return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])
+}
+
 export function tail(file: string, lines = 40): string {
   try {
     return readFileSync(file, 'utf8').trimEnd().split('\n').slice(-lines).join('\n')
@@ -350,16 +356,19 @@ export interface Daemon {
  * DEFAULT_SETTINGS auto_update_enabled) and applies itself with `git pull` and a reinstall on the
  * checkout the daemon runs from, which here is the checkout under test. Its first tick is one
  * interval (6 h) out, so nothing it could do happens between the health answer and the switch.
+ * `prefix` runs the daemon under another command (E6: strace); `proc` is then that command, and
+ * stop() signals the daemon itself, by the pid /api/health reports, while that pid is still the
+ * prefix command's child (Linux: /proc).
  */
 export async function bootDaemon(
   home: Home,
-  opts: { port?: number; env?: Record<string, string> } = {},
+  opts: { port?: number; env?: Record<string, string>; prefix?: string[] } = {},
 ): Promise<Daemon> {
   const port = opts.port ?? freePort()
   const url = `http://127.0.0.1:${port}`
   const boots = readdirSync(join(home.dir, 'logs')).filter((f) => f.startsWith('daemon-')).length
   const log = join(home.dir, 'logs', `daemon-${boots + 1}.log`)
-  const proc = start([process.execPath, 'server/src/main.ts'], {
+  const proc = start([...(opts.prefix ?? []), process.execPath, 'server/src/main.ts'], {
     cwd: REPO,
     env: { ...home.env, PORT: String(port), ...opts.env },
     log,
@@ -398,7 +407,15 @@ export async function bootDaemon(
     api,
     async stop(signal = 'SIGTERM', ms = 15_000) {
       if (proc.exitCode !== null || proc.signalCode !== null) return proc.exitCode
-      proc.kill(signal)
+      if (!opts.prefix) proc.kill(signal)
+      else {
+        try {
+          // Only while it is still the prefix command's child: once it has gone, the pid is free.
+          if (parentOf(health.pid) === proc.pid) process.kill(health.pid, signal)
+        } catch {
+          // the daemon is gone; the prefix command may still be waiting on a child of it
+        }
+      }
       const code = await exitWithin(proc, ms)
       if (code === null && proc.exitCode === null) {
         proc.kill('SIGKILL')
