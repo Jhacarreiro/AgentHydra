@@ -296,7 +296,8 @@ BALANCE_FRESH_S = 1800.0        # a balance reading older than this is stale and
 DISABLED_RECHECK_S = 6 * 3600.0 # ...but a key in the disabled slot is re-read at most this often (see KeyPool.stale_keys)
 NO_CREDIT_RECHECK_S = 24 * 3600.0 # a key that AUTHENTICATES but is out of credit winds down longer still (owner, 2026-09-23:
                                   # "the ones that authenticate with no credit should be on, like, a 24-hour wind-down")
-PROBE_WIDTH = 16                # balance GETs in flight at once; a probe of every key used to run them one by one
+PROBATION_TICK_S = 60.0         # a pool read lets due credit-disabled keys out at most this often (KeyPool._probation_tick)
+PROBE_WIDTH = 16               # balance GETs in flight at once; a probe of every key used to run them one by one
 LOCK_WAIT_S = 2.0               # how long a write waits for the shared state file's lock before going ahead without it
 
 OUT_OF_CREDIT = "out of credit (402)"
@@ -566,6 +567,7 @@ class KeyPool:
         self._pending_lock = threading.Lock()
         self._pending_path = None  # the state file the queued ops belong to
         self._registered = False  # on _LIVE_POOLS only while ops are queued (_register / _unregister)
+        self._probation_at = 0.0  # when a read last gave probation a look (_probation_tick)
         if state is None:
             self._load(force=True)
         else:
@@ -944,6 +946,18 @@ class KeyPool:
                 out.append(self._fp[k])
         return out
 
+    def _probation_tick(self) -> None:
+        """Probation on read, for a provider with no balance endpoint: whatever asks whether this pool can serve (an
+        AUTO plan through dispatch._wake and _dead, a pinned route through jobs._leg_health) lets a due key out first, at
+        most once a PROBATION_TICK_S. It ran only when a job started on the provider, and every reader drops a pool whose
+        keys are all disabled before a job starts: all 51 Hugging Face tokens, disabled 2026-10-05 to 10-07, got 0
+        requests in 8 days."""
+        now = time.time()
+        if now - self._probation_at < PROBATION_TICK_S or config.PROVIDERS.get(self.provider, {}).get("balance_path"):
+            return
+        self._probation_at = now
+        self.probation()
+
     def enable_all(self) -> int:
         now = time.time()
         return sum(1 for k in self._keys if self._parked(k, now) and self.enable(k))
@@ -967,6 +981,7 @@ class KeyPool:
     def disabled(self) -> list[str]:
         """Fingerprints currently in the disabled slot, including any an older build left parked on a timer."""
         self._load(force=True)
+        self._probation_tick()
         now = time.time()
         return [self._fp[k] for k in self._keys if self._parked(k, now)]
 
@@ -1084,6 +1099,7 @@ class KeyPool:
         key is resting (a 429, a zero quota), inf when every key is disabled. With `model` (an api model id), a key
         that has spent today's allowance for it (spend) counts as resting until its refill."""
         self._load()
+        self._probation_tick()
         now = time.time()
         rests = [max(0.0, max(self._rest_until(k), self._spent_until(k, model) if model else 0.0) - now)
                  for k in self._keys if self._usable(k, free, now)]

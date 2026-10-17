@@ -84,9 +84,11 @@ credit or invalid. The keys belong to 542+ different projects, so each key is it
 - **A zero quota rests only the key that says it, until the daily reset** (`no_quota` in `hswarm keys`). It used to rest
   30 minutes, and from 2026-10-13 five such answers in a row rested the whole pool: the 76 live keys sat benched behind
   the 549 empty ones, and Gemini answered no call for four days.
-- **A key reported as leaked is disabled at its first 403**; that block does not lift.
-- **A provider with no balance endpoint** (Hugging Face) gets its once-a-day probation at the route health check too, so
-  a pool whose every key is disabled for credit still finds out when the allowance comes back.
+- **A key reported as leaked is disabled at its first 403**; that block does not lift. Delete it from the list: the 86
+  found on 2026-10-17 moved to `gemini_api_keys.dead`, which every machine syncs and no re-import brings back.
+- **A provider with no balance endpoint** (Hugging Face) gets its once-a-day probation whenever its pool is read (an
+  AUTO plan, a pinned route's check), so a pool whose every key is disabled for credit still finds out when the
+  allowance comes back.
 
 ### Key vault
 

@@ -109,24 +109,39 @@ def test_a_hugging_face_key_out_of_credit_gets_one_chance_per_window(tmp_path, m
 
 
 # Contract: a provider with no balance endpoint whose EVERY key is disabled for credit still gets its once-a-window
-# chance, at the route health check that decides whether any work goes there. Regression: all 51 Hugging Face keys were
-# disabled for credit on 2026-10-05 to 10-07 and none was let out again. Probation ran only at the start of a job on the
-# provider, and route_health called a leg with every key disabled dead, so no job went there: 0 requests in 8 days, and a
-# monthly allowance that came back would never have been seen.
-def test_a_provider_whose_every_key_is_out_of_credit_still_gets_its_chance_at_the_route_check(monkeypatch):
+# chance, on each path that decides whether any work goes there: an AUTO plan (most work) and a pinned route's check.
+# Regression: all 51 Hugging Face keys were disabled for credit on 2026-10-05 to 10-07 and none was let out again.
+# Probation ran only at the start of a job on the provider, and both paths drop a pool whose every key is disabled before
+# a job starts: 0 requests in 8 days, and a monthly allowance that came back would never have been seen. The first fix
+# (aa5c8f13) gave the chance at the route check only, so an AUTO plan still never planned the provider.
+def test_a_provider_whose_every_key_is_out_of_credit_still_gets_its_chance_on_every_path(monkeypatch, tmp_path):
     import time as time_mod
 
     from hswarm import client as client_mod
-    from hswarm import jobs, keys
+    from hswarm import dispatch, jobs, keys, selection
+    from hswarm.spec import Task
 
     monkeypatch.setenv("HF_TOKENS", "hf_a,hf_b")
     pool = keys.pool_for("huggingface")
     for k in ("hf_a", "hf_b"):
         pool.broke(k, status=402)
     leg = "rank:glm-5-3:huggingface"
-    assert not jobs.route_health(leg)["serves"]  # inside the window: still dead
+    planned = []
+
+    def plan(profile, *, usable, **kw):  # the plan asks the pool read every AUTO route goes through
+        planned.append(usable("huggingface"))
+        return {"profile": profile, "candidates": [{"model": leg, "benchmark_slug": leg}]}
+
+    monkeypatch.setattr(selection, "plan", plan)
+    task = Task(id="t", prompt="x", cwd=str(tmp_path), tools="none", model="deepseek-flash")
+    task.profile = "general"
+    dispatch.plan_for(task)
+    assert planned[0] is False and not jobs.route_health(leg)["serves"]  # inside the window: still dead on both paths
     real = time_mod.time
     monkeypatch.setattr(client_mod.time, "time", lambda: real() + client_mod.NO_CREDIT_RECHECK_S + 60)
+    planned.clear()
+    dispatch.plan_for(task)
+    assert planned[0] is True, "an AUTO plan gives the keys their chance on its own"
     health = jobs.route_health(leg)
     assert health["serves"] and "ready" in health["legs"][0], health
     assert pool.available() == 2
