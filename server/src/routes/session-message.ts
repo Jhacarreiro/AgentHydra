@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawnCaptured } from '../core/process'
+import { readTranscriptTailText } from '../fleet'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
 import { DELIVERY_ACTUATOR_FILE, resolveMiscAsset } from '../misc-assets'
@@ -291,7 +291,8 @@ app.post('/api/sessions/:id/message', async (c) => {
   let verify = supplied.length >= MIN_VERIFY ? supplied : ''
   if (!verify && transcript) {
     try {
-      const raw = readFileSync(transcript, 'utf8')
+      // The last 64 KB, never the whole transcript: a busy chat's file runs to tens of MB and this runs on every send.
+      const raw = readTranscriptTailText(transcript, 60000)?.text ?? ''
       const tail = raw.length > 60000 ? raw.slice(-60000) : raw
       for (const line of tail.split('\n').reverse()) {
         if (!line.includes('"text"')) continue

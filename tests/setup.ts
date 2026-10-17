@@ -55,6 +55,9 @@ process.env.AGENTHYDRA_HOME = scratch
 // The install guard probes the real claude and may start a repair (npm install -g): never from a test.
 // tests/claude-install-guard.test.ts fakes the machine and turns it back on.
 process.env.AGENTHYDRA_CLAUDE_GUARD = '0'
+// hydra_find's intent search would load (and on a fresh machine download) the real embedding model: never from a test.
+// server/tests/tool-intent.test.ts hands its ToolIntent a fake model instead.
+process.env.AGENTHYDRA_TOOL_INTENT = '0'
 process.env.AGENTHYDRA_DB = path.join(scratch, 'agenthydra-test.db')
 // Isolate per-run dispatch logs (+ the detached runner's spec/status sidecars) too, so the
 // dispatch tests never write into the real ~/.agenthydra/data/run-logs.

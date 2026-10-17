@@ -61,7 +61,8 @@ export class WorkerSync {
   }
 
   private async syncWorkersNow(only?: string): Promise<void> {
-    const entries = [...this.host.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false))
+    const revived = only ? null : this.listedActive()
+    const entries = [...this.host.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false || revived!.has(e.chat.workerId)))
     if (!entries.length) return
     const from = this.host.now()
     const ids = entries.map((e) => e.chat.workerId as string)
@@ -82,6 +83,14 @@ export class WorkerSync {
       if (this.host.isClosing()) return
     }
     this.host.timings.poll(this.host.now() - from)
+  }
+
+  /** The workers AgentHydra's last list shows active. A finished worker is not read again, so one of these whose chat
+   *  holds it finished was woken from outside the window (a ping when a job it started ends, another chat's
+   *  climayte_send): it is read once more, and its chat shows it working (owner, 2026-10-16: such a chat sat on its
+   *  done dot while it worked, until it was opened). */
+  private listedActive(): Set<string> {
+    return new Set(this.host.bridge.lastWorkers().flatMap((w) => (w.active ? [w.id] : [])))
   }
 
   /** The chat as its worker stands: status, account (a move is said in the transcript), model, transcript. */

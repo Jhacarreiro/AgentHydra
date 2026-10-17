@@ -21,6 +21,8 @@ export interface FakeState {
   chatsError?: string
   sessions: any[]
   instances: any[]
+  /** Set: GET /api/cli-instances answers this error with a 500 instead of `instances`. */
+  instancesError?: string
   workers: any[]
   detail: any
   tail: any
@@ -285,7 +287,7 @@ function plainGet(state: FakeState, p: string): Response | null {
     case '/api/sessions':
       return json(state.sessions)
     case '/api/cli-instances':
-      return json(state.instances)
+      return state.instancesError ? json({ error: state.instancesError }, 500) : json(state.instances)
     case '/api/analytics/spend':
       return stat(state.stats.spend)
     case '/api/analytics/activity':

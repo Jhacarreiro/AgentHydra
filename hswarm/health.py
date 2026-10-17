@@ -33,7 +33,8 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     # so a bare PATH lookup answers MISSING for a bash the workers would have used. Measured 2026-09-16:
     # the MCP server (launched by Claude Code with a slimmer PATH) reported bash MISSING while the CLI in
     # the same checkout reported it found. A doctor that disagrees with the runtime is worse than no doctor.
-    out["bash"] = find_bash() or "MISSING (bash tool unavailable)"
+    # On a thread: the first call runs `bash -c :` per candidate (0.34 s), and with no bash found every call does.
+    out["bash"] = await asyncio.to_thread(find_bash) or "MISSING (bash tool unavailable)"
     # A rules overlay whose own examples fail refuses every bash call; say so here, not in a worker's transcript.
     out["shell_policy"] = shellpolicy.status()
     # Whether bash/write_file/edit_file answer to an out-of-process policy (broker.py); the command, never probed.
@@ -44,13 +45,19 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     # The stored model-watch scan (model_watch.py), one line, offline: how old it is and what it has not routed yet.
     out["model_watch"] = model_watch.summary()
     out["free_model_watch"] = free_models.summary()  # the Free ChatGPT accounts' model list (free_models.py)
+    # A Free provider the daemon has shut, or whose sends mostly fail in the last hour (free_route's health gate): a
+    # silent outage shows here, not only in the ledger.
+    from . import free_route
+
+    if warn := await free_route.provider_warnings():
+        out["free_warning"] = warn
     # Every provider's pool, offline and in one place: which keys are ready, resting, or in the disabled slot.
     # `hswarm keys probe` (or hswarm_keys action="probe") is the one that spends a GET and heals a topped-up key.
     # BOUNDED, like hswarm_keys' default list: the verbose report is one row per key, and with 1,700+ keys
     # that made the doctor a 989k-character answer (measured 2026-09-20) that no MCP client will show.
     # `hswarm_keys verbose=true` is the spelling for every row. Even bounded, the rows were 74,801 of the doctor's
     # 82,669 characters on one line (2026-10-06, mostly keys in the disabled slot), so by default it is counts only.
-    out["key_pools"] = keys.report(verbose=False, counts_only=not verbose)
+    out["key_pools"] = await asyncio.to_thread(keys.report, verbose=False, counts_only=not verbose)  # 0.3 s: off the loop
     # The egress receipts' hash chain (egress.py): a tampered or truncated ledger shows up here, not only on request.
     from . import egress
 
@@ -65,13 +72,16 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
         out["routes_warning"] = (f"no leg can serve {', '.join(dead)} now: hswarm_run refuses those jobs until a key rests out or "
                                  "is topped up, or a key is added for a provider whose models have published scores (hswarm ui)")
     # The one-line answer to "can this swarm take work at all", cached for the agent_routing_gate hook (verdict.py).
-    # `key` above is the DeepSeek key alone; a machine without one can still serve every auto route.
-    out["verdict"] = verdict.write()
+    # `key` above is the DeepSeek key alone; a machine without one can still serve every auto route. Off the loop: it
+    # reads every leg's pool, 0.4-0.6 s (2026-10-16).
+    out["verdict"] = await asyncio.to_thread(verdict.write)
     # Legs this process saw failing at the host, tried last until a probe finds them back (breaker.py).
     out["breakers_open"] = breaker.report()
     # The code this process runs, and whether a source file changed on disk since it loaded (shared.behind).
-    out["code"] = {**shared.code_stamp(), **({"behind": behind} if (behind := shared.behind()) else {})}
-    out["maintain"] = maintain_status()
+    # Off the loop: behind() asks git for the clone's HEAD (0.1-0.9 s), and maintain_status lists the jobs folder.
+    behind = await asyncio.to_thread(shared.behind)
+    out["code"] = {**shared.code_stamp(), **({"behind": behind} if behind else {})}
+    out["maintain"] = await asyncio.to_thread(maintain_status)
     # An armed fault spec (faults.py) fails real calls on purpose: one left in the environment must show here.
     try:
         if armed := faults.armed():

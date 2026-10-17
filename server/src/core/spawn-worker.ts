@@ -65,17 +65,22 @@ async function capture(cmd, opts) {
     } catch {}
   }
   const held = { stdout: '', stderr: '' }
+  const readers = new Set()
   const drain = async (stream, into) => {
     const reader = stream.getReader()
-    const decoder = new TextDecoder('utf-8')
+    readers.add(reader)
+    const decoder = into === 'stdout' || opts.wantStderr ? new TextDecoder('utf-8') : null
     try {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        held[into] += decoder.decode(value, { stream: true })
+        if (decoder) held[into] += decoder.decode(value, { stream: true })
       }
-      held[into] += decoder.decode()
-    } catch {}
+      if (decoder) held[into] += decoder.decode()
+    } catch {} finally {
+      readers.delete(reader)
+      try { reader.releaseLock() } catch {}
+    }
   }
   let timer
   let timedOut = false
@@ -97,6 +102,9 @@ async function capture(cmd, opts) {
   } finally {
     clearTimeout(timer)
     if (proc.exitCode === null && !proc.killed && proc.pid) killTree(proc.pid)
+    for (const reader of readers) {
+      try { reader.cancel().catch(() => {}) } catch {}
+    }
   }
 }
 const started = new Map()

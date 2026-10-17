@@ -175,6 +175,26 @@ export class ChatStore {
     renameOver(tmp, this.chatsFile)
   }
 
+  /**
+   * Server shutdown: the writes under way land first, then what is left is written now. Once it resolves this store
+   * writes nothing more, so the next server's store has the files to itself. flush() alone wrote a batch still being
+   * appended a second time, and that batch and its reissue then landed after the next server had read the file, where
+   * the last line per id wins (host/restart.test.ts counted 7 lines at the take-over, then 10).
+   */
+  async close(): Promise<void> {
+    for (;;) {
+      if (this.timer) {
+        clearTimeout(this.timer)
+        this.timer = null
+      }
+      const writing = this.writing
+      await writing
+      await this.settledItems()
+      if (!this.timer && writing === this.writing) break
+    }
+    this.flush()
+  }
+
   /** Waits for the timer's writes so far (tests). */
   settled(): Promise<void> {
     return this.writing
@@ -299,10 +319,10 @@ export class ChatStore {
       }
       const lines = from > 0 && cached ? cached.lines : new Map<string, string>()
       const end = chunk.lastIndexOf(0x0a) + 1
-      addLines(lines, chunk.toString('utf8', 0, end))
+      addLines(lines, chunk.toString('utf8', 0, end), true)
       // A last line with no newline yet may be a write in progress: counted if it parses, read again from its start next time.
       const tail = new Map<string, string>()
-      addLines(tail, chunk.toString('utf8', end))
+      addLines(tail, chunk.toString('utf8', end), true)
       cached = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, lines, tail }
     }
     // Most recently read last; the oldest entries go once there are more than the cap (a miss just reads the file again).
@@ -417,17 +437,70 @@ function readFrom(file: string, from: number, to: number): Buffer {
   }
 }
 
+interface LineChunk {
+  chars: number
+  kept: number
+  ids: string[]
+}
+
+/** Scalar ownership only, with the cached Map's lifetime: no whole read is kept here. */
+const lineChunks = new WeakMap<Map<string, string>, Map<string, LineChunk>>()
+
 /** Each parsable item line in `text`, filed by id (a later line replaces an earlier one, keeping its place); a torn line is skipped. */
-function addLines(lines: Map<string, string>, text: string): void {
+function addLines(lines: Map<string, string>, text: string, detach = false): void {
+  if (!text) return
+  const updates = detach ? new Map<string, string>() : lines
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
       const item = JSON.parse(line) as TranscriptItem
-      if (item && typeof item.id === 'string') lines.set(item.id, line)
+      if (item && typeof item.id === 'string') updates.set(item.id, line)
     } catch {
       // a torn line (crash mid-write): skip it
     }
   }
+  if (!detach || !updates.size) return
+  let kept = 0
+  for (const line of updates.values()) kept += line.length
+  // Long split lines can retain superseded versions from the same read. Copy
+  // final winners only when most text was discarded; unique reads need no
+  // string copies. Only UTF-8-decoded file chunks use this round-trip.
+  const copy = text.length > 2 * kept
+  let owners = lineChunks.get(lines)
+  // Small-record metadata can cost more than its backing text. Track only
+  // substantial chunks with substantial lines; earlier owners still retire below.
+  const track = !copy && text.length >= 1024 * 1024 && kept >= updates.size * 1024
+  const owner: LineChunk | null = track ? { chars: text.length, kept, ids: [] } : null
+  if (owner && !owners) {
+    owners = new Map()
+    lineChunks.set(lines, owners)
+  }
+  let touched: Set<LineChunk> | null = null
+  for (const [id, line] of updates) {
+    const previous = owners?.get(id)
+    if (previous) {
+      previous.kept -= (lines.get(id)?.length ?? 0)
+      owners!.delete(id)
+      ;(touched ??= new Set()).add(previous)
+    }
+    lines.set(id, copy ? Buffer.from(line, 'utf8').toString('utf8') : line)
+    if (owner) {
+      owner.ids.push(id)
+      owners!.set(id, owner)
+    }
+  }
+  // A formerly unique read can become mostly obsolete after later appends.
+  // Detach its remaining lines once, then discard that chunk's bookkeeping.
+  if (touched) for (const previous of touched) {
+    if (previous.chars <= 2 * previous.kept) continue
+    for (const id of previous.ids) {
+      if (owners!.get(id) !== previous) continue
+      lines.set(id, Buffer.from(lines.get(id)!, 'utf8').toString('utf8'))
+      owners!.delete(id)
+    }
+    previous.ids.length = 0
+  }
+  if (owners && !owners.size) lineChunks.delete(lines)
 }
 
 /** True for a missing or empty file, or one whose last byte is a newline. */

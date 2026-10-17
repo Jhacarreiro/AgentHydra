@@ -76,6 +76,23 @@ def test_a_pending_key_upload_leaves_the_console_responsive_and_reloads_on_its_l
     asyncio.run(exercise())
 
 
+def test_the_state_read_runs_off_the_event_loop(monkeypatch):
+    """GET /api/state reads every provider's keys (0.06-0.18 s) and ran on the shared server's event loop, where every
+    chat's calls and GET /health wait for it (2026-10-16)."""
+    import asyncio
+    import threading
+    from hswarm import config, settings
+
+    read_on = []
+    monkeypatch.setattr(settings, "snapshot", lambda: read_on.append(threading.get_ident()) or {"ready": True})
+    monkeypatch.setattr(config, "refresh", lambda: False)
+
+    async def exercise():
+        assert await console.handle("GET", "state", {}) == (200, {"ready": True})
+        assert read_on and read_on != [threading.get_ident()]
+    asyncio.run(exercise())
+
+
 def test_decide_over_http_takes_the_jev_leg_to_the_callers_route_and_books_it_there(monkeypatch):
     """POST /api/decide is hswarm_decide for a caller with no MCP session (Dredd's Jev door): a `jev` route sends the
     Jev leg of a jev-* model to that endpoint with that key and books it under its provider; another model ignores it."""

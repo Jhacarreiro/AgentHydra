@@ -85,10 +85,10 @@ const defaultDeps: MonitorDeps = {
       isBusy: (sessionId) => isSessionActive(sessionId),
       hasQueueRow: (sessionId) =>
         !!db
-          .query<{ n: number }, [string]>(
-            'select count(*) as n from queue_items where session_id = ?',
+          .query<{ one: number }, [string]>(
+            'select 1 as one from queue_items where session_id = ? limit 1',
           )
-          .get(sessionId)?.n,
+          .get(sessionId),
       keep,
     }),
   progressMark: (sessionId) => readProgressMark(sessionId, getMonitorSettings().resumePrompt),

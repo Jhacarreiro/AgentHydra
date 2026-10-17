@@ -7,6 +7,7 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { answer, scope } from '../src/hydra-core/tree'
 import { type Daemon, use } from '../src/hydra-core/use'
 import { scratch, startChat } from './hydra-core-fixture'
+import { installUseAddon, removeUseAddon } from './people-fake-addon'
 
 const CWD = 'C:/Users/me/project'
 const CHAT = 'chat-example-lead'
@@ -89,12 +90,26 @@ test('a pack that holds only the lead pointer names the lead by its catalog id',
 
 test('core_use become accepts the lead:<Name> key and resolves it to the same entry', async () => {
   withLead(1024)
-  const byName = await use(dir, { chat: CHAT, id: 'lead:Quinn Lead', mode: 'become' }, daemon, now)
-  const byId = await use(dir, { chat: CHAT, id: 'person:quinn-lead', mode: 'become' }, daemon, now)
-  expect(byName).toEqual(byId)
-  expect(byName).toMatchObject({
-    lead: `Quinn Lead - Leads the budget work. Full text: ${leadPath}`,
-  })
+  await installUseAddon()
+  try {
+    globalThis.__useModeMock = (ask) => ({ entry: ask.entry })
+    const byName = await use(
+      dir,
+      { chat: CHAT, id: 'lead:Quinn Lead', mode: 'become' },
+      daemon,
+      now,
+    )
+    const byId = await use(
+      dir,
+      { chat: CHAT, id: 'person:quinn-lead', mode: 'become' },
+      daemon,
+      now,
+    )
+    expect(byName).toEqual(byId)
+    expect(byName).toMatchObject({ entry: { id: 'person:quinn-lead', name: 'Quinn Lead' } })
+  } finally {
+    removeUseAddon()
+  }
 })
 
 test('the first go of a session whose pack held only the pointer carries the lead brief once', () => {

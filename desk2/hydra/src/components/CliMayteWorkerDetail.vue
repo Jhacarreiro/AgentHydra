@@ -379,7 +379,7 @@ async function onStop() {
                 verdictMark.kind === 'pass'
                   ? 'success'
                   : verdictMark.kind === 'retry'
-                    ? 'warning'
+                    ? 'info'
                     : 'destructive'
               "
               :title="verdictMark.hint"

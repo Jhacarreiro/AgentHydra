@@ -9,6 +9,7 @@
 
 import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
+import { branchOf } from '../git/branch'
 import { copyFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
@@ -46,7 +47,8 @@ import type {
 import { type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
-import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
+import type { Bridge } from '../bridge'
+import { pickHealthy, ROOM_PCT } from '../bridge/accounts'
 import type { AhWorker, WorkerSendSetting } from '../bridge/client'
 import { isLongLived } from './long-lived'
 import { copyMedia, endedTask, settled, TASK_SESSION_ENDED } from './chat-items'
@@ -72,10 +74,9 @@ import { Timings } from './timings'
 import { ANSWER_NOW, buildHandoff, FRESH_TOKENS, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
-import { chatFace, forgetCoreFaces } from './core-lead'
+import { chatFace } from './core-lead'
 import { coreDir } from './hydra-core-mode'
 import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
-import { forgetManager } from './managers'
 import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
 import { CodexRuntime } from './codex/runtime'
@@ -87,13 +88,12 @@ import {
   type ChatManagerOptions, type Cut, type Entry, type ManagerBridge, type QueueCreated, type RequestAnswerer, type ResolvedAccount, type RetryPace, type SendOptions, type StoredRecord, type UserItem,
 } from './chat-manager-types'
 import {
-  accountName, accountRef, busy, entryOf, forkTitle, importTitle, pickHealthy, ranInOf, retryLater, signature, squash, workersKey,
+  accountName, accountRef, busy, entryOf, forkTitle, importTitle, ranInOf, retryLater, signature, squash, workersKey,
 } from './chat-manager-helpers'
 import { WorkerSync } from './chat-manager-workers'
 import { ChatMoves } from './chat-manager-moves'
 export type { ChatManagerOptions, ManagerBridge, QueueCreated, SendOptions } from './chat-manager-types'
 export { CLIMAYTE_ACCOUNT, LIVE, WORKER_GROUP, WORKER_MODEL } from './chat-manager-types'
-export { pickHealthy } from './chat-manager-helpers'
 
 /** A request the manager refuses, with the HTTP status the route answers. */
 export class ChatError extends Error {
@@ -222,11 +222,18 @@ export class ChatManager {
 
   // Reads
 
-  /** Every chat, newest activity first. */
-  list(o: { archived?: boolean } = {}): ChatSummary[] {
-    const all = [...this.chats.values()].map((e) => this.view(e.chat))
-    const list = o.archived ? all : all.filter((c) => !c.archived)
-    return list.sort((a, b) => b.updatedAt - a.updatedAt)
+  /** Every chat, newest activity first; `stamps` adds each one's itemsStamp (two file stats a chat). */
+  list(o: { archived?: boolean; stamps?: boolean } = {}): ChatSummary[] {
+    const shown = [...this.chats.values()].filter((e) => o.archived || !e.chat.archived)
+    return shown.map((e) => (o.stamps ? { ...this.view(e.chat), ...this.itemsStampOf(e) } : this.view(e.chat))).sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** The chat's itemsStamp: the file stamp itemsBody reuses its body on, given only when nothing in memory is laid over
+   *  the file (a running turn, a pinned service's turn, a CliMayte stand-in, a message waiting for another service). */
+  private itemsStampOf(e: Entry): { itemsStamp?: string } {
+    if (e.runtime?.running || e.pinned?.busy || e.sent?.length || e.crossing?.length) return {}
+    const stamp = this.store.itemsStamp(e.chat.id)
+    return stamp ? { itemsStamp: stamp } : {}
   }
 
   get(id: string): ChatSummary {
@@ -304,6 +311,7 @@ export class ChatManager {
 
   listItems(id: string): TranscriptItem[] {
     const e = this.entry(id)
+    this.refreshBranch(e)
     // A CliMayte chat: its worker's transcript, with the lines Hydra Desk wrote (a move, a failure) in time order.
     if (e.chat.workerId !== undefined) return this.withWaiting(e, this.deskItems(e))
     const live = e.runtime?.running === true
@@ -424,7 +432,7 @@ export class ChatManager {
   /** ChatGPT runs on the signed-in Free ChatGPT accounts. */
   private chatgptService(): ChatServiceInfo {
     const free = this.free()
-    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn).length : 0
+    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn && !i.poolState).length : 0
     const why = !free ? 'ChatGPT needs Free instances, which are not running in this Desk.' : accounts ? null : 'No ChatGPT account is signed in. Sign one in on the Free page.'
     return { kind: 'chatgpt', label: SERVICE_LABEL.chatgpt, ready: !why, accounts, ...(why ? { why } : {}) }
   }
@@ -665,12 +673,14 @@ export class ChatManager {
     const chat = e.chat
     const stale = () => e.titled || chat.title !== first || this.chats.get(chat.id) !== e
     void (async () => {
-      const tried: string[] = []
+      const tried = new Set<string>()
       let account: AccountRef | null = null
       for (let n = 1; n <= TITLE_TRIES; n++) {
         // No other account to try: the same one again (a slow answer, a passing error).
-        account = (await this.titleAccount(chat, tried)) ?? account ?? { ...DEFAULT_ACCOUNT }
-        tried.push(account.id)
+        const picked: AccountRef | null = (await this.titleAccount(chat, tried)) ?? account
+        if (!picked) return
+        account = picked
+        tried.add(picked.id)
         let why = 'no usable title in the answer'
         let title: string | null = null
         const from = this.now()
@@ -693,8 +703,8 @@ export class ChatManager {
   }
 
   /** The account a title is asked of: the chat's own when it has a login of its own, else the healthiest not tried; null when none is left. */
-  private async titleAccount(chat: ChatSummary, tried: string[]): Promise<AccountRef | null> {
-    if (chat.account.configDir && !tried.includes(chat.account.id)) return chat.account
+  private async titleAccount(chat: ChatSummary, tried: ReadonlySet<string>): Promise<AccountRef | null> {
+    if (chat.account.configDir && !tried.has(chat.account.id)) return chat.account
     const next = pickHealthy(this.placeable(await this.bridge.listAccounts().catch(() => [])), tried)
     return next ? accountRef(next) : null
   }
@@ -1681,8 +1691,7 @@ export class ChatManager {
     const rawCwd = req.cwd ?? outside?.cwd
     if (!rawCwd) throw new ChatError(400, `cwd is required: AgentHydra does not know the folder of session ${req.sessionId}`)
     const cwd = checkCwd(rawCwd)
-    // A Codex chat's Claude account is only where it would go if pinned back to Claude: the default, never refused.
-    const { account, auto, note } = codex ? { ...(await this.resolveAccount(this.settingsOf().defaultAccountId)), note: null } : await this.importAccount(req.configDir)
+    const { account, auto, note } = codex ? await this.codexClaudeAccount() : await this.importAccount(req.configDir)
     const loaded = await this.externalItemsOf(req.sessionId)
     const loadError = loaded.error
     // Another import of the same session (a second window) may have landed during the awaits above: two
@@ -1771,15 +1780,18 @@ export class ChatManager {
     return { accountId: found.id, label: codexAccount(found).label, threadId: req.sessionId }
   }
 
-  /** The account an imported session continues on: the one asked for, else the default one, never the bare ~/.claude login. */
+  /** A Codex chat's Claude account is only where it would go if pinned back to Claude: never refused, so with no
+   *  Claude account to place it on, CliMayte places it. */
+  private async codexClaudeAccount(): Promise<ResolvedAccount> {
+    return this.resolveAccount(this.settingsOf().defaultAccountId).catch((err: unknown) => {
+      if (err instanceof ChatError && err.status === 409) return { account: { ...CLIMAYTE_ACCOUNT }, auto: true, note: null }
+      throw err
+    })
+  }
+
+  /** The account an imported session continues on: the one asked for, else one with room. */
   private async importAccount(configDir: string | null | undefined): Promise<{ account: AccountRef; auto: boolean; note: string | null }> {
-    const { account, auto, note } =
-      configDir === undefined ? await this.resolveAccount(this.settingsOf().defaultAccountId) : { account: await this.accountForConfigDir(configDir), auto: false, note: null }
-    // Never landed on unasked: the default ~/.claude login's own CLI token expires, so its resume would fail.
-    if (configDir === undefined && account.id === DEFAULT_ACCOUNT.id) {
-      throw new ChatError(409, 'Choose the account to continue this session on: Hydra Desk does not choose one.')
-    }
-    return { account, auto, note }
+    return configDir === undefined ? this.resolveAccount(this.settingsOf().defaultAccountId) : { account: await this.accountForConfigDir(configDir), auto: false, note: null }
   }
 
   private async externalItemsOf(sessionId: string): Promise<{ items: TranscriptItem[]; error: string | null }> {
@@ -1907,9 +1919,13 @@ export class ChatManager {
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.pinned?.close() : e.pinned?.shutdown())?.catch(() => {})))
     closeAppServers()
-    releaseHosts(this.store.home)
-    this.store.saveChats(this.stored())
-    this.store.flush()
+    // The folder goes to the next server only once this one has written its last line.
+    try {
+      this.store.saveChats(this.stored())
+      await this.store.close()
+    } finally {
+      releaseHosts(this.store.home)
+    }
     this.sessionMeta.flushSync()
   }
 
@@ -2218,6 +2234,17 @@ export class ChatManager {
     if (e) this.turnEnded(e)
   }
 
+  /** Reads the chat folder's branch in the background (kept per folder, git/branch.ts) and sends the chat when it changed. */
+  private refreshBranch(e: Entry): void {
+    const cwd = e.chat.cwd
+    if (!cwd) return
+    void branchOf(cwd).then((branch) => {
+      if ((e.chat.gitBranch ?? null) === branch && e.chat.gitBranch !== undefined) return
+      e.chat.gitBranch = branch
+      this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
+    })
+  }
+
   /** A chat that was live and no longer is ends its turn once: AgentHydra tells the chats waiting on it (completions.ts). */
   private turnEnded(e: Entry): void {
     if (LIVE.has(e.chat.status)) {
@@ -2226,14 +2253,13 @@ export class ChatManager {
     }
     if (!e.turnLive) return
     e.turnLive = false
+    this.refreshBranch(e)
     const outcome = e.chat.status === 'error' ? 'failed' : e.chat.status === 'stopped' ? 'cancelled' : 'done'
     this.bridge.completionFinished(`desk-chat:${e.chat.id}`, outcome).catch(() => {})
   }
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */
   managerChanged(slug: string): void {
-    forgetManager(slug)
-    forgetCoreFaces()
     for (const e of this.chats.values()) {
       const chat = this.view(e.chat)
       if (chat.manager?.slug === slug) this.emitEvent({ type: 'chat.upsert', chat })
@@ -2259,15 +2285,21 @@ export class ChatManager {
   }
 
   /** The account an SDK chat (an import, a fork, a chat from before CliMayte ran them) runs on: the one
-   *  named, refused while signed out (it could only fail). Hydra Desk places nothing: 'auto' is the
-   *  default login. */
+   *  named, refused while signed out (it could only fail). '', 'auto' and the retired 'default' place it. */
   private async resolveAccount(accountId: string): Promise<ResolvedAccount> {
-    if (!accountId || accountId === 'auto' || accountId === DEFAULT_ACCOUNT.id) return { account: { ...DEFAULT_ACCOUNT }, auto: false, note: null }
+    if (!accountId || accountId === 'auto' || accountId === 'default') return this.placeAccount()
     const accounts = await this.bridge.listAccounts().catch(() => [])
     const a = accounts.find((x) => x.id === accountId)
     if (!a) throw new ChatError(400, `unknown account ${accountId}: AgentHydra lists ${accounts.map((x) => x.id).join(', ') || 'no accounts'}`)
     if (!a.signedIn) throw new ChatError(409, `${a.label} is signed out`)
     return { account: accountRef(a), auto: false, note: null }
+  }
+
+  /** The signed-in account with room that 'auto' places on; refused when none has room. */
+  private async placeAccount(): Promise<ResolvedAccount> {
+    const account = pickHealthy(this.placeable(await this.bridge.listAccounts().catch(() => [])), new Set())
+    if (!account) throw new ChatError(409, `no account has room: every signed-in account is at or past ${ROOM_PCT}% or unread`)
+    return { account: accountRef(account), auto: true, note: null }
   }
 
   /** Puts why 'auto' found no account into the chat's transcript, and the server log. */
@@ -2369,7 +2401,7 @@ export class ChatManager {
   }
 
   private async accountForConfigDir(configDir: string | null): Promise<AccountRef> {
-    if (!configDir) return { ...DEFAULT_ACCOUNT }
+    if (!configDir) return (await this.placeAccount()).account
     const want = resolve(configDir).toLowerCase()
     const accounts = await this.bridge.listAccounts().catch(() => [])
     const a = accounts.find((x) => x.configDir && resolve(x.configDir).toLowerCase() === want)

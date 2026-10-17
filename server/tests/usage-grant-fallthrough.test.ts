@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { resetUsageApiBackoff } from '../src/usage'
+import { USAGE_API_URL } from '../src/usage-api'
 import { checkUsageWithGrants } from '../src/usage-service'
 
 const SESSION = {
@@ -31,13 +32,14 @@ const ok = () =>
 const status = (code: number) =>
   new Response('{}', { status: code, headers: { 'retry-after': '3600' } })
 
-/** A fetch whose answer depends on which token presented itself; counts calls per token. */
+/** A fetch whose answer depends on which token presented itself; lists the tokens that asked the
+ *  usage endpoint (a 429 also asks the profile endpoint once, which is not a grant being tried). */
 function fetchBy(answers: Record<string, () => Response>) {
   const calls: string[] = []
-  const fn = mock(async (_url: unknown, init?: RequestInit) => {
+  const fn = mock(async (url: unknown, init?: RequestInit) => {
     const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
     const token = Object.keys(answers).find((t) => auth.endsWith(t)) ?? '?'
-    calls.push(token)
+    if (String(url) === USAGE_API_URL) calls.push(token)
     const answer = answers[token]
     if (!answer) throw new TypeError('fetch failed')
     return answer()

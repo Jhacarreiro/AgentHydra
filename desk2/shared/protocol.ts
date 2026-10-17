@@ -119,8 +119,16 @@ export interface ChatSummary {
   /** When its newest transcript item happened (a message sent, a reply, a tool call), epoch ms: opening, renaming or
    *  pinning the chat leaves it alone, unlike updatedAt. Absent until it has one. */
   lastActionAt?: number
+  /** Only in GET /api/chats?stamps=1: what GET /api/chats/:id/items answers the same transcript for while it holds (the
+   *  chat's file and media stamp). Absent while anything in memory is laid over the file (a running turn, a message
+   *  standing in): no proof the transcript is unchanged. Never saved. */
+  itemsStamp?: string
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
+  /** Tokens a Codex chat's thread has used so far (the token-usage events' running total); absent for Claude, whose count AgentHydra's usage route gives. */
+  tokensUsed?: number | null
+  /** The chat folder's current git branch; null outside a repository or on a detached head, absent until first read. */
+  gitBranch?: string | null
   pendingCount: number // open permission / question / plan requests
   queuedCount: number // user messages sent while a turn was running, not yet taken up
   climayteActive: number // CliMayte workers this chat dispatched that are still queued/running/waiting, and its sub-chats (seats) still at work
@@ -338,8 +346,14 @@ export interface TranscriptIndex {
   contextTokens?: number | null
   /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
   contextWindow?: number | null
+  /** An outside Codex session's: the tokens its thread has used so far (its rollout's total_token_usage), which AgentHydra's
+   *  usage route does not count for Codex; null when the rollout has none, absent on a Claude Code session. */
+  sessionTokens?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
+  /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,
+   *  not the time since it began. */
+  activeMs?: number
 }
 
 /** One tool's calls in a transcript (a tool_use item each) and how many of them failed. */
@@ -392,6 +406,9 @@ export interface ExternalSession {
   parentId?: string
   /** Set while a usage limit stopped it and nothing has followed (AgentHydra's `limit_stop`, pending): the babysitter's. */
   limit?: ExternalLimit
+  /** Its background tasks still running (bridge/background-tasks.ts), as ChatSummary.backgroundActive: a finished turn
+   *  with one running is drawn running, never idle. Left out when none runs. */
+  backgroundActive?: number
   // Hydra Desk's own marks (its session-meta overlay; the session's files are never touched). The title above is the overlay's when renamed.
   pinned: boolean
   archived: boolean

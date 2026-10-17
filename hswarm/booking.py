@@ -25,19 +25,29 @@ async def book_asks(results: list, kind: str, extra: tuple = ()) -> dict:
 
     `extra` is (Result, ledger fields) pairs for spend that is not one of `results` (decide's Jev calls). Each
     gets a ledger line AND its own utilization row: the ledger line has no `id`, so handing it to utilization.record
-    failed every decide with `KeyError: 'id'` (3,070 times, 2026-09-21 to 2026-09-24) and no Jev spend was saved."""
+    failed every decide with `KeyError: 'id'` (3,070 times, 2026-09-21 to 2026-09-24) and no Jev spend was saved.
+
+    All of it runs on a worker thread (the request's context goes with it, so the caller stamp still reads the request):
+    the stamp reads the chat's transcript, each line looks its account up in AgentHydra's session table (and, on a
+    process's first lookup, its plan prices over HTTP), and the ledger is a file append. On the shared server's event
+    loop a decide held GET /health for that HTTP round trip (stack dump, 2026-10-16)."""
     try:
-        caller = detect_caller(kind)
-        for r, fields in extra:
-            append_row(ask_row(r, caller) | fields)
-            await asyncio.to_thread(utilization.record, utilization.ask_row(r, caller) | {"label": fields.get("job") or kind})
-        saved = None
-        for r in results:
-            append_row(ask_row(r, caller) | ({"job": kind} if kind != "ask" else {}))
-            saved = utilization.compact(await asyncio.to_thread(utilization.record_ask, r, caller))
+        saved = await asyncio.to_thread(_book, results, kind, extra)
         return {"savings": saved} if kind == "ask" else {}
     except Exception as e:  # noqa: BLE001 - see the docstring
         return {"bookkeeping_error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def _book(results: list, kind: str, extra: tuple) -> dict | None:
+    caller = detect_caller(kind)
+    for r, fields in extra:
+        append_row(ask_row(r, caller) | fields)
+        utilization.record(utilization.ask_row(r, caller) | {"label": fields.get("job") or kind})
+    saved = None
+    for r in results:
+        append_row(ask_row(r, caller) | ({"job": kind} if kind != "ask" else {}))
+        saved = utilization.compact(utilization.record_ask(r, caller))
+    return saved
 
 
 async def decide(items: list[dict], mgr=None, *, escalate_below: float = 0.7, fallback_model: str = "auto", batch: int = 1,

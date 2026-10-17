@@ -32,6 +32,13 @@ export interface ChatgptRuntimeDeps extends ServiceRuntimeDeps {
 /** A Free ChatGPT account as the window names it. */
 export const chatgptLabel = (i: Pick<FreeInstance, 'num' | 'name'>): string => `#${i.num}${i.name ? ` ${i.name}` : ''}`
 
+/** Staged and retired logins retain their identity and chats, but cannot take a message. */
+function poolReason(i: FreeInstance): string | null {
+  if (i.poolState === 'pending') return `${chatgptLabel(i)} is waiting for its ChatGPT login import to finish. Wait for it on the Free page, then send again.`
+  if (i.poolState === 'retired') return `${chatgptLabel(i)} is retired from the ChatGPT pool. Renew it on the Free page, then send again.`
+  return null
+}
+
 /**
  * The account a new ChatGPT chat starts on: a signed-in Free ChatGPT account this message has not hit a limit on and
  * not held after one; of those, one running no other message first, then one with unlimited text, then the one used
@@ -44,8 +51,11 @@ export function pickChatgptAccount(
   now: number,
   occupied: (id: string) => boolean,
 ): FreeInstance | { why: string; limited: boolean } {
-  const signedIn = all.filter((i) => i.provider === 'chatgpt' && i.loggedIn)
-  if (!signedIn.length) return { why: 'No ChatGPT account is signed in. Sign one in on the Free page.', limited: false }
+  const signedIn = all.filter((i) => i.provider === 'chatgpt' && i.loggedIn && !i.poolState)
+  if (!signedIn.length) {
+    const blocked = all.find((i) => i.provider === 'chatgpt' && i.loggedIn && i.poolState)
+    return { why: (blocked && poolReason(blocked)) || 'No ChatGPT account is signed in. Sign one in on the Free page.', limited: false }
+  }
   const open = signedIn.filter((i) => !avoid.has(i.id) && (held.get(i.id) ?? 0) <= now)
   if (!open.length) return { why: 'Every ChatGPT account is at its limit. Wait for one to reset, then send again.', limited: true }
   open.sort((a, b) => Number(occupied(a.id)) - Number(occupied(b.id)) || Number(b.usage?.unlimited_text === true) - Number(a.usage?.unlimited_text === true) || (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0))
@@ -144,7 +154,11 @@ export class ChatgptRuntime extends ServiceRuntime {
 
   /** The chat's own account and thread, while the account is still there and not avoided: the thread is resumed there. */
   private boundAccount(all: readonly FreeInstance[]) {
-    const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
+    const owner = this.chat.serviceThreads?.chatgpt
+    const account = owner && all.find((i) => i.id === owner.accountId && i.provider === 'chatgpt')
+    const why = account && poolReason(account)
+    if (why) throw new Error(why)
+    const bound = this.gone ? undefined : owner
     const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
     return { bound, holder }
   }
@@ -165,6 +179,13 @@ export class ChatgptRuntime extends ServiceRuntime {
 
   /** Starts the message as a job on the account: a new ChatGPT chat when `resumeId` is null, else a resume of that chat. */
   private startJob(account: FreeInstance, prompt: string, resumeId: string | null): FreeJob {
+    // whenFree may resolve before a pool update in another microtask. Check again at dispatch, including the
+    // existing thread's owner: a pending/retired owner must never silently turn into a chat on another account.
+    const all = this.deps.free.allInstances()
+    this.boundAccount(all)
+    const current = all.find((i) => i.id === account.id && i.provider === 'chatgpt')
+    const why = current && poolReason(current)
+    if (why) throw new Error(why)
     const model = this.chat.model && isFreeChatgptModel(this.chat.model) ? this.chat.model : null
     const job = this.deps.free.start({
       requestId: randomUUID(),
@@ -223,9 +244,22 @@ export class ChatgptRuntime extends ServiceRuntime {
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS))
       if (this.current !== sent) return null
+      const all = this.deps.free.allInstances()
       if (!bound) {
-        const next = pickChatgptAccount(this.deps.free.allInstances(), this.avoid, this.deps.held, this.now(), this.occupied)
-        if (!('why' in next)) account = next
+        const next = pickChatgptAccount(all, this.avoid, this.deps.held, this.now(), this.occupied)
+        if ('why' in next) {
+          if (next.limited) {
+            this.allLimited(next.why)
+            return null
+          }
+          throw new Error(next.why)
+        }
+        account = next
+      } else {
+        const current = all.find((i) => i.id === account.id && i.provider === 'chatgpt')
+        const why = current && poolReason(current)
+        if (why) throw new Error(why)
+        if (current) account = current
       }
       if (!this.occupied(account.id)) return account
     }

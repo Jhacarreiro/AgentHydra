@@ -26,6 +26,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { PROFILE_API_URL } from './core/shared'
 import type { UsageLimit, UsageSnapshot } from './types'
 
 /** The endpoint the CLI's own `/usage` screen reads (verified against the shipped CLI, 2026-07-14). */
@@ -293,6 +294,49 @@ export async function fetchUsageApi(opts: {
     return { ok: true, snapshot }
   } catch (err) {
     return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Whether a usage-endpoint 429 was really a revoked login: the profile endpoint's refusal of the
+ * same token when it answers 401, else null.
+ *
+ * ⛔ THE USAGE ENDPOINT ANSWERS A REVOKED LOGIN WITH A RATE LIMIT. Measured 2026-10-16 on instances
+ * #72 and #8: every usage-capable grant of both profiles drew `429 rate_limit_error` with a fresh
+ * Retry-After of about an hour on every read, for days, while the profile endpoint answered the
+ * same tokens `401 "OAuth access token has been revoked."` (and #72's live profile-only grant 200).
+ * Read as a rate limit, the row told the owner to wait out a window that never closes. The profile
+ * read is the one request that tells the two apart, so it is made only after a 429. Any other
+ * profile answer (200, its own 429, no network) leaves the 429 standing.
+ */
+export async function revokedLoginError(token: string, timeoutMs = 10_000): Promise<string | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(PROFILE_API_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'anthropic-beta': OAUTH_BETA,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'user-agent': claudeUserAgent(),
+      },
+      signal: controller.signal,
+    })
+    if (res.status !== 401) return null
+    let serverSaid = ''
+    try {
+      const text = (await res.text()).trim()
+      if (text) serverSaid = ` - ${text.slice(0, 300)}`
+    } catch {
+      // The status alone says the login is dead.
+    }
+    return `usage endpoint returned HTTP 429, but the profile endpoint refused the same login: HTTP 401${serverSaid}`
+  } catch {
+    return null
   } finally {
     clearTimeout(timer)
   }

@@ -70,17 +70,21 @@ onBeforeUnmount(disarm)
 </script>
 
 <template>
-  <div class="pointer-events-none absolute inset-x-0 z-9 overflow-hidden" :style="{ top: `${top}px` }">
+  <!-- It ends where the open rail starts (--rail-over, DeskFrame), in line with the transcript's scrollbar, and takes that
+       width back on its left, so the bubble stays centred over the text column. -->
+  <div class="pointer-events-none absolute left-0 right-[var(--rail-over,0px)] z-9 overflow-hidden" :style="{ top: `${top}px` }">
     <Transition
       enter-from-class="-translate-y-full opacity-0"
       leave-to-class="-translate-y-full opacity-0"
       enter-active-class="transition duration-220 ease-(--ease-snap) motion-reduce:transition-none"
       leave-active-class="transition duration-220 ease-(--ease-snap) motion-reduce:transition-none"
     >
+      <!-- One line, along its bottom (owner, 2026-10-17: the outline "only shows up on the bottom, not the sides and the top").
+           The menu ring it wore drew all four sides, and its drop shadow fell outside the clipping wrapper. -->
       <section
         v-if="item"
         :key="item.id"
-        class="pointer-events-auto border-b border-border bg-bg-page px-14 py-2 shadow-(--shadow-menu-ringed)"
+        class="pointer-events-auto border-b border-border bg-bg-page py-2 pl-[calc(var(--rail-over,0px)+3.5rem)] pr-14"
         role="status"
         aria-label="Previous message you sent"
         data-testid="message-peek"

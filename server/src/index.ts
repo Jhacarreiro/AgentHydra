@@ -35,6 +35,7 @@ import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import { flushCliMayteStore } from './climayte-store-writer'
 import { cloudAccounts, cloudSessionsEnabled, startCloudSessions } from './cloud-sessions'
 import { CLOUD_SESSIONS_DIR_ENV, cloudSessionsRoot } from './cloud-sessions-cache'
+import { startCommandPacks } from './command-packs'
 import {
   APP_ROOT,
   appEnv,
@@ -74,6 +75,8 @@ import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
 import { giveCodexInstancesOwnerAgents, reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
+import { setBeforeLaunchHook } from './core/instances'
+import { pruneBeforeLaunch } from './core/revoked-grants'
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
@@ -90,7 +93,6 @@ import {
 } from './dispatch'
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
-import { freeBatchLifecycle } from './free-batch-lifecycle'
 import {
   cleanupStaleUpdateArtifacts,
   ensureBunBeforeRelaunch,
@@ -126,13 +128,11 @@ import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { startLoopDetector } from './loop-detector'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
-import { startManagerAnalytics } from './manager-analytics/collect'
-import { startManagerJudge } from './manager-analytics/judge'
-import { autoRsiTick, startTrialSettling } from './manager-analytics/rsi'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
+  TOOLS as MCP_TOOLS,
   UNLISTED_TOOLS as MCP_UNLISTED_TOOLS,
   toolsForCaller as mcpToolsForCaller,
   useOwnDaemon as mcpUseOwnDaemon,
@@ -142,6 +142,13 @@ import {
   withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
 import { DESK_CHAT_HEADER, withDeskChat } from './mcp-find'
+import {
+  adoptFreeBatches,
+  freeBatchPendingCount,
+  parkFreeBatches,
+  resumeFreeBatches,
+  saveFreeBatches,
+} from './mcp-free'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { reassertSharedMcp, sharedMcpServer } from './mcp-hub'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -164,7 +171,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
-import { getPeopleAddon, inRepoPeople, registerPeopleVerdicts } from './people-host'
+import { getPeopleAddon, peopleAddon, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -190,6 +197,7 @@ import {
 } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
+import { warmToolIntentInBackground } from './tool-intent'
 import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -365,7 +373,7 @@ app.get('/api/health', (c) =>
     // Whether this daemon is serving older code than its checkout (a source install that was
     // committed to or pulled without a restart). The app header offers the restart when it is.
     runningCode: runningCode.status(),
-    freeBatchesPending: freeBatchLifecycle.activeCount(),
+    freeBatchesPending: freeBatchPendingCount(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
       // `skipped`: this daemon is a side-run and left the machine-wide config alone on purpose.
@@ -563,8 +571,6 @@ app.get('/api/update/available', (c) => {
 // request covers minutes of real work and used to report nothing until it finished.
 app.get('/api/update/progress', (c) => c.json(updateProgress()))
 app.post('/api/update/apply', async (c) => {
-  const free = freeBatchRestartRefusal()
-  if (free) return c.json({ ok: false, error: free }, 409)
   const result = await applyUpdate()
   if (!result.ok || !result.restartRequired) return c.json(result)
   // A compiled apply swapped the binary on disk; the running process is still the OLD one, so it
@@ -584,13 +590,6 @@ app.post('/api/update/apply', async (c) => {
   // far more time than a loopback response needs to flush. The client also recovers on its own now
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
-  if (freeBatchRestartRefusal()) {
-    void relaunchAfterUpdate(IS_RELEASE ? undefined : () => restartRefusal(false) === null)
-    return c.json({
-      ...result,
-      message: 'AgentHydra was updated. Restart waits for current Free batches to finish.',
-    })
-  }
   const refusal = IS_RELEASE ? null : restartRefusal(false)
   if (refusal)
     return c.json({ ...result, message: `${result.message} It was not restarted: ${refusal}` })
@@ -610,21 +609,13 @@ app.post('/api/update/apply', async (c) => {
 
 /** Why restarting now would lose work, or null: a CliMayte worker this daemon spawned itself (before runners,
  *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
- *  (orchestrator.ts). `force` restarts past both. */
+ *  (orchestrator.ts). `force` restarts past both. Free batches never hold it (2026-10-17, owner: "each thing can be
+ *  restarted individually"): they are saved and the next daemon carries them on (mcp-free.ts adoptFreeBatches). */
 function restartRefusal(force: boolean): string | null {
-  const free = freeBatchRestartRefusal()
-  if (free) return free
   const climayte = climayteRunningCount()
   if (climayte > 0 && !force)
     return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
   return moveRestartRefusal(force)
-}
-
-function freeBatchRestartRefusal(): string | null {
-  const count = freeBatchLifecycle.activeCount()
-  return count
-    ? `${count} Free batch(es) are still preparing, queued or running in this daemon. Restart waits for them to finish.`
-    : null
 }
 
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
@@ -967,6 +958,7 @@ await import('./routes/helpers')
 await import('./routes/routing')
 await import('./routes/dashboards')
 await import('./routes/fourman')
+await import('./routes/command-packs')
 
 // --- full-shutdown sentinel (web-UI "Shut down") -----------------------------
 // A marker file the PowerShell tray host polls (misc/Tray-Host.ps1 watch timer) so a user "Shut
@@ -1008,7 +1000,7 @@ async function flushConnectionsBeforeExit(): Promise<void> {
 
 /** Every graceful exit waits for the settings sync and for CliMayte's queued store writes. */
 async function flushBeforeExit(): Promise<void> {
-  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore()])
+  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore(), saveFreeBatches()])
 }
 
 app.post('/api/shutdown', (c) => {
@@ -1254,12 +1246,8 @@ const pointerReassertTimer = setInterval(() => {
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 
-// Set when the Manager Hydra turn collector starts (the primary install, while the people code lives here).
-let stopManagerAnalytics: (() => void) | null = null
-
 /** Clear the interval timers started at boot, so none ticks while the daemon is going away. */
 function stopBackgroundTimers(): void {
-  stopManagerAnalytics?.()
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
@@ -1269,6 +1257,7 @@ function stopBackgroundTimers(): void {
   stopExtraUsageGuard()
   stopStallSentinel()
   stopCliMaytePing()
+  peopleAddon()?.stop?.()
 }
 
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
@@ -1413,7 +1402,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     // away, and a tick landing after clearInstanceInfo() would write the pointer back.
     clearInterval(pointerReassertTimer)
     stopBackgroundTimers()
-    await stopHSwarm()
+    await stopHSwarm({ leaveRunning: true }) // every chat's hswarm calls go on; the next daemon adopts it
     await flushBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
@@ -1455,8 +1444,10 @@ initConnections()
 let relaunchInFlight: Promise<boolean> | null = null
 function relaunchDaemon(): Promise<boolean> {
   if (relaunchInFlight) return relaunchInFlight
-  if (!freeBatchLifecycle.beginRestart()) return Promise.resolve(false)
   relaunchInFlight ??= (async () => {
+    // Free batches stop sending and are saved, so the successor carries them on; a tick under way
+    // is let finish first (bounded). Nothing waits for a batch to END.
+    await parkFreeBatches()
     // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
     // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
     if (IS_RELEASE) {
@@ -1472,7 +1463,7 @@ function relaunchDaemon(): Promise<boolean> {
         // The successor is up and waiting for our port. The short delay only lets a
         // /api/daemon/restart response flush before the socket carrying it closes.
         setTimeout(async () => {
-          await stopHSwarm()
+          await stopHSwarm({ leaveRunning: true }) // the successor adopts it, calls in flight and all
           await flushBeforeExit()
           clearInstanceInfo()
           stopAutoUpdate()
@@ -1484,13 +1475,13 @@ function relaunchDaemon(): Promise<boolean> {
     (handedOver) => {
       if (!handedOver) {
         relaunchInFlight = null
-        freeBatchLifecycle.abortRestart()
+        resumeFreeBatches()
       }
       return handedOver
     },
     (error) => {
       relaunchInFlight = null
-      freeBatchLifecycle.abortRestart()
+      resumeFreeBatches()
       throw error
     },
   )
@@ -1553,7 +1544,11 @@ setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
-  hasUnsafeWork: () => freeBatchLifecycle.activeCount() > 0,
+  // Work a restart would LOSE holds the update for as long as it runs, as restartRefusal does for a
+  // person's restart: a chat move, which a restart leaves half-done (orchestrator.ts moveRestartRefusal).
+  // A Free batch held it until 2026-10-17; batches now outlive the daemon (mcp-free.ts adoptFreeBatches),
+  // and with new ones arriving from other chats every few seconds the update almost never found a gap.
+  hasUnsafeWork: () => moveRestartRefusal(false) !== null,
   relaunch: () => relaunchDaemon(),
 })
 
@@ -1705,10 +1700,16 @@ startCliResetSweep()
 startFeedbackFold()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
+// A profile's grants known revoked leave it before AgentHydra opens it (core/revoked-grants.ts).
+setBeforeLaunchHook(pruneBeforeLaunch, 'revoked-grants')
 startDesktopCliFeed()
 // The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
 // analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.
 startKitSweep()
+
+// Command packs: a team's slash commands and skills, pulled from git into every account every ten minutes
+// (server/src/command-packs.ts, docs/COMMAND-PACKS.md).
+startCommandPacks()
 
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).
@@ -1777,30 +1778,11 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// The people add-on (server/src/people-host.ts) starts its own timers; the in-repo ones run only while the people code
-// lives here and the add-on module is absent.
+// The people add-on (server/src/people-host.ts) starts its own timers, the Manager Hydra analytics among them.
 registerPeopleVerdicts((worker) =>
   storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
 )
 if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
-
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
-if (IS_PRIMARY_INSTALL && inRepoPeople()) {
-  stopManagerAnalytics = startManagerAnalytics((worker) =>
-    storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
-  )
-  startManagerJudge()
-  startTrialSettling()
-  setTimeout(
-    () =>
-      setInterval(() => {
-        autoRsiTick().catch((e) =>
-          console.error(`[manager-rsi] auto tick failed: ${(e as Error).message}`),
-        )
-      }, 60_000),
-    90_000,
-  )
-}
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
@@ -1816,6 +1798,9 @@ const server = Bun.serve({
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
 desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
+// The Free batches the last daemon left are carried on from here: once this daemon holds the port, its
+// predecessor has exited, so no two daemons ever send the same batch.
+void adoptFreeBatches()
 void startDeclaredBackends()
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,
@@ -1863,6 +1848,9 @@ warmSessionMetaIndex()
   // is what the user is waiting for; racing them would slow the visible thing to speed up a tab
   // nobody has opened yet. Fire-and-forget by design (see warmAnalyticsInBackground).
   .finally(() => warmAnalyticsInBackground())
+// hydra_find's intent index: loads the embedding model and embeds every tool, so the first search ranks by meaning
+// instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
+warmToolIntentInBackground(MCP_TOOLS)
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`

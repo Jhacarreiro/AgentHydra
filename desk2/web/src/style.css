@@ -68,11 +68,16 @@
 
   /*
    * Hydra Desk status colors. The real sidebar dot language: idle is a 1px ring, working is a solid
-   * dot that blinks. Everything waiting for the owner (needs you, a finished turn unread) is the
-   * warning orange (the real app paints unread blue); error is the danger red. A usage-limited chat
-   * waits for a reset, not for him: its own soft red-pink, a ring, with a text tone for "resets ...".
+   * dot that blinks. Yellow (the warning tone) is only for what cannot go on until the owner acts: a
+   * permission, a question, a plan approval (owner, 2026-10-17: "Yellow icons should only ever be
+   * yellow if they require input from me"). A finished turn unread is green (the real app paints
+   * unread blue); a chat that replied while its workers still run is its own orange, which asks
+   * nothing of him (owner, 2026-10-14: "it changes to orange"); error is the danger red. A
+   * usage-limited chat waits for a reset, not for him: its own soft red-pink, a ring, with a text
+   * tone for "resets ...".
    */
   --status-needs-you: var(--warning);
+  --status-workers: #f47b20;
   --status-done: var(--success-text);
   --status-error: var(--danger);
   --status-limited: #e5689a;

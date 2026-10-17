@@ -95,10 +95,19 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     return w
   }
 
+  // Earlier runners have no live input route. Keep their held-message fallback covered
+  // explicitly now that Windows runners normally accept messages during the turn.
+  const withoutLiveInput = (id: string): void => {
+    const at = workers.get(id)?.attempts.at(-1)
+    if (!at) throw new Error('No synthetic attempt to configure')
+    delete at.deliver
+  }
+
   test(
-    'a plain message is held and says so; urgent stops the work and goes first',
+    'without live input a plain message is held; urgent stops the work and goes first',
     async () => {
       const id = await start('steer', 'slow-1')
+      withoutLiveInput(id)
       expect(climayteSend(id, 'queued one').message).toContain('Held until this worker finishes')
       const urgent = climayteSend(id, 'STEER NOW', { urgent: true })
       expect(urgent).toMatchObject({ ok: true, urgent: true })
@@ -120,6 +129,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     'cancel a held message: it is taken back, is never run, and a second cancel finds nothing',
     async () => {
       const id = await start('cancel-held', 'slow-1')
+      withoutLiveInput(id)
       climayteSend(id, 'first held')
       climayteSend(id, 'taken back')
       expect(climayteCancelHeld('no-such-worker', 'x')).toMatchObject({ ok: false })
@@ -144,6 +154,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     'send now: a held message leads the next turn at once, with no second copy',
     async () => {
       const id = await start('send-now', 'slow-1')
+      withoutLiveInput(id)
       expect(climayteDeliverNow('no-such-worker')).toMatchObject({ ok: false })
       climayteSend(id, 'first held')
       climayteSend(id, 'SECOND HELD')
@@ -288,6 +299,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     'a cancel keeps queued messages and delivers them when the worker is continued',
     async () => {
       const id = await start('cancel keeps', 'slow-2')
+      withoutLiveInput(id)
       climayteSend(id, 'first')
       climayteSend(id, 'second')
       const r = climayteCancel({ id })

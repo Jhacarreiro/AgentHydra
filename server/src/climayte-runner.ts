@@ -72,6 +72,10 @@ export interface RunnerSpec {
   /** The most processes the worker's tree may have alive at once, the runner included (the Windows
    *  runner's job ceiling). Absent: no ceiling, as for a check's log. */
   maxProcesses?: number
+  /** A mid-turn delivery route (climayte-deliver.ts): the CLI reads stream-json from a pipe the runner
+   *  keeps open until the turn's result, and `portFile` names the loopback port `/deliver` answers on
+   *  once that pipe is open. Absent for a runner whose CLI takes its prompt as plain text. */
+  deliver?: { token: string; portFile: string; delivered: string }
 }
 
 /** Written by the runner the moment it has claimed the spec (`runner` only), then again once the CLI

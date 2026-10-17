@@ -1,6 +1,7 @@
 // Pure sidebar logic (tested in web/test/shell). No Vue, no store.
 import type { ChatServiceInfo, ChatServiceKind, ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
 import { accountTitle } from '../accounts/format'
+import { sortRows, type RowFacts, type SidebarSort } from './sort'
 
 /** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
 export function folderLabel(cwd: string): string {
@@ -282,6 +283,36 @@ export function nestChildren(groups: SidebarGroups): SidebarGroups {
 }
 
 /**
+ * The groups with their rows in the sort's order (sort.ts), after nestChildren: each top row is sorted, and its
+ * sub-chats follow it, sorted among themselves, so a nested row stays under its parent (owner, 2026-10-17). 'manual'
+ * returns them as they are: the saved order groupChats gave them. The groups keep their order.
+ */
+export function sortGroups(groups: SidebarGroups, mode: SidebarSort, facts: (e: SidebarEntry) => RowFacts): SidebarGroups {
+  if (mode === 'manual') return groups
+  const sortGroup = (g: ChatGroup): ChatGroup => {
+    const kids = new Map<string, SidebarEntry[]>()
+    for (const e of g.entries) {
+      if (!e.under) continue
+      const list = kids.get(e.under)
+      if (list) list.push(e)
+      else kids.set(e.under, [e])
+    }
+    const tops = sortRows(
+      g.entries.filter((e) => !e.under),
+      mode,
+      facts
+    )
+    return { ...g, entries: tops.flatMap((e) => [e, ...sortRows(kids.get(entryKey(e)) ?? [], mode, facts)]) }
+  }
+  return {
+    pinned: groups.pinned && sortGroup(groups.pinned),
+    folders: groups.folders.map(sortGroup),
+    archived: groups.archived && sortGroup(groups.archived),
+    hiddenOut: groups.hiddenOut
+  }
+}
+
+/**
  * The folder group a moved-to group named `name` joins: of the folder groups with that name, the one whose
  * folder sorts first. Two folders can share a name (C:/a/app, C:/b/app), and the desk list and the cloud
  * list build their groups in different orders, so the first one found would differ between them.
@@ -420,10 +451,11 @@ export function recordCloudOrder(order: SidebarOrder, rows: readonly string[]): 
   }
 }
 
-/** Whether a row shows an attention dot: yellow (waiting on you) or green (done, unread). Running sub-tasks no longer count. */
+/** Whether a row shows an attention dot: yellow (waiting on you), orange (replied, its workers still run) or green (done,
+ *  unread): each is a reply or an ask to look at. Running sub-tasks of a row that has not replied do not count. */
 export function isOrange(e: SidebarEntry): boolean {
   const tone = (e.kind === 'chat' ? statusGlyph(e.chat) : externalGlyph(e.session)).tone
-  return tone === 'warning' || tone === 'success'
+  return tone === 'warning' || tone === 'workers' || tone === 'success'
 }
 
 /** Whether a row's turn runs now: a folded group's heading counts these (RunningBadge.vue). */
@@ -445,7 +477,7 @@ export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status
  */
 export function deskGlyphs(
   chats: Pick<ChatSummary, 'sessionId' | 'status' | 'unread'>[],
-  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source'>[]
+  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source' | 'backgroundActive'>[]
 ): Map<string, StatusGlyph> {
   const out = new Map<string, StatusGlyph>()
   for (const [id, g] of [
@@ -502,8 +534,13 @@ export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], extern
   return [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
-/** The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. */
-export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
+/**
+ * The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. A turn
+ * that ended while its background tasks run is orange, as a Desk chat's (settledGlyph), never idle (owner, 2026-10-16:
+ * a chat whose background task had run 18 minutes was "labeled as not running, and it's a lighter gray").
+ */
+export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread' | 'backgroundActive'>): StatusGlyph {
+  if ((s.status === 'idle' || s.status === 'stale') && (s.backgroundActive ?? 0) > 0) return THREADS_RUNNING
   switch (s.status) {
     case 'working':
       return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Running elsewhere' }
@@ -526,16 +563,17 @@ export function sourceLabel(source: ExternalSession['source']): string {
 }
 
 /**
- * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow is
- * for what needs the owner: a question or permission (pulsing). A finished turn not looked at yet is
- * green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow ring (it waits
- * for the reset, not for you). A chat that replied while its workers still run is solid orange (THREADS_RUNNING),
- * never green: green is done with nothing left running.
+ * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow
+ * (`warning`) is only for what cannot go on until the owner acts: a question, a permission or a plan approval
+ * (pulsing; owner, 2026-10-17: "Yellow icons should only ever be yellow if they require input from me"). A finished
+ * turn not looked at yet is green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow
+ * ring (it waits for the reset, not for you). A chat that replied while its workers still run is solid orange
+ * (`workers`, THREADS_RUNNING), never yellow and never green: green is done with nothing left running.
  * Blue is HSwarm's alone: only a row that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
  */
 export interface StatusGlyph {
   shape: 'ring' | 'dot'
-  tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
+  tone: 'muted' | 'warning' | 'workers' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
   active: boolean // what Active only keeps (isActive): running, starting, background work still running, or waiting on you: a question, a reply not read yet, an error
   label: string // aria-label of the dot, in words
@@ -590,10 +628,11 @@ export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { wai
  * background tasks less the long-lived ones (a dev server never ends, so it does not count), its nested rows that run.
  * Solid orange, read or not: the chat the owner talks to has finished its reply and only its workers run (owner,
  * 2026-10-14: "when my point of contact is done speaking, it changes to orange if there is still drones or
- * sub-personalities managed by my point of contact"; green only when nothing is left running). A question keeps the
- * pulsing orange, so the two differ by motion. It never looks idle or done while its workers run (owner, 2026-10-10).
+ * sub-personalities managed by my point of contact"; green only when nothing is left running). Its own orange, never
+ * the needs-you yellow: nothing here waits on him (owner, 2026-10-17: yellow "should be if it requires something from
+ * me to resume the chat"). It never looks idle or done while its workers run (owner, 2026-10-10).
  */
-export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' }
+export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'workers', motion: 'none', active: true, label: 'Replied, workers still running' }
 
 /**
  * A row's dot with its running sub-tasks counted (Sidebar.vue's runningThreads): a row whose own dot is not running,
@@ -678,6 +717,7 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
   const tone = {
     muted: 'bg-[var(--status-working)]',
     warning: 'bg-[var(--status-needs-you)]',
+    workers: 'bg-[var(--status-workers)]',
     success: 'bg-[var(--status-done)]',
     danger: 'bg-[var(--status-error)]',
     limited: 'bg-[var(--status-limited)]',
@@ -692,13 +732,14 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
  * going on has one (owner, 2026-10-10: "so I can still see which chats have activity, like which are active and which
  * are waiting on me"). A 1.5px gradient per dot state, fading from the dot's colour at 80% to 40% (owner, 2026-10-10:
  * "slightly more subtle" than the first 2px, full-strength ring): running (the dot's blinking gray, and an HSwarm job) is
- * the live blue, needs you the dot's yellow, done-unread its green, an error its red; a usage limit keeps the
+ * the live blue, needs you the dot's yellow, replied-while-workers-run its orange, done-unread its green, an error its red; a usage limit keeps the
  * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own.
  * Every class string is written out whole, so Tailwind sees each one.
  */
 const RING_GRADIENT = {
   muted: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
   warning: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-needs-you)_80%,transparent),color-mix(in_srgb,var(--status-needs-you)_40%,transparent))]',
+  workers: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-workers)_80%,transparent),color-mix(in_srgb,var(--status-workers)_40%,transparent))]',
   success: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-done)_80%,transparent),color-mix(in_srgb,var(--status-done)_40%,transparent))]',
   danger: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-error)_80%,transparent),color-mix(in_srgb,var(--status-error)_40%,transparent))]',
   swarm: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',

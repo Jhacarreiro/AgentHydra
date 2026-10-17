@@ -261,19 +261,25 @@ export default {
   usageNotChecked: 'Not checked yet.',
   usageReasonLoggedOut:
     'Not signed in. Open this instance and sign in to Claude, then check again.',
-  usageReasonNoToken: 'Signed in, but no usage-capable token for this instance.',
+  // Also what a profile reads once AgentHydra took its revoked logins out, until the app makes new ones.
+  usageReasonNoToken:
+    'Signed in, but this instance holds no login that can read usage. Open it and use Claude Code once: the app then saves one.',
   usageReasonNotLoggedIn: 'No login yet. Use the Log in helper, or associate a dispatch account.',
   usageReasonCheckFailed:
     'Claude returned no usage numbers for this instance. Try again in a moment.',
   // Says what to DO, because "try again in a moment" is false here: a closed instance's stored
   // login is only refreshed by the app itself, so retrying can never succeed while it is shut.
   // Retrying is the one thing that cannot help, so this says to wait where every other reason says
-  // to act. It deliberately does NOT promise recovery: one account here has answered 429 on every
-  // read for twelve days straight, so "it will come back shortly" would have been a lie told once
-  // per refresh. State the fact, name the one check that distinguishes a passing limit from a stuck
-  // account, and let the number in `detail` speak for the window.
+  // to act. Shown only when the profile endpoint still accepts the login: the accounts that
+  // answered 429 on every read for days (#72 and #8) were revoked, not limited (usageReasonRevoked).
   usageReasonRateLimited:
     'Anthropic is rate-limiting usage checks for this account. Refreshing cannot help and signing in again does not either - the window can run for hours, and it clears on its own.',
+  // The usage endpoint answers a revoked login 429, so this read as the rate limit above and told
+  // the owner to wait; the profile endpoint's 401 is what tells them apart (server revokedLoginError).
+  // It once said to sign out and back in, which cannot work: the app keeps a saved login through a
+  // re-login to the same account until its expiry date (server core/revoked-grants.ts).
+  usageReasonRevoked:
+    'Anthropic revoked the login this instance saved for Claude Code. Signing in again does not replace it: the Claude app keeps a saved login until its expiry date. AgentHydra removes the dead login while this instance is closed, and the app makes a new one after you open it again.',
   usageReasonAppClosed:
     'This account is closed, so its saved login is too old to read usage. Open it and check again.',
   usageSession: 'Session (5h)',
@@ -311,13 +317,11 @@ export default {
   deleteDialogTitle: 'Delete instance',
   deleteDialogDescription:
     'This permanently removes the instance profile and all its local data. This cannot be undone.',
-  deleteDialogPlaceholder: 'Instance name',
-  deleteDialogTypeName: 'Type this name to confirm. Click it to copy.',
-  copyName: 'Copy the name',
-  toastNameCopied: 'Copied "{name}"',
+  deleteDialogNoteLabel: 'Why are you deleting it?',
+  deleteDialogNoteHint:
+    'Required. A login that syncs is deleted on your other PC too, and this note tells them why.',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
-  deleteDialogMismatch: "Name doesn't match.",
   createDialogPlaceholder: 'e.g. work, personal, client-a',
   editDialogTitle: 'Edit instance',
   editDialogNameLabel: 'Display name',

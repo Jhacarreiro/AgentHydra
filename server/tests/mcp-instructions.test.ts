@@ -45,6 +45,14 @@ describe('SERVER_INSTRUCTIONS', () => {
     for (const phrase of phrases) expect(SERVER_INSTRUCTIONS).toContain(phrase)
   })
 
+  test('says to price a page before and after a change, when the price tag is installed', () => {
+    // A chat saw price_check only as a name among hundreds of deferred tools, so it read as a
+    // shop-price lookup and pages were built unpriced (2026-10-16). Without the add-on, no line.
+    const priced = TOOLS.some((t) => t.name === 'price_tag')
+    expect(SERVER_INSTRUCTIONS.includes('price_tag { mode: "page"')).toBe(priced)
+    if (priced) expect(SERVER_INSTRUCTIONS).toContain('Before and after you build')
+  })
+
   test('stays small enough to be worth its rent in every request', () => {
     // It rides in context for the whole session. A cap is the only thing that stops a guidance
     // block growing a line at a time until it is skimmed instead of read. Claude Code keeps 2,048

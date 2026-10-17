@@ -17,6 +17,7 @@ import {
   scanCodexDesktopProcesses,
 } from './codex-desktop'
 import { syncOwnerAgents } from './codex-owner-agents'
+import { deleteNoteProblem } from './delete-note'
 import { instanceNumbers, instanceRef } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -155,10 +156,19 @@ export function reconcileCodexInstanceDirs(): CodexInstanceReconciliation {
 }
 
 export function isCodexLoggedIn(codexHome: string): boolean {
+  return codexLogin(codexHome).loggedIn
+}
+
+/** Reuse the row's one local identity read; never probe a provider while listing accounts. */
+function codexLogin(codexHome: string) {
+  const account = localCodexAccount(codexHome)
   try {
-    return existsSync(join(codexHome, 'auth.json'))
+    return {
+      account,
+      loggedIn: existsSync(join(codexHome, 'auth.json')) && account.source !== 'auth_rejected',
+    }
   } catch {
-    return false
+    return { account, loggedIn: false }
   }
 }
 
@@ -178,11 +188,10 @@ function hydrate(
 ): UnnumberedCodexInstance {
   return {
     ...instance,
-    loggedIn: isCodexLoggedIn(instance.codexHome),
     // Eager, because it is cheap here: auth.json is plain JSON and the identity is a base64 payload
     // decode, so the Codex table gets an email/plan on first paint with no extra request. The live
     // usage route refreshes the plan from the server-computed value (see codex-account.ts).
-    account: localCodexAccount(instance.codexHome),
+    ...codexLogin(instance.codexHome),
     desktopUserDataDir: codexDesktopUserDataDir(instance.codexHome),
     isDesktopRunning: runtime !== null,
     desktopPid: runtime?.pid ?? null,
@@ -226,8 +235,7 @@ function discoveredInstances(
       id: DEFAULT_CODEX_INSTANCE_ID,
       name: basename(CODEX_HOME),
       codexHome: CODEX_HOME,
-      loggedIn: isCodexLoggedIn(CODEX_HOME),
-      account: localCodexAccount(CODEX_HOME),
+      ...codexLogin(CODEX_HOME),
       desktopUserDataDir: defaultRuntime?.desktopUserDataDir ?? defaultProfile,
       isDesktopRunning: defaultRuntime !== undefined,
       desktopPid: defaultRuntime?.pid ?? null,
@@ -250,8 +258,7 @@ function discoveredInstances(
       id: externalIdFor(runtime.desktopUserDataDir),
       name: basename(codexHome),
       codexHome,
-      loggedIn: isCodexLoggedIn(codexHome),
-      account: localCodexAccount(codexHome),
+      ...codexLogin(codexHome),
       desktopUserDataDir: runtime.desktopUserDataDir,
       isDesktopRunning: true,
       desktopPid: runtime.pid,
@@ -587,7 +594,7 @@ export interface DeleteCodexInstanceOptions {
  */
 export async function deleteCodexInstance(
   id: string,
-  confirmName?: string,
+  note?: string,
   options: DeleteCodexInstanceOptions = {},
 ): Promise<CMActionResult> {
   const instance = readStore().instances.find((candidate) => candidate.id === id)
@@ -599,12 +606,13 @@ export async function deleteCodexInstance(
       message: 'Codex instance not found.',
       data: { id },
     }
-  if (!confirmName || confirmName !== instance.name)
+  const noteProblem = deleteNoteProblem(note)
+  if (noteProblem)
     return {
       ok: false,
       action: 'codex-delete',
       dir: instance.codexHome,
-      message: `Refusing to delete: confirmName must exactly match '${instance.name}'.`,
+      message: `Refusing to delete: ${noteProblem}`,
       data: { id },
     }
 

@@ -35,6 +35,7 @@ const ICON_TONE: Record<string, string> = {
   info: 'text-info',
   success: 'text-success',
   warning: 'text-warning',
+  limited: 'text-limited',
   destructive: 'text-destructive',
 }
 const tone = computed(() => ICON_TONE[meta.value.variant ?? ''] ?? 'text-muted-foreground')

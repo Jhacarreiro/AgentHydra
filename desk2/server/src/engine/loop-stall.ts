@@ -4,7 +4,7 @@ import * as jsc from 'bun:jsc'
 import type { Timings } from './timings'
 
 /** JSC's sampler as Bun 1.4 has it: bun-types names the traces call differently from the runtime. */
-const sampler = jsc as unknown as { startSamplingProfiler(): void; samplingProfilerStackTraces(): { traces?: Trace[] } }
+const sampler = jsc as unknown as { startSamplingProfiler(directory?: string, sampleInterval?: number): void; samplingProfilerStackTraces(): { traces?: Trace[] } }
 
 /** A stall past this many ms (beyond the timer's own tick) is written to the timings log. */
 export const LOOP_STALL_MS = 200
@@ -13,7 +13,7 @@ export const LOOP_STALL_MS = 200
  * functions that ran in it (StallProfile). Owner, 2026-10-09: the sidebar kept emptying and refilling; under it the
  * server's thread was busy for 7 to 80 s at a time, 181 times that day (2,420 s), and nothing could say on what. The
  * profiler cannot be stopped once started, so it starts only on a server that has stalled this long: it samples the
- * thread every millisecond, and the samples between stalls are dropped every DRAIN_MS.
+ * thread every eight milliseconds, and the samples between stalls are dropped every DRAIN_MS.
  * 1 s since 2026-10-11: after the restart that took the 7-80 s freezes away, the server still froze for 1.1 to 2.1 s
  * every few minutes (five in 20 minutes, one with no CPU at all) while the owner found the transcript slow to load, and
  * at 2 s only one of them started the profiler and none was written.
@@ -21,6 +21,8 @@ export const LOOP_STALL_MS = 200
 export const PROFILE_STALL_MS = 1000
 const TICK_MS = 50
 const DRAIN_MS = 1000
+// Match the daemon's measured interval: 1 ms burns sampler CPU between Windows timer ticks.
+const PROFILE_SAMPLE_INTERVAL_US = 8_000
 const FRAMES_KEPT = 12
 const LOG_MAX_BYTES = 2 * 1024 * 1024
 /** JSC's line for a frame whose position it does not know. */
@@ -110,7 +112,7 @@ export function watchLoopStalls(
       if (sampling) {
         writeProfile(profile.file, { at: new Date().toISOString(), ms: Math.round(late), cpu: cpuMs, ...stallProfile(drain()) })
       } else {
-        sampler.startSamplingProfiler()
+        sampler.startSamplingProfiler(undefined, PROFILE_SAMPLE_INTERVAL_US)
         sampling = true
       }
       drainedAt = now

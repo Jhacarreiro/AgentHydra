@@ -28,6 +28,7 @@ import TaskGroup from './parts/TaskGroup.vue'
 import BrowserCard from './parts/BrowserCard.vue'
 import MessagePeek from './parts/MessagePeek.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
+import SeatsRow from '@/components/tasks/SeatsRow.vue'
 import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
 
@@ -833,9 +834,14 @@ watch(
   <div class="relative h-full min-h-0 bg-bg-page">
     <ContextMenu>
     <ContextMenuTrigger as-child>
+    <!-- The open rail lies --rail-over over the chat's right (DeskFrame): the scroller ends at its left edge, so the scrollbar
+         sits beside the step arrows and the peek's right edge, never under the rail (owner, 2026-10-17: the scroll bar was
+         "behind the sidebar"). The wrapper inside gives the same width back on the left, so the column stays centred on the
+         whole chat. Padded on the scroller itself, its container (the column's queries below) would lose the overlap twice,
+         and pe-12 would take 12px off the text at every width where the rail pushes the column over. -->
     <div
       ref="scroller"
-      class="@container h-full overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
+      class="@container mr-[var(--rail-over,0px)] h-full overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
       role="feed"
       aria-label="Chat messages"
       data-transcript-scroller
@@ -849,6 +855,7 @@ watch(
            (12px in, 24 wide, 12 clear of the text; owner, 2026-10-14: they sat on a right-hand message's picture).
            Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
+      <div class="pl-[var(--rail-over,0px)]">
       <div class="mx-auto w-full max-w-210 px-9 pb-37.5 @max-[864px]:pe-12 @max-[560px]:ps-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
         <div class="relative" :style="{ height: `${padTop}px` }">
@@ -864,8 +871,10 @@ watch(
         </div>
         <div :style="{ height: `${padBottom}px` }" />
         <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" :shimmer="liveRowId === null" class="mt-4" @reveal="revealStep" />
+        <SeatsRow v-if="chat && !readOnly" :chat="chat" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
+      </div>
       </div>
     </div>
     </ContextMenuTrigger>

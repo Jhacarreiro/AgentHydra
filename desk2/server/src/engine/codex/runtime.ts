@@ -353,12 +353,25 @@ export class CodexRuntime extends ServiceRuntime {
   }
 
   private onTokenUsage(p: Record<string, unknown>): void {
-    const u = p.tokenUsage as { last?: { totalTokens?: number }; modelContextWindow?: number | null } | undefined
+    type Counts = { totalTokens?: number }
+    const u = p.tokenUsage as { total?: Counts; last?: Counts; modelContextWindow?: number | null } | undefined
     const used = u?.last?.totalTokens
+    let changed = false
     if (typeof used === 'number' && u?.modelContextWindow) {
       this.chat.contextPct = Math.min(100, Math.round((used / u.modelContextWindow) * 100))
-      this.publish()
+      changed = true
     }
+    changed = this.addTokens(u?.total?.totalTokens, used) || changed
+    if (changed) this.publish()
+  }
+
+  /** The thread's running token total: Codex's own `total` when an event carries it, else the sum of each `last`. */
+  private addTokens(total: unknown, last: unknown): boolean {
+    const was = this.chat.tokensUsed ?? 0
+    const next = typeof total === 'number' ? total : typeof last === 'number' ? was + last : was
+    if (next === was) return false
+    this.chat.tokensUsed = next
+    return true
   }
 
   private onError(p: Record<string, unknown>): void {

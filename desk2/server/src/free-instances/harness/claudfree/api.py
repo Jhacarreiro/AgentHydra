@@ -34,7 +34,6 @@ class Client:
         prompt: str | None = None,
         name: str | None = None,
         model: str | None = None,
-        regular: bool = False,
         web_search: bool = False,
         prefer: str | None = None,
         check: bool = False,
@@ -70,7 +69,6 @@ class Client:
                 # --flag=value also accepts prompts that begin with a hyphen.
                 argv.append(flag + "=" + str(value))
         for flag, enabled in (
-            ("--regular", regular),
             ("--web-search", web_search),
             ("--check", check),
             ("--brief", brief),
@@ -120,7 +118,6 @@ class Client:
         *,
         name: str | None = None,
         model: str | None = None,
-        regular: bool = False,
         web_search: bool = False,
         prefer: str | None = None,
         brief: bool = False,
@@ -133,7 +130,6 @@ class Client:
             prompt=prompt,
             name=name,
             model=model,
-            regular=regular,
             web_search=web_search,
             prefer=prefer,
             brief=brief,
@@ -147,19 +143,17 @@ class Client:
         prompt: str,
         *,
         model: str | None = None,
-        regular: bool = False,
         web_search: bool = False,
         brief: bool = False,
         export_dir: str | Path | None = None,
         on_text=None,
     ) -> dict:
-        """Continue exactly one named/UUID chat; normal context is preserved."""
+        """Continue exactly one named/UUID Incognito chat; normal context is preserved."""
         return self.execute(
             "resume",
             reference,
             prompt=prompt,
             model=model,
-            regular=regular,
             web_search=web_search,
             brief=brief,
             export_dir=export_dir,
@@ -214,7 +208,6 @@ class Client:
                 "claude_track_chat",
             ],
             "options": {
-                "--regular": "explicitly allow regular chats",
                 "--web-search": "enable Claude's web search/fetch for this turn",
                 "--brief": "with --json, omit raw/repeated blocks and format compactly",
                 "--export DIR": "write full JSON, text and extracted code; never executes generated code",
@@ -259,6 +252,7 @@ class Client:
             },
             "rules": [
                 "Omit the chat identifier to create; provide one to continue. Names are local aliases.",
+                "Every chat is Incognito: a new chat sends nothing until Claude's create answer confirms it, and a regular chat is never continued.",
                 "Incognito chats are resumed by their UUID while Claude still permits access.",
                 "The local list does not enumerate unknown Incognito chats on Claude.",
                 "POST messages are never retried automatically. If uncertain, read the returned chat_id.",

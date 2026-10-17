@@ -25,19 +25,22 @@ describe('history file', () => {
   test('the first sync backfills the kept runs once, later syncs add only new runs, and a finished description joins its run', () => {
     const file = tmp()
     const kept = [run(3000), run(2000), run(1000)]
-    expect(syncHistory(file, kept)).toBe(true)
-    expect(syncHistory(file, kept)).toBe(false)
+    // Each sync answers the file's run count, which the manager keeps instead of reading the file again.
+    expect(syncHistory(file, kept)).toBe(3)
+    const once = readFileSync(file, 'utf8')
+    expect(syncHistory(file, kept)).toBe(3)
+    expect(readFileSync(file, 'utf8')).toBe(once)
     expect(readHistory(file).map((r) => r.startedAt)).toEqual([3000, 2000, 1000])
 
     const next = [run(4000, { description: { state: 'pending', text: '' } }), ...kept]
-    expect(syncHistory(file, next)).toBe(true)
+    expect(syncHistory(file, next)).toBe(4)
     next[0].description = { state: 'done', text: 'Fixed one thing.' }
-    expect(syncHistory(file, next)).toBe(true)
+    expect(syncHistory(file, next)).toBe(4)
     const all = readHistory(file)
     expect(all).toHaveLength(4)
     expect(all[0].description).toEqual({ state: 'done', text: 'Fixed one thing.' })
     // Runs the memory has dropped stay.
-    expect(syncHistory(file, [run(5000)])).toBe(true)
+    expect(syncHistory(file, [run(5000)])).toBe(5)
     expect(readHistory(file)).toHaveLength(5)
   })
 

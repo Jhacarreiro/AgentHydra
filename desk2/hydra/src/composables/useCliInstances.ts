@@ -156,11 +156,11 @@ async function associate(
   }
 }
 
-/** Delete a CLI instance (guarded server-side; confirmName must match exactly). */
-async function remove(id: string, confirmName: string): Promise<api.CMActionResult | undefined> {
+/** Delete a CLI instance (guarded server-side; the note says why, at least 3 characters). */
+async function remove(id: string, note: string): Promise<api.CMActionResult | undefined> {
   setBusy(id, true)
   try {
-    const result = await guard(api.deleteCliInstance(id, confirmName))
+    const result = await guard(api.deleteCliInstance(id, note))
     if (result?.ok) await refreshCliInstances({ silent: true })
     return result
   } finally {

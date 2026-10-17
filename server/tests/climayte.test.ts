@@ -1371,6 +1371,88 @@ describe("syncOwnerClaude: the owner's CLAUDE.md and skills in an account folder
     expect(existsSync(join(leanAcct, 'skills', 'alpha'))).toBe(false)
     expect(existsSync(join(leanAcct, 'skills', 'beta'))).toBe(true)
   })
+
+  test("carries the owner's after-edit hooks into the account's settings, and no other hook", () => {
+    // A chat or worker reads the account folder's settings.json, never ~/.claude's, so the owner's
+    // after-edit price tag never ran in one: 177 of 178 sessions that edited a page in a week.
+    const hOwner = join(root, 'hooks-owner')
+    const hAcct = join(root, 'hooks-acct')
+    mkdirSync(hOwner)
+    mkdirSync(hAcct)
+    const tag = (v: string) => ({
+      matcher: 'Edit|Write|MultiEdit',
+      hooks: [{ type: 'command', command: `node "C:/Users/me/price-tag-${v}.mjs"`, timeout: 8 }],
+    })
+    const ownerSettings = (post: unknown[]) =>
+      writeFileSync(
+        join(hOwner, 'settings.json'),
+        JSON.stringify({
+          model: 'opus',
+          hooks: {
+            PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'pre.py' }] }],
+            PostToolUse: post,
+            Stop: [{ hooks: [{ type: 'command', command: 'stop.py' }] }],
+          },
+        }),
+      )
+    const clock = { hooks: [{ type: 'http', url: 'http://127.0.0.1:1/tick', timeout: 10 }] }
+    const review = {
+      matcher: 'Bash',
+      hooks: [{ type: 'command', command: 'review.py', asyncRewake: true }],
+    }
+    const own = { matcher: 'Read', hooks: [{ type: 'command', command: 'mine.mjs' }] }
+    const acctFile = join(hAcct, 'settings.json')
+    const acctBase = {
+      claudeMdExcludes: ['C:/Users/me/x/CLAUDE.md'],
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'lane.mjs' }] }] },
+    }
+    writeFileSync(
+      acctFile,
+      JSON.stringify({ ...acctBase, hooks: { ...acctBase.hooks, PostToolUse: [own] } }),
+    )
+    const post = () => JSON.parse(readFileSync(acctFile, 'utf8')).hooks.PostToolUse
+
+    ownerSettings([clock, review, tag('v1')])
+    expect(syncOwnerClaude(hOwner, hAcct)).toMatchObject({ changed: true, editHooks: 'written' })
+    expect(post()).toEqual([own, tag('v1')])
+    const after = JSON.parse(readFileSync(acctFile, 'utf8'))
+    expect({ ...after, hooks: { ...after.hooks, PostToolUse: null } }).toEqual({
+      ...acctBase,
+      hooks: { ...acctBase.hooks, PostToolUse: null },
+    })
+
+    // Once: no second copy, in memory or from the stamp on disk.
+    expect(syncOwnerClaude(hOwner, hAcct).changed).toBe(false)
+    forgetOwnerSync()
+    expect(syncOwnerClaude(hOwner, hAcct)).toMatchObject({ editHooks: 'unchanged' })
+    expect(post()).toEqual([own, tag('v1')])
+    // A stamp that lost its record of the carried hook (an older daemon rewrote it) still adds no second copy.
+    writeFileSync(join(hAcct, '.agenthydra-owner-sync.json'), '{"sig":"older","claudeMd":null}')
+    forgetOwnerSync()
+    expect(syncOwnerClaude(hOwner, hAcct).editHooks).toBe('unchanged')
+    expect(post()).toEqual([own, tag('v1')])
+
+    // The owner's edit replaces the carried copy; removing it removes the copy, never the account's own.
+    ownerSettings([clock, tag('v2')])
+    expect(syncOwnerClaude(hOwner, hAcct).editHooks).toBe('written')
+    expect(post()).toEqual([own, tag('v2')])
+    ownerSettings([clock])
+    syncOwnerClaude(hOwner, hAcct)
+    expect(post()).toEqual([own])
+
+    // An account settings file that is not JSON is left as it is.
+    ownerSettings([tag('v3')])
+    writeFileSync(acctFile, '{ not json')
+    expect(syncOwnerClaude(hOwner, hAcct).editHooks).toBe('unreadable')
+    expect(readFileSync(acctFile, 'utf8')).toBe('{ not json')
+
+    // An account with no settings file gets one holding only the hooks.
+    rmSync(acctFile)
+    syncOwnerClaude(hOwner, hAcct)
+    expect(JSON.parse(readFileSync(acctFile, 'utf8'))).toEqual({
+      hooks: { PostToolUse: [tag('v3')] },
+    })
+  })
 })
 
 describe('integration: paid extra usage is never spent', () => {

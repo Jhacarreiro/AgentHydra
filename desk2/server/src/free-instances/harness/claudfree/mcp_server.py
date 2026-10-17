@@ -49,7 +49,7 @@ def build_server(client: Client | None = None):
         log_level="WARNING",
         instructions="Use claude_list_chats to discover locally tracked UUID/name handles. "
         "Use explicit references to read/resume; multiple chats have independent context. "
-        "Creation/resumption sends account messages. Incognito is the default. "
+        "Creation/resumption sends account messages. Every chat is Incognito. "
         "Usage snapshots carry observed_at/is_snapshot; null means unknown, not zero. "
         "Never automatically resend an uncertain message: read error.chat_id first. "
         "Login is manual through the separate CLI login command.",
@@ -130,13 +130,11 @@ def build_server(client: Client | None = None):
         name: str | None = None,
         model: str | None = None,
         web_search: bool = False,
-        regular: bool = False,
         full: bool = False,
     ) -> CallToolResult:
         """Send a message in a NEW Incognito chat and save its UUID; name must be unused.
 
-        Consumes account usage. regular=true explicitly creates a regular chat.
-        web_search enables search/fetch for this turn. full includes raw tool results.
+        Consumes account usage. web_search enables search/fetch for this turn. full includes raw tool results.
         """
         return call(
             client.create,
@@ -144,7 +142,6 @@ def build_server(client: Client | None = None):
             name=name,
             model=model,
             web_search=web_search,
-            regular=regular,
             brief=not full,
         )
 
@@ -154,13 +151,12 @@ def build_server(client: Client | None = None):
         prompt: str,
         model: str | None = None,
         web_search: bool = False,
-        regular: bool = False,
         full: bool = False,
     ) -> CallToolResult:
         """Send a follow-up to the specific UUID/local name, retaining its conversation context.
 
         Consumes account usage. Explicit names/UUIDs are preferable to 'last' in parallel jobs.
-        Regular chats require regular=true. full includes raw web tool result blocks.
+        Only Incognito chats continue. full includes raw web tool result blocks.
         """
         return call(
             client.resume,
@@ -168,7 +164,6 @@ def build_server(client: Client | None = None):
             prompt,
             model=model,
             web_search=web_search,
-            regular=regular,
             brief=not full,
         )
 

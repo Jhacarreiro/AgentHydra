@@ -2,13 +2,18 @@
 
 import asyncio
 import json
+from pathlib import Path
+import socket
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
-from claudfree.chatgpt.browser_pool import MAX_FRAME, ContextBrowser, Pool
+from claudfree.chatgpt.browser_pool import MAX_FRAME, ContextBrowser, Pool, serve
 from claudfree.errors import ClaudeError
+from claudfree.registry import chat_lock
 
 
 def fixture():
@@ -146,6 +151,66 @@ class ContextBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PoolGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_pre_dispatch_refusals_report_no_context_to_clean(self):
+        for state in ('draining', 'busy', 'duplicate'):
+            browser, cdp = fixture()
+            pool = Pool(browser, cdp, 'fixture-token')
+            value = request()
+            if state == 'draining':
+                pool.draining = True
+            elif state == 'busy':
+                pool.active = 3
+            else:
+                pool.seen.add(value['request_id'])
+            replies = await invoke(pool, value)
+            self.assertFalse(replies[-1]['ok'])
+            self.assertTrue(replies[-1]['cleanup_verified'])
+            browser.connection.send.assert_not_awaited()
+
+    async def test_disposal_receipt_distinguishes_closed_context_from_failed_cleanup(self):
+        for failed in (False, True):
+            browser, cdp = fixture()
+            cdp.target.create_browser_context = Mock(return_value='create-context')
+            cdp.target.create_target = Mock(return_value='create-target')
+            tab = SimpleNamespace(target=SimpleNamespace(browser_context_id='owned-context'))
+            browser._get_tab = AsyncMock(return_value=tab)
+            browser.connection.send.side_effect = ['owned-context', 'owned-target',
+                RuntimeError('Synthetic disposal failure') if failed else None]
+            pool = Pool(browser, cdp, 'fixture-token')
+
+            async def prepare(*_args, browser_factory, **_kwargs):
+                scoped = await browser_factory()
+                await scoped.stop()
+                return {'metrics': {}, 'already_sent': True}
+
+            value = request(cookies=[], headers={}, email='owner@example.test', _cleanup_verified=True)
+            writer = Writer()
+            with patch('claudfree.chatgpt.browser_request._prepare', side_effect=prepare):
+                await pool.send(value, writer)
+            result = json.loads(writer.data)
+            self.assertEqual(result['cleanup_verified'], not failed)
+            self.assertEqual(pool.draining, failed)
+            browser.stop.assert_not_awaited()
+
+    async def test_cancel_receipt_is_written_after_owned_cleanup(self):
+        browser, cdp = fixture()
+        pool = Pool(browser, cdp, 'fixture-token')
+        events = []
+
+        async def send(value, _writer):
+            try:
+                await asyncio.get_running_loop().create_future()
+            finally:
+                await asyncio.sleep(0)
+                value['_cleanup_verified'] = False
+                events.append('cleanup-failed')
+
+        pool.send = AsyncMock(side_effect=send)
+        replies = await invoke(pool, request(), disconnect=True)
+        self.assertEqual(events, ['cleanup-failed'])
+        self.assertEqual(replies[-1], {'cleanup_verified': False})
+        self.assertEqual(pool.active, 0)
+
     async def test_optional_readback_cannot_overflow_the_complete_ipc_frame(self):
         browser, cdp = fixture()
         pool = Pool(browser, cdp, 'fixture-token')
@@ -295,6 +360,53 @@ class PoolGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(request_id, pool.seen)
         browser.create_context.assert_not_awaited()
         browser.stop.assert_not_awaited()
+
+
+def ping(port, token):
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as connection:
+        connection.sendall((json.dumps({'op': 'ping', 'token': token}) + '\n').encode())
+        with connection.makefile('rb') as stream:
+            return json.loads(stream.readline())
+
+
+@unittest.skipUnless(sys.platform == 'win32', "the proactor transport that can fail to detach a connection is Windows'")
+class IdleExitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_exit_frees_endpoint_and_owner_lock_when_a_connection_never_detaches(self):
+        # 2026-10-17: two live brokers sat in Server.wait_closed() for hours, each with served
+        # connections whose shutdown() had raised, so CPython never detached them. Their owner lock
+        # and dead endpoint.json stopped every new broker, and every ChatGPT send failed at 25 s.
+        browser = SimpleNamespace(stopped=False, stop=AsyncMock())
+        zendriver = SimpleNamespace(start=AsyncMock(return_value=browser), cdp=SimpleNamespace())
+        served_port = None
+        real_shutdown = socket.socket.shutdown
+
+        def shutdown(sock, how):
+            if served_port is not None and sock.getsockname()[1] == served_port:
+                raise OSError(10057, 'The socket is not connected')
+            return real_shutdown(sock, how)
+
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            endpoint = directory / 'endpoint.json'
+            with patch.dict(sys.modules, {'zendriver': zendriver}), patch.object(socket.socket, 'shutdown', shutdown):
+                served = asyncio.create_task(serve(directory, 'fixture-version', idle_seconds=2))
+                for _ in range(200):
+                    if endpoint.exists() or served.done():
+                        break
+                    await asyncio.sleep(0.05)
+                info = json.loads(endpoint.read_text(encoding='utf-8'))
+                served_port = info['port']
+                self.assertTrue((await asyncio.to_thread(ping, served_port, info['token']))['ok'])
+                try:
+                    await asyncio.wait_for(asyncio.shield(served), 15)
+                except TimeoutError:
+                    served.cancel()
+                    await asyncio.gather(served, return_exceptions=True)
+                    self.fail('The idle broker never exited, so its owner lock and endpoint stayed taken.')
+            self.assertFalse(endpoint.exists())
+            with chat_lock(directory, 'owner'):
+                pass
+            browser.stop.assert_awaited_once()
 
 
 if __name__ == '__main__':

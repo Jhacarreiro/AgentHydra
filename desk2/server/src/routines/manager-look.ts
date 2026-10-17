@@ -9,6 +9,7 @@ import { settleCommands } from './manager-settle'
 import { pollPrompts, recordTaskRun, startRun } from './manager-runs'
 import { centralEntries, refreshCentral } from './manager-central'
 import { claimSlot, readRuns, tendClaims } from './manager-board'
+import { movingIds, settleMoves } from './manager-move'
 
 /** Whether this computer reads and runs an entry: a local file, or a central routine pinned here or shared with this runner. */
 export const runsHere = (e: Entry): boolean => e.central?.placement !== 'elsewhere'
@@ -31,12 +32,13 @@ function centralRead(m: Manager, localIds: Set<string>): { entries: Entry[]; pro
     if (changed) lookSoon(m)
   })
   void readRuns(c, false, m.clock())
-  return centralEntries(c, localIds)
+  return centralEntries(c, localIds, movingIds(m))
 }
 
 /** Reads each routine's file, status and Windows task, and the central store's routines beside them. A windowsTask routine
  *  off Windows is broken; the tasks are read in one call; a central routine that runs elsewhere is listed, never read. */
 async function readAll(m: Manager): Promise<{ seen: Seen[]; proposals: RoutineProposal[] }> {
+  await settleMoves(m)
   const local = readEntries(m.routinesDir, parseRoutineText)
   const localProposals = readEntries(m.proposedDir, parseProposalText)
   const central = centralRead(m, new Set([...local, ...localProposals].map((e) => e.id)))

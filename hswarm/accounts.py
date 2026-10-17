@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 import urllib.request
 from pathlib import Path, PureWindowsPath
@@ -55,14 +56,36 @@ _AH_TIER = {"Pro": "pro", "Max 5×": "max_5x", "Max 20×": "max_20x"}  # AgentHy
 _AH_TTL_S = 300.0
 _AH_TIMEOUT_S = 2.0
 _ah_cache: tuple[float, dict[str, float]] | None = None
+_ah_fetching = threading.Lock()  # held by the one refresh running in the background
 
 
 def _agenthydra_prices() -> dict[str, float]:
     """The owner's plan prices from AgentHydra (planPrices on /api/routing/cost-model), per tier; {} when it does not
-    answer within 2 s. Cached for a few minutes, a miss too, so an offline machine pays the timeout once per window."""
+    answer within 2 s. Cached for a few minutes, a miss too, so an offline machine pays the timeout once per window.
+
+    Only a process's first call waits for AgentHydra: a copy past its window is answered as it is while a thread fetches
+    the next. The shared server attributes ledger lines on its event loop (jobs._journal for every finished task), and
+    this fetch held GET /health there for its whole round trip, 0.2 s and up to the 2 s timeout (stack dump, 2026-10-16)."""
+    cached = _ah_cache
+    if cached is None:
+        return _fetch_agenthydra_prices()
+    if time.monotonic() - cached[0] >= _AH_TTL_S and _ah_fetching.acquire(blocking=False):
+        try:
+            threading.Thread(target=_refresh_agenthydra_prices, name="hswarm-plan-prices", daemon=True).start()
+        except RuntimeError:  # no new threads (the interpreter is shutting down): the copy stands
+            _ah_fetching.release()
+    return cached[1]
+
+
+def _refresh_agenthydra_prices() -> None:
+    try:
+        _fetch_agenthydra_prices()
+    finally:
+        _ah_fetching.release()
+
+
+def _fetch_agenthydra_prices() -> dict[str, float]:
     global _ah_cache
-    if _ah_cache and time.monotonic() - _ah_cache[0] < _AH_TTL_S:
-        return _ah_cache[1]
     out: dict[str, float] = {}
     base = os.environ.get("AGENTHYDRA_URL", "http://127.0.0.1:7787").rstrip("/")
     if base:

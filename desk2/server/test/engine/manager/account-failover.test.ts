@@ -9,7 +9,8 @@ import { dirname, join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo, TranscriptItem } from '@shared/protocol'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
-import { ChatManager, pickHealthy, type ManagerBridge } from '../../../src/engine/chat-manager'
+import { pickHealthy } from '../../../src/bridge/accounts'
+import { ChatManager, type ManagerBridge } from '../../../src/engine/chat-manager'
 import { CONTINUE_TEXT, MAX_HANDOFF_CHARS } from '../../../src/engine/handoff'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
@@ -298,8 +299,8 @@ test("pickHealthy skips signed-out, tried, unread and at-the-line accounts (85%,
     account(8, { fiveHourPct: 30, priority: 2, maxFiveHourPct: 50 }),
     account(9, { fiveHourPct: 15, priority: 2, maxFiveHourPct: 15 })
   ]
-  expect(pickHealthy(list, [])?.number).toBe(8)
-  expect(pickHealthy(list, ['acct-8'])?.number).toBe(5)
-  expect(pickHealthy(list, ['acct-8', 'acct-5'])?.number).toBe(4)
-  expect(pickHealthy(list, ['acct-8', 'acct-5', 'acct-4', 'acct-3'])).toBeNull()
+  expect(pickHealthy(list, new Set())?.number).toBe(8)
+  expect(pickHealthy(list, new Set(['acct-8']))?.number).toBe(5)
+  expect(pickHealthy(list, new Set(['acct-8', 'acct-5']))?.number).toBe(4)
+  expect(pickHealthy(list, new Set(['acct-8', 'acct-5', 'acct-4', 'acct-3']))).toBeNull()
 })
