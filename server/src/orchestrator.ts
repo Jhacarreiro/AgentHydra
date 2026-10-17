@@ -307,17 +307,48 @@ async function waitForLockToClear(
 }
 
 /**
- * The scripts that run under a runner, outside the daemon (orchestrator-runner.ts), with their
- * operation kept on disk for the next daemon (adoptOrchestratorRuns): a chat move.
+ * Does this run move chats? Such a run goes under a runner, outside the daemon
+ * (orchestrator-runner.ts), with its operation kept on disk for the next daemon
+ * (adoptOrchestratorRuns). Exact tokens, as the rest of this file: a flag inside another
+ * flag's value does not count. Each row was checked against the script's own argv handling:
+ *   - migrate_batch, migrate_chat: always;
+ *   - chats: `--move-to` with `--yes` (no `--yes` plans only);
+ *   - groundskeeper: `--yes`, unless `--only-archive` (it then evacuates nothing);
+ *   - sweep: `--yes` with a lane that moves (`--moves`, `--land-console`, or `--all`, whose lanes
+ *     come from the policy); a sweep with no lane flag plans only;
+ *   - loop: `--live`, which is `sweep --all --yes` (orch.py);
+ *   - undo: always, since it can run migrate_chat back and has no planning mode;
+ *   - migrate_reconcile: `--reverse` (it hands the row to undo.py).
  *
  * ⛔ A RESTART CUT A DRAIN HALF-WAY (2026-10-08). A peer session restarted the daemon 23 minutes
  * into a 9-chat migrate_batch; its python child died with the daemon, two chats were left landed
  * and still unarchived on the source, and seven were never tried. Until 2026-10-17 every restart
  * was refused while a move ran (moveRestartRefusal); now a move goes on through the restart and
  * the next daemon answers its operation id. A move's own daemon calls wait out the handover
- * (toolbox-calls.ts, hydralib's AGENTHYDRA_OPERATION).
+ * (toolbox-calls.ts, hydralib's AGENTHYDRA_OPERATION). Every run that moves chats gets this, not
+ * only migrate_*: a run that moves chats and dies with its daemon is the same cut.
  */
-const MOVE_SCRIPTS = new Set(['migrate_batch', 'migrate_chat'])
+export function movesChats(script: string, args: string[]): boolean {
+  const has = (flag: string) => args.includes(flag)
+  switch (script) {
+    case 'migrate_batch':
+    case 'migrate_chat':
+    case 'undo':
+      return true
+    case 'chats':
+      return has('--move-to') && has('--yes')
+    case 'groundskeeper':
+      return has('--yes') && !has('--only-archive')
+    case 'sweep':
+      return has('--yes') && (has('--moves') || has('--land-console') || has('--all'))
+    case 'loop':
+      return has('--live')
+    case 'migrate_reconcile':
+      return has('--reverse')
+    default:
+      return false
+  }
+}
 
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
  *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
@@ -344,8 +375,9 @@ export function orchestratorBusy(): boolean {
 //     says cancelled rather than failed.
 // Results are kept in memory, bounded (OPERATION_KEEP) and expiring (OPERATION_TTL_MS): this is
 // reconciliation for a dropped connection and a restart-free daemon, not an audit log - the
-// toolbox's own ledgers are the durable record of what an act did. A chat move (MOVE_SCRIPTS) is
-// the exception since 2026-10-17: it runs under a runner and its record is also kept in RUNS_DIR,
+// toolbox's own ledgers are the durable record of what an act did. A run that moves chats
+// (movesChats) is the exception since 2026-10-17: it runs under a runner and its record is also kept
+// in RUNS_DIR,
 // so the next daemon answers its id (adoptOrchestratorRuns). Every other run's record still dies
 // with the daemon, as below.
 //
@@ -393,8 +425,9 @@ interface OperationEntry {
   /** The registry's own deadline timer (see OPERATION_WATCHDOG_GRACE_MS). Cleared the moment the
    *  run settles, so a finished operation leaves no timer behind. */
   watchdog: ReturnType<typeof setTimeout> | null
-  /** A move under a runner (MOVE_SCRIPTS): what ran and where its files are. Its record is saved in
-   *  RUNS_DIR whenever it changes, so the next daemon can take it on. Null for every other run. */
+  /** A run that moves chats (movesChats) under a runner: what ran and where its files are. Its
+   *  record is saved in RUNS_DIR whenever it changes, so the next daemon can take it on. Null for
+   *  every other run. */
   runner: RunnerRun | null
 }
 
@@ -675,9 +708,9 @@ export function startOrchestratorOperation(
   const op = newOperation(input, key, check)
   const entry = newOperationEntry(op)
   const deps = opts.deps ?? {}
-  // A move runs under a runner and outlives this daemon (MOVE_SCRIPTS); a spawn handed in is the
-  // caller's own.
-  const move = check.ok && !deps.spawn && MOVE_SCRIPTS.has(check.invocation.script)
+  // A run that moves chats runs under a runner and outlives this daemon (movesChats); a spawn
+  // handed in is the caller's own.
+  const move = check.ok && !deps.spawn && movesChats(check.invocation.script, check.invocation.args)
   entry.promise = runOrchestrator(input, {
     ...deps,
     ...(move ? { spawn: runnerSpawn(entry) } : {}),
@@ -710,9 +743,9 @@ export function listOrchestratorOperations(): OrchestratorOperation[] {
     .sort((a, b) => b.startedAt - a.startedAt)
 }
 
-/** The spawn a move runs through (MOVE_SCRIPTS): its python under a runner, outside this daemon,
- *  with its record saved before the runner starts, so a daemon that never saw it start can still
- *  take it on. */
+/** The spawn a chat-moving run goes through (movesChats): its python under a runner, outside this
+ *  daemon, with its record saved before the runner starts, so a daemon that never saw it start can
+ *  still take it on. */
 function runnerSpawn(entry: OperationEntry): NonNullable<SpawnDeps['spawn']> {
   return (command, cwd, timeoutMs, hooks) => {
     mkdirSync(RUNS_DIR, { recursive: true })
@@ -731,7 +764,7 @@ function runnerSpawn(entry: OperationEntry): NonNullable<SpawnDeps['spawn']> {
 }
 
 /**
- * Take on the moves an earlier daemon left (MOVE_SCRIPTS): every record in RUNS_DIR is an operation
+ * Take on the moves an earlier daemon left (movesChats): every record in RUNS_DIR is an operation
  * here again, under its own id. A running one is watched on from its runner's files and holds its
  * route lock as it did there, so a second move is still refused busy; a finished one answers its
  * result until OPERATION_TTL_MS after it ended.

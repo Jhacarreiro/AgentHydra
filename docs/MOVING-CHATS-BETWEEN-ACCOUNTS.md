@@ -188,9 +188,12 @@ tray icon and the fair share first), then reading two working chats' pids out of
   order); without one it is reported, never killed. By hand: kill the source row's `livePid`,
   then `migrate_reconcile --finish <mutationId>`. The id `--finish` takes is the MUTATION id from
   `migrate_reconcile --json`, not the session id.
-- **A move and its report outlive a daemon RESTART (since 2026-10-17).** A `migrate_batch` or
-  `migrate_chat` run through the daemon runs under a runner outside it
-  (`server/src/orchestrator-runner.ts`), and its operation record is kept in
+- **A move and its report outlive a daemon RESTART (since 2026-10-17).** A run that moves chats
+  through the daemon runs under a runner outside it (`server/src/orchestrator-runner.ts`):
+  `migrate_batch`, `migrate_chat`, `undo`, `chats --move-to X --yes`, `groundskeeper --yes` (unless
+  `--only-archive`), `sweep --yes` with `--moves`, `--land-console` or `--all`, `loop --live`
+  (the same as `sweep --all --yes`), and `migrate_reconcile --reverse`. The list is
+  `movesChats` in `server/src/orchestrator.ts`. Its operation record is kept in
   `<data dir>/orchestrator-runs/`, so `POST /api/daemon/restart` and the auto-updater no longer
   wait for it: the next daemon takes the run on and answers its operation id with the result. The
   move's own daemon calls wait out the handover (`server/src/toolbox-calls.ts`: the old daemon
