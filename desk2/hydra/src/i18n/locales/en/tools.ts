@@ -9,6 +9,10 @@ export default {
   title: 'Tools',
   search: 'Search managers and routines',
   searchAria: 'Search managers and routines by name, id, folder or campaign',
+  nav: {
+    open: 'Open the managers and routines list',
+    close: 'Close the managers and routines list',
+  },
   sections: {
     overview: 'Overview',
     managers: 'Managers',

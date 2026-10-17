@@ -11,109 +11,124 @@
     Convention: text sizes text-ui, text-2xs, text-3xs; weights 400 and 500; sentence case.
     Theme: the hydra kit theme (its tokens; never raw hex).
   -->
-  <div class="flex h-full min-h-0 flex-row">
-    <!-- Outside Desk this view draws Desk's sidebar's groups as its own column (inside Desk the sidebar is Desk's). -->
-    <nav
-      v-if="!EMBEDDED"
-      ref="navEl"
-      :aria-label="t('tools.title')"
-      class="flex w-72 shrink-0 flex-col border-e border-border bg-sidebar"
-    >
-      <div class="flex items-center gap-1 px-2 py-1.5">
-        <div class="relative flex-1">
-          <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input v-model="query" type="search" leading="icon" autocomplete="off" :placeholder="t('tools.search')" :aria-label="t('tools.searchAria')" />
-        </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          class="size-7"
-          :aria-label="t('routines.refresh')"
-          :title="t('routines.refresh')"
-          @click="manualRefresh"
-        >
-          <RefreshCw :class="refreshing ? 'animate-spin' : ''" />
-        </Button>
-      </div>
-      <div ref="treeEl" role="tree" :aria-label="t('tools.title')" class="min-h-0 flex-1 overflow-y-auto px-1 pb-2" @keydown="onTreeKey">
-        <div v-for="sec in model.sections" :key="sec.key" role="group" :aria-label="sec.label || undefined">
-          <p v-if="sec.label" class="flex items-center gap-1 px-2 pb-1 pt-2.5 text-2xs leading-4 text-muted-foreground">
-            <span class="min-w-0 flex-1 truncate">{{ sec.label }}</span>
-            <span class="tabular-nums">{{ sec.count ?? sec.rows.length }}</span>
-          </p>
-          <button
-            v-for="row in sec.rows"
-            :key="row.key"
-            type="button"
-            role="treeitem"
-            class="flex h-8 w-full items-center gap-2 rounded-md pe-2 text-left text-ui hover:bg-muted"
-            :class="[row.depth ? 'ps-6' : 'ps-2', row.key === selected ? 'bg-muted' : '']"
-            :tabindex="row.key === tabStop ? 0 : -1"
-            :aria-level="(row.depth ?? 0) + 1"
-            :aria-expanded="row.branch ? row.branch === 'open' : undefined"
-            :aria-selected="row.key === selected"
-            :title="row.hint"
-            @click="onPick(row.key, 'select')"
+  <div class="flex h-full min-h-0 flex-col">
+    <!-- Under 900px the standalone column is a drawer, opened from this bar (HSwarm's tree does the same). -->
+    <div v-if="!EMBEDDED" ref="barEl" class="flex items-center gap-2 border-b border-border px-2 py-1 min-[900px]:hidden">
+      <Button size="icon" variant="ghost" class="size-7" :aria-label="t('tools.nav.open')" :aria-expanded="navOpen" @click="openNav">
+        <Menu class="size-4" />
+      </Button>
+      <span class="truncate text-ui text-muted-foreground">{{ t('tools.title') }}</span>
+    </div>
+    <div class="relative flex min-h-0 flex-1 flex-row">
+      <div v-if="navOpen && !EMBEDDED" class="fixed inset-0 z-20 bg-black/40 min-[900px]:hidden" aria-hidden="true" @click="navOpen = false" />
+      <!-- Outside Desk this view draws Desk's sidebar's groups as its own column (inside Desk the sidebar is Desk's). -->
+      <nav
+        v-if="!EMBEDDED"
+        ref="navEl"
+        :aria-label="t('tools.title')"
+        class="flex shrink-0 flex-col border-e border-border bg-sidebar max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:inset-s-0 max-[899px]:z-30 max-[899px]:w-[min(86vw,340px)] max-[899px]:transition-transform min-[900px]:w-72"
+        :class="navOpen ? '' : 'max-[899px]:-translate-x-full max-[899px]:invisible'"
+        @keydown.esc="closeNav"
+      >
+        <div class="flex items-center gap-1 px-2 py-1.5">
+          <div class="relative flex-1">
+            <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <Input v-model="query" type="search" leading="icon" autocomplete="off" :placeholder="t('tools.search')" :aria-label="t('tools.searchAria')" />
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            class="size-7"
+            :aria-label="t('routines.refresh')"
+            :title="t('routines.refresh')"
+            @click="manualRefresh"
           >
-            <component
-              :is="row.branch === 'open' ? ChevronDown : ChevronRight"
-              v-if="row.branch"
-              class="size-3.5 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <span
-              v-if="row.status?.dot"
-              class="size-2 shrink-0 rounded-full"
-              :class="[dotClass(row), row.status.pulse ? 'animate-pulse' : '']"
-              aria-hidden="true"
-            />
-            <span class="min-w-0 flex-1 truncate" :class="row.depth ? '' : 'font-medium'">{{ row.label }}</span>
-            <TriangleAlert v-if="row.mark" class="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
-            <span v-else-if="row.count !== undefined || row.meta" class="shrink-0 text-2xs text-muted-foreground tabular-nums">
-              {{ row.count ?? row.meta }}
-            </span>
-          </button>
+            <RefreshCw :class="refreshing ? 'animate-spin' : ''" />
+          </Button>
+          <Button size="icon" variant="ghost" class="size-7 shrink-0 min-[900px]:hidden" :aria-label="t('tools.nav.close')" @click="closeNav">
+            <X class="size-4" />
+          </Button>
         </div>
-        <p v-if="!model.sections.length" class="px-2 py-3 text-ui text-muted-foreground">{{ query ? t('routines.noMatch', { q: query }) : t('routines.empty') }}</p>
-      </div>
-    </nav>
-
-    <div class="min-w-0 flex-1 overflow-y-auto">
-      <div ref="pageEl" class="mx-auto flex max-w-3xl flex-col gap-4 p-4">
-        <ToolsOverview
-          v-if="selected === 'overview'"
-          :babysitter="tools.babysitter"
-          :orchestrator="tools.orchestrator"
-          :instance-manager="tools.instanceManager"
-          :routines="status"
-          :now="now"
-          :loading="!loaded || tools.available === null"
-          :error="loadError ?? tools.error"
-          @select="select"
-        />
-        <BabysitterPage v-else-if="selected === 'm:babysitter'" :tools="tools" />
-        <OrchestratorPage v-else-if="selected === 'm:orchestrator'" :tools="tools" />
-        <InstanceManagerPage v-else-if="selected === 'm:instances'" :status="tools.instanceManager" :now="now" />
-
-        <div v-else-if="!status && loadError" class="flex items-center gap-2 text-ui text-destructive">
-          <TriangleAlert class="size-3.5 shrink-0" aria-hidden="true" />
-          <span class="min-w-0 flex-1">{{ t('routines.loadFailed', { reason: loadError }) }}</span>
-          <Button size="sm" variant="outline" @click="manualRefresh">{{ t('routines.retry') }}</Button>
+        <div ref="treeEl" role="tree" :aria-label="t('tools.title')" class="min-h-0 flex-1 overflow-y-auto px-1 pb-2" @keydown="onTreeKey">
+          <div v-for="sec in model.sections" :key="sec.key" role="group" :aria-label="sec.label || undefined">
+            <p v-if="sec.label" class="flex items-center gap-1 px-2 pb-1 pt-2.5 text-2xs leading-4 text-muted-foreground">
+              <span class="min-w-0 flex-1 truncate">{{ sec.label }}</span>
+              <span class="tabular-nums">{{ sec.count ?? sec.rows.length }}</span>
+            </p>
+            <button
+              v-for="row in sec.rows"
+              :key="row.key"
+              type="button"
+              role="treeitem"
+              class="flex h-8 w-full items-center gap-2 rounded-md pe-2 text-left text-ui hover:bg-muted"
+              :class="[row.depth ? 'ps-6' : 'ps-2', row.key === selected ? 'bg-muted' : '']"
+              :tabindex="row.key === tabStop ? 0 : -1"
+              :aria-level="(row.depth ?? 0) + 1"
+              :aria-expanded="row.branch ? row.branch === 'open' : undefined"
+              :aria-selected="row.key === selected"
+              :title="row.hint"
+              @click="onPick(row.key, 'select')"
+            >
+              <component
+                :is="row.branch === 'open' ? ChevronDown : ChevronRight"
+                v-if="row.branch"
+                class="size-3.5 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <span
+                v-if="row.status?.dot"
+                class="size-2 shrink-0 rounded-full"
+                :class="[dotClass(row), row.status.pulse ? 'animate-pulse' : '']"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 flex-1 truncate" :class="row.depth ? '' : 'font-medium'">{{ row.label }}</span>
+              <TriangleAlert v-if="row.mark" class="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
+              <span v-else-if="row.count !== undefined || row.meta" class="shrink-0 text-2xs text-muted-foreground tabular-nums">
+                {{ row.count ?? row.meta }}
+              </span>
+            </button>
+          </div>
+          <p v-if="!model.sections.length" class="px-2 py-3 text-ui text-muted-foreground">{{ query ? t('routines.noMatch', { q: query }) : t('routines.empty') }}</p>
         </div>
-        <!-- The Routine manager's page opens while the first read is still on its way (it says "not read yet"). -->
-        <RoutineManagerPage v-else-if="selected === 'm:routines'" :routines="status" :now="now" @select="select" />
-        <p v-else-if="!status" class="text-ui text-muted-foreground">{{ t('routines.loading') }}</p>
+      </nav>
 
-        <RoutineProposalPage v-else-if="selectedProposal" :proposal="selectedProposal" :act="act" />
-        <RoutineDetail
-          v-else-if="selectedRoutine"
-          :routine="selectedRoutine"
-          :now="now"
-          :enabled="status.enabled"
-          :store="!!status.store?.repo"
-          :act="act"
-        />
-        <p v-else class="text-ui text-muted-foreground">{{ t('routines.missingRoutine') }}</p>
+      <div class="min-w-0 flex-1 overflow-y-auto">
+        <div ref="pageEl" class="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+          <ToolsOverview
+            v-if="selected === 'overview'"
+            :babysitter="tools.babysitter"
+            :orchestrator="tools.orchestrator"
+            :instance-manager="tools.instanceManager"
+            :routines="status"
+            :now="now"
+            :loading="!loaded || tools.available === null"
+            :error="loadError ?? tools.error"
+            @select="select"
+          />
+          <BabysitterPage v-else-if="selected === 'm:babysitter'" :tools="tools" />
+          <OrchestratorPage v-else-if="selected === 'm:orchestrator'" :tools="tools" />
+          <InstanceManagerPage v-else-if="selected === 'm:instances'" :status="tools.instanceManager" :now="now" />
+
+          <div v-else-if="!status && loadError" class="flex items-center gap-2 text-ui text-destructive">
+            <TriangleAlert class="size-3.5 shrink-0" aria-hidden="true" />
+            <span class="min-w-0 flex-1">{{ t('routines.loadFailed', { reason: loadError }) }}</span>
+            <Button size="sm" variant="outline" @click="manualRefresh">{{ t('routines.retry') }}</Button>
+          </div>
+          <!-- The Routine manager's page opens while the first read is still on its way (it says "not read yet"). -->
+          <RoutineManagerPage v-else-if="selected === 'm:routines'" :routines="status" :now="now" @select="select" />
+          <p v-else-if="!status" class="text-ui text-muted-foreground">{{ t('routines.loading') }}</p>
+
+          <RoutineProposalPage v-else-if="selectedProposal" :proposal="selectedProposal" :act="act" />
+          <RoutineDetail
+            v-else-if="selectedRoutine"
+            :routine="selectedRoutine"
+            :now="now"
+            :enabled="status.enabled"
+            :store="!!status.store?.repo"
+            :act="act"
+          />
+          <p v-else class="text-ui text-muted-foreground">{{ t('routines.missingRoutine') }}</p>
+        </div>
       </div>
     </div>
   </div>
@@ -127,7 +142,7 @@
 // (visibleInterval rests while the page is hidden). The managers are read by useTools.
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, ChevronRight, RefreshCw, Search, TriangleAlert } from '@lucide/vue'
+import { ChevronDown, ChevronRight, Menu, RefreshCw, Search, TriangleAlert, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { EmbedTone, SidebarModel, SidebarRow } from '@desk/shared/hydra-embed'
@@ -165,6 +180,21 @@ const query = ref('')
 const selected = ref('overview')
 const pageEl = ref<HTMLElement | null>(null)
 const navEl = ref<HTMLElement | null>(null)
+const barEl = ref<HTMLElement | null>(null)
+
+// Under 900px the standalone column is a drawer: the bar's button opens it with focus on the row holding the tab stop;
+// a pick, Esc, its close button or a tap outside closes it, and Esc or the close button give focus back to the bar.
+const navOpen = ref(false)
+async function openNav() {
+  navOpen.value = true
+  await nextTick()
+  navEl.value?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')?.focus()
+}
+function closeNav() {
+  if (!navOpen.value) return
+  navOpen.value = false
+  barEl.value?.querySelector<HTMLElement>('button')?.focus()
+}
 
 // Folders open or closed, kept across reloads (HSwarm's tree does the same). A folder not in the map is open.
 const FOLDERS_KEY = 'routines.tab.folders'
@@ -256,6 +286,7 @@ const selectedProposal = computed<RoutineProposal | null>(() => {
 // heading takes focus, so a keyboard or screen-reader user hears what they picked.
 async function select(key: string) {
   selected.value = key
+  navOpen.value = false
   await nextTick()
   const heading = pageEl.value?.querySelector<HTMLElement>('h1, h2, [data-page-title]')
   if (heading) {
