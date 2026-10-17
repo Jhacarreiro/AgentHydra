@@ -360,7 +360,11 @@ const attentionText = computed(() => {
   return t('tools.overview.attention', { items: list })
 })
 
-const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad') ? 'text-destructive' : 'text-warning'))
+// Red when anything in it failed (a manager's read or a routine's last run); yellow only when all of it waits on the
+// owner, a routine asking for his yes (owner, 2026-10-17: yellow only for what needs him). Before, a failed routine
+// drew its red dot under a yellow line.
+const routineFailed = computed(() => props.routines?.routines.some((x) => dotTone(x.state, x.runs, x.paused).tone === 'danger') ?? false)
+const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad') || routineFailed.value ? 'text-destructive' : 'text-warning'))
 </script>
 
 <template>
@@ -375,7 +379,7 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
 
     <section aria-labelledby="tools-overview-managers" class="flex flex-col gap-2">
       <h2 id="tools-overview-managers" class="text-ui font-medium">{{ t('tools.overview.managers') }}</h2>
-      <ul role="list" class="grid gap-2 sm:grid-cols-2" :aria-busy="loading ? 'true' : undefined">
+      <ul role="list" class="grid grid-cols-1 gap-2 sm:grid-cols-2" :aria-busy="loading ? 'true' : undefined">
         <li v-for="tile in managers" :key="tile.key">
           <button
             type="button"
@@ -415,7 +419,9 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
           {{ folder.name }}
           <span class="text-2xs text-muted-foreground tabular-nums">{{ folder.cards.length }}</span>
         </h3>
-        <ul role="list" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" :aria-busy="loading ? 'true' : undefined">
+        <!-- grid-cols-1 is minmax(0, 1fr): with no column set, a phone's one column grew to the longest routine name and
+             the page scrolled sideways (493px in a 375px screen, 2026-10-17). -->
+        <ul role="list" class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3" :aria-busy="loading ? 'true' : undefined">
           <li v-for="card in folder.cards" :key="card.key" class="relative">
             <button
               type="button"

@@ -55,10 +55,11 @@ describe('the Tools sidebar, with no search', () => {
     expect(row?.meta).toBe('1 stopped')
   })
 
-  it('marks the Instance manager row warning while a recovery is moving', () => {
+  // A recovery fixes itself, so it is work under way, never the yellow that waits on the owner (owner, 2026-10-17).
+  it('marks the Instance manager row as work under way while a recovery is moving', () => {
     const moving = { ...idle, instanceManager: { ...idle.instanceManager!, recoveries: [{ state: 'moving', chats: [] }] } as unknown as InstanceManagerStatus }
     const row = rowsOf(toolsSections(moving), 'managers').find((r) => r.key === 'm:instances')
-    expect(row?.status?.tone).toBe('warning')
+    expect(row?.status?.tone).toBe('info')
   })
 })
 

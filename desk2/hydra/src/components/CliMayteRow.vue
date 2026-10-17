@@ -50,9 +50,10 @@ const { t } = useI18n()
     <span v-if="kind" class="shrink-0 rounded border px-1 text-2xs text-muted-foreground">{{ kind }}</span>
     <span class="min-w-0 flex-1 truncate text-sm">{{ title }}</span>
     <Cloud v-if="cloud" class="size-3.5 shrink-0 text-muted-foreground" :aria-label="cloud" />
+    <!-- A priority is a plain fact, so not the yellow that means a task waits on the owner (owner, 2026-10-17). -->
     <span
       v-if="priority"
-      class="shrink-0 rounded bg-muted px-1 text-2xs text-warning"
+      class="shrink-0 rounded bg-muted px-1 text-2xs text-foreground"
       :title="t('climayte.rowPriorityHint', { n: priority })"
     >{{ t('climayte.rowPriority', { n: priority }) }}</span>
     <!-- Its own hover: who judged it and what they said. A failed check on a task still
