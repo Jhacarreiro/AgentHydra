@@ -11,6 +11,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **AgentHydra's window server comes back when it dies.** If the server behind the AgentHydra window stops without being shut down, AgentHydra starts it again after 45 seconds. Quitting, Restart to update and updates are left alone, and a busy server is never touched.
 
+- **"Starting AgentHydra..." starts it again on Windows.** When the window server was down, AgentHydra's own start of it ran nothing, so that page gave up after 30 seconds. It now starts the server.
+
 - **Restarting AgentHydra no longer waits for a chat move.** A move between accounts keeps running through a restart or an update, and the restarted AgentHydra reports its result under the same operation. Restart is no longer refused while chats are being moved.
 
 - **Project dashboards come from a built-in template.** A project names its sections (stat tiles, waiting lists, grouped errors, breakdowns) and the MCP tool or HTTP endpoint that fills them in `.agenthydra/dashboard.json`, and AgentHydra draws them in its own look, reads the source itself and keeps the last numbers when it is down. No agent-built page or localhost address is needed; projects without a spec keep their page.
