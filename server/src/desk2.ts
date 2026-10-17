@@ -556,6 +556,9 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
     url,
     port,
     bun,
+    /** desk2/ beside this daemon, and Desk 2's data folder (~/.hydra-desk-2): what desk2-watch.ts reads. */
+    dir: deskDir,
+    home,
     logPath,
     healthy,
     forgetHealth,

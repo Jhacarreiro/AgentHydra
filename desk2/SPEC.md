@@ -1032,6 +1032,13 @@ when it comes back into view, then reloads onto it at once when out of sight, el
 touched for 30 s, back on the chat or screen it showed (`web/src/lib/stale-bundle.ts`, `view-memory.ts`;
 drafts are saved as they are typed).
 
+**A server that dies comes back (2026-10-17).** The server runs as `~/.hydra-desk-2/bin/AgentHydra-desk.exe`, a copy
+of bun `start.ps1` keeps current, so a chat's `taskkill /IM bun.exe` passes it by. Every deliberate stop removes
+`server.pid` (stop.ps1, so Quit, Restart to update and the updater), so a pid file whose processes are gone means the
+server died: AgentHydra's daemon (`server/src/desk2-watch.ts`, Windows) then runs `start.ps1 -NoWindow -NoDialog`,
+once health has been silent 45 s, for its own `desk2/` and a server started since this boot, at most 3 times in 10
+minutes. A server whose process still runs (busy or booting) is never touched.
+
 **Restart to update.** The server's code is not reloaded the same way, so the window asks
 `GET /api/server/update` on every hello and every minute (`server/src/plugins/60-update.ts`,
 `web/src/lib/server-update.ts`): `stale` once a `.ts` file under `server/src` or `shared/` was saved after the
