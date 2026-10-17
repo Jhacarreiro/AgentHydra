@@ -125,6 +125,10 @@ export interface ChatSummary {
   itemsStamp?: string
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
+  /** Tokens a Codex chat's thread has used so far (the token-usage events' running total); absent for Claude, whose count AgentHydra's usage route gives. */
+  tokensUsed?: number | null
+  /** The chat folder's current git branch; null outside a repository or on a detached head, absent until first read. */
+  gitBranch?: string | null
   pendingCount: number // open permission / question / plan requests
   queuedCount: number // user messages sent while a turn was running, not yet taken up
   climayteActive: number // CliMayte workers this chat dispatched that are still queued/running/waiting, and its sub-chats (seats) still at work
