@@ -21,6 +21,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -462,7 +463,9 @@ function realRoots(): string[] {
 
 type Snapshot = Map<string, string>
 
-function walk(path: string, out: Snapshot): void {
+/** Record `path` and everything under it, named as if `path` were spelled `as`. A symlink is
+ *  recorded as where it points and not followed, so the walk cannot loop. */
+function walk(path: string, out: Snapshot, as = path): void {
   let st: ReturnType<typeof lstatSync>
   try {
     st = lstatSync(path)
@@ -470,16 +473,16 @@ function walk(path: string, out: Snapshot): void {
     return
   }
   if (st.isSymbolicLink()) {
-    out.set(path, `link ${readlinkSync(path)}`)
+    out.set(as, `link ${readlinkSync(path)}`)
   } else if (st.isDirectory()) {
-    out.set(path, 'dir')
+    out.set(as, 'dir')
     let names: string[] = []
     try {
       names = readdirSync(path)
     } catch {
       return
     }
-    for (const n of names) walk(join(path, n), out)
+    for (const n of names) walk(join(path, n), out, join(as, n))
   } else {
     let sum = ''
     if (st.size <= 1_048_576) {
@@ -489,13 +492,40 @@ function walk(path: string, out: Snapshot): void {
         sum = 'unreadable'
       }
     }
-    out.set(path, `${st.size} ${st.mtimeMs} ${sum}`)
+    out.set(as, `${st.size} ${st.mtimeMs} ${sum}`)
   }
 }
 
+/** Each root is walked at its real path and recorded under its own name, so a root that is a
+ *  symlink (~/.claude linked into a dotfiles checkout, say) is compared through to its target: a
+ *  write through the link shows as a change under ~/.claude. The root's entry keeps where the link
+ *  points, so retargeting it is caught too. Roots that resolve to one folder are walked once. A
+ *  symlink inside a root is recorded, not followed: retargeting it is caught, a write through it
+ *  to a folder outside these roots is not. */
 function snapshot(): Snapshot {
   const out: Snapshot = new Map()
-  for (const r of realRoots()) walk(r, out)
+  const walked = new Set<string>()
+  for (const root of realRoots()) {
+    let real = root
+    try {
+      real = realpathSync(root)
+    } catch {
+      // missing, or a link to nothing or round a loop: walk() records what is there
+    }
+    if (!walked.has(real)) {
+      walked.add(real)
+      walk(real, out, root)
+    }
+    if (real === root) continue
+    try {
+      if (lstatSync(root).isSymbolicLink()) {
+        const target = out.get(root)
+        out.set(root, `link ${readlinkSync(root)}${target ? ` ${target}` : ''}`)
+      }
+    } catch {
+      // gone since realpath
+    }
+  }
   return out
 }
 
