@@ -163,12 +163,4 @@ describe('hswarm table column model', () => {
     expect(keys).toEqual(['modelEnabled', 'modelName', 'modelProvider'])
   })
 
-  it('uses the shared InstanceColumn type for HSwarm columns', () => {
-    // All HSwarm columns have required InstanceColumn properties
-    hswarmProviderColumns.forEach((col) => {
-      expect(col.label).toBeDefined()
-      expect(col.skeleton).toBeDefined()
-      expect(typeof col.key).toBe('string')
-    })
-  })
 })

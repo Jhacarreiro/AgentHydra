@@ -1,5 +1,5 @@
 /**
- * A chat move's toolbox run outside the daemon (orchestrator.ts MOVE_SCRIPTS): started under a
+ * A chat-moving toolbox run outside the daemon (orchestrator.ts movesChats): started under a
  * runner, read back only from files, and so carried on by the next daemon after a restart.
  *
  * ⛔ WHY (owner, 2026-10-17: each part of AgentHydra must restart on its own without blocking or

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { SessionSummary, TitleSource } from '../src/types'
 
 // scripts/screenshots/page-fixtures.js is evaluated as a browser script, not imported as a module
 // (see its own header comment) — it replaces `window.fetch` before the SPA boots. To exercise it
@@ -21,42 +22,57 @@ function loadFixtureFetch(): typeof fetch {
   return fakeWindow.fetch
 }
 
-// TitleSource, server/src/types.ts ~line 238.
-const ALLOWED_TITLE_SOURCES = ['custom', 'ai', 'store', 'envelope', 'message', 'id']
+// Every required key of a type, by name. A key is required when no `?` makes it optional; the
+// nullable ones (`T | null`) are still required properties.
+type RequiredKey<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K }[keyof T]
 
-// SessionSummary, server/src/types.ts ~lines 120-216 — every field below is required there (no `?`
-// on any of them; the nullable ones are typed `T | null`, which is still a required property). This
-// is AH-41: the fixture omitted `title_source`, session-labels.ts's i18n lookup threw on the
-// missing key, and the built UI rendered no session list at all.
-const REQUIRED_SESSION_FIELDS = [
-  'session_id',
-  'source',
-  'tool',
-  'locator',
-  'title',
-  'cwd',
-  'project',
-  'git_branch',
-  'message_count',
-  'created_at',
-  'last_activity_at',
-  'last_role',
-  'last_text_preview',
-  'size_bytes',
-  'transcript_path',
-  'queue_status',
-  'instance',
-  'archived',
-  'done',
-  'subagent_count',
-  'dispatched',
-  'limit_stop',
-  'title_source',
-  'title_tag',
-  'copy_index',
-  'copy_count',
-  'ended_because',
-] as const
+// The literals below are checked by `satisfies` under the server typecheck (tsconfig includes
+// tests): a missing key or an extra key fails the build, so the list cannot drift from the type.
+// That drift is what AH-41 was: the fixture omitted `title_source`, session-labels.ts's i18n lookup
+// threw on the missing key, and the built UI rendered no session list at all.
+const ALLOWED_TITLE_SOURCES = {
+  custom: true,
+  ai: true,
+  store: true,
+  envelope: true,
+  message: true,
+  id: true,
+} satisfies Record<TitleSource, true>
+
+// SessionSummary, server/src/types.ts.
+const REQUIRED_SESSION_FIELDS = {
+  session_id: true,
+  source: true,
+  tool: true,
+  locator: true,
+  title: true,
+  cwd: true,
+  project: true,
+  git_branch: true,
+  message_count: true,
+  created_at: true,
+  last_activity_at: true,
+  last_role: true,
+  last_text_preview: true,
+  size_bytes: true,
+  transcript_path: true,
+  queue_status: true,
+  instance: true,
+  instance_ref: true,
+  instance_num: true,
+  model: true,
+  effort: true,
+  archived: true,
+  done: true,
+  subagent_count: true,
+  dispatched: true,
+  limit_stop: true,
+  title_source: true,
+  title_tag: true,
+  copy_index: true,
+  copy_count: true,
+  ended_because: true,
+} satisfies Record<RequiredKey<SessionSummary>, true>
 
 test('every fixture session row carries every field SessionSummary requires', async () => {
   const fetchStub = loadFixtureFetch()
@@ -64,10 +80,10 @@ test('every fixture session row carries every field SessionSummary requires', as
   const sessions = (await res.json()) as Record<string, unknown>[]
   expect(sessions.length).toBeGreaterThan(0)
   for (const row of sessions) {
-    for (const field of REQUIRED_SESSION_FIELDS) {
+    for (const field of Object.keys(REQUIRED_SESSION_FIELDS)) {
       expect(row).toHaveProperty(field)
     }
-    expect(ALLOWED_TITLE_SOURCES).toContain(row.title_source as string)
+    expect(Object.keys(ALLOWED_TITLE_SOURCES)).toContain(row.title_source as string)
   }
 })
 

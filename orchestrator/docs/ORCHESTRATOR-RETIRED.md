@@ -26,8 +26,8 @@ measured delivery matrix.
 General primitives the orchestrator merely used, which stand on their own:
 
 - `/api/sessions/:id/migrate`, `import-desktop`, `desktop-archive`, `automation` - moving,
-  importing and archiving chats. `launch-terminal` survives strictly as a USER-EXPLICIT
-  primitive: since the no-console ruling (piece 7), no automated path opens a terminal.
+  importing and archiving chats. `launch-terminal` is a refusal now: since the no-console ruling
+  (piece 7), every call returns a reason, and no path, automated or user-explicit, opens a terminal.
 - `chat-dossier` (minus its joins into the orchestrator ledger tables), backed by the
   extracted `live-registry.ts`.
 - The auto-resume monitor, reduced and then re-lawed: a desktop-living thread's reset is

@@ -70,3 +70,43 @@ test('a move started by a daemon that exits finishes, and the next daemon answer
   expect(run.stdout).toContain('moved: example chat')
   expect(readFileSync(marker, 'utf8')).toBe('moved')
 }, 120_000)
+
+// WHY (2026-10-17, PR #14): `chats --move-to X --yes` moves chats too, but it was not a
+// MOVE_SCRIPTS name, so it ran as the daemon's child and died with a restart, half-way. It goes
+// under a runner now (movesChats). This is the same proof for it: the daemon exits, the run
+// finishes, and the next daemon answers its id.
+test('a chats --move-to run outlives its daemon and is answered by the next one', async () => {
+  const dir = join(ROOT, 'toolbox')
+  const marker = join(ROOT, 'marker-chats')
+
+  const daemon = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, 'fixtures', 'orchestrator-move-daemon.ts'),
+      dir,
+      marker,
+      'chats',
+      JSON.stringify(['--move-to', 'example-account', '--yes']),
+    ],
+    { env: process.env, stdout: 'pipe', stderr: 'pipe', windowsHide: true },
+  )
+  const exited = await daemon.exited
+  const id = (await new Response(daemon.stdout).text()).trim()
+  expect(exited, await new Response(daemon.stderr).text()).toBe(0)
+  expect(existsSync(`${marker}.started`)).toBe(true)
+  expect(existsSync(marker)).toBe(false)
+
+  expect(await adoptOrchestratorRuns()).toBeGreaterThanOrEqual(1)
+  expect(getOrchestratorOperation(id)?.status).toBe('running')
+
+  const until = Date.now() + 60_000
+  while (getOrchestratorOperation(id)?.status === 'running' && Date.now() < until)
+    await Bun.sleep(200)
+  const op = getOrchestratorOperation(id)
+  expect(op?.status).toBe('done')
+  const run = op?.result as OrchestratorRun
+  expect(run.exitCode).toBe(0)
+  expect(run.script).toBe('chats')
+  expect(run.stdout).toContain('moved: example chat')
+  expect(readFileSync(marker, 'utf8')).toBe('moved')
+}, 120_000)

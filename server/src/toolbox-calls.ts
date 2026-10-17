@@ -1,5 +1,5 @@
 /**
- * The daemon calls a chat move makes while it runs under a runner (orchestrator.ts MOVE_SCRIPTS), and
+ * The daemon calls a chat move makes while it runs under a runner (orchestrator.ts movesChats), and
  * the restart's hold on them.
  *
  * A move outlives a daemon restart, but each of its steps is a call into the daemon (import the chat,

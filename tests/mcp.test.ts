@@ -1,6 +1,7 @@
 // MCP stdio server tests — engine handshake, tool catalog, and a tool call against a stubbed
 // HTTP backend (no live daemon required). Modeled on RepoYeti's tests/mcp.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { NO_HEADLESS_REASON } from '../server/src/headless-policy'
 import {
   daemonBase,
   SERVER_INFO,
@@ -187,8 +188,12 @@ describe('tools/call', () => {
     expect(calls[0]!.url).toBe(`${daemonBase()}/api/sessions?limit=5`)
   })
 
-  test('add_queue_item POSTs the body to /api/queue', async () => {
-    stubResponse = { id: 'q1', title: 'Test run' }
+  test('add_queue_item POSTs the body to /api/queue and surfaces the daemon refusal', async () => {
+    // Client wiring only: the route's refusal is tested at the route (queue-patch-guard.test.ts).
+    // The daemon answers every queue add 409 no-headless, so the MCP tool must report isError.
+    stubOk = false
+    stubStatus = 409
+    stubResponse = { error: NO_HEADLESS_REASON }
     const args = { title: 'Test run', cwd: 'D:\\some\\repo', prompt: 'do the thing' }
     const res = (await handleRpc(
       {
@@ -200,12 +205,11 @@ describe('tools/call', () => {
       ctx,
     )) as { result: { content: Array<{ text: string }>; isError?: boolean } }
 
-    expect(res.result.isError).toBeUndefined()
+    expect(res.result.isError).toBe(true)
+    expect(res.result.content[0]!.text).toContain('no-headless')
     expect(calls[0]!.url).toBe(`${daemonBase()}/api/queue`)
     expect(calls[0]!.init?.method).toBe('POST')
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual(args)
-    const payload = JSON.parse(res.result.content[0]!.text) as { id: string }
-    expect(payload.id).toBe('q1')
   })
 
   test('a non-ok HTTP response comes back as an MCP isError result', async () => {

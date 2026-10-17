@@ -30,7 +30,7 @@ import { useSessionTasks } from '@/components/tasks/session'
 import { holdPeek } from '@/components/session-header/state'
 import { ah } from '@/components/session-header/ah'
 import { formatCompact, usageDetail, usageSummary, type AhUsage } from '@/components/session-header/logic'
-import { cachedConnectors, keepConnectors, keepRailFacts, railFacts } from './rail-cache'
+import { cachedConnectors, indexFacts, keepConnectors, keepRailFacts, railFacts, type IndexFacts } from './rail-cache'
 import RailCard from './RailCard.vue'
 import DelegationPanel from './DelegationPanel.vue'
 import { delegationStats, type DelegationService, type ServiceStats } from './delegation'
@@ -99,10 +99,21 @@ const account = computed(() => {
 const model = computed(() => (props.chat ? `${modelName(props.chat.model)} · ${effortLabel(props.chat.effort)}` : ''))
 const revealFolder = () => props.chat && void src.revealFolder(props.chat.cwd).catch(() => {}) // floor-ok: a folder gone since leaves the row as it is
 const cost = computed(() => (props.chat && props.chat.costUsd > 0 ? `$${props.chat.costUsd.toFixed(2)} spent` : ''))
+// The index's numbers, and until the index arrives the ones last seen for the session (rail-cache.ts): the context, active time,
+// tool tally and an outside Codex thread's tokens came in only with the index, a moment after a chat's first visit since the
+// window opened (owner, 2026-10-17: the rail's cards "pop in slowly").
+const shownIndex = computed<IndexFacts | null>(() => (props.index ? indexFacts(props.index) : props.sessionId ? (railFacts(props.sessionId)?.index ?? null) : null))
+watch(
+  () => props.index,
+  (i) => {
+    if (i && props.sessionId) keepRailFacts(props.sessionId, { index: indexFacts(i) })
+  },
+  { immediate: true }
+)
 // An outside session's context is its last reply's tokens (the index's), a share only where its file names the window (a Codex
 // rollout does; a Claude Code .jsonl never does, so that one shows the tokens alone).
-const outsideContext = computed(() => (props.outside && props.index?.contextTokens ? props.index.contextTokens : null))
-const outsideWindow = computed(() => (outsideContext.value !== null && props.index?.contextWindow ? props.index.contextWindow : null))
+const outsideContext = computed(() => (props.outside && shownIndex.value?.contextTokens ? shownIndex.value.contextTokens : null))
+const outsideWindow = computed(() => (outsideContext.value !== null && shownIndex.value?.contextWindow ? shownIndex.value.contextWindow : null))
 const context = computed(() => {
   if (!props.outside) return props.chat?.contextPct == null ? null : Math.round(props.chat.contextPct)
   return outsideWindow.value === null ? null : Math.min(100, Math.round((outsideContext.value! / outsideWindow.value) * 100))
@@ -114,7 +125,7 @@ const contextSummary = computed(() =>
 )
 
 // Active: how long the session was working over its whole transcript (the index's activeMs), not the time since it began.
-const activeText = computed(() => (props.index?.activeMs ? `${formatElapsed(props.index.activeMs)} active` : null))
+const activeText = computed(() => (shownIndex.value?.activeMs ? `${formatElapsed(shownIndex.value.activeMs)} active` : null))
 const ACTIVE_TIP = `Time this chat spent working: each turn from its prompt to its last step, its tools' runs included. A wait of over ${IDLE_GAP_MS / 60_000} minutes with nothing running (on you, a permission or a background task) is left out.`
 
 // A Desk chat's tokens: AgentHydra's count over its session, the HSwarm and CliMayte work it handed off included (an
@@ -147,7 +158,7 @@ watch(
 // An outside Codex session's comes from its rollout's running total (the index's sessionTokens): the daemon's usage route
 // answers Codex "source-unsupported", so its header shows no tokens.
 const codexTokens = computed(() => {
-  if (props.outside) return props.index?.sessionTokens ?? null
+  if (props.outside) return shownIndex.value?.sessionTokens ?? null
   return isCodex.value && props.chat?.tokensUsed ? props.chat.tokensUsed : null
 })
 const deskUsageText = computed(() => (codexTokens.value !== null ? `${formatCompact(codexTokens.value)} tokens` : deskSession.value ? usageSummary(deskUsage.value) : null))
@@ -162,7 +173,10 @@ const todosDone = computed(() => todos.value?.filter((t) => t.status === 'comple
 // Tools: how often the session called each tool, the most first, so a tool called far more than the rest shows (owner,
 // 2026-10-14: "if I see you access, like, two tools a billion times, maybe I would ask if there was ... a better way"). Over
 // the whole transcript (the index's) while the window holds only its newest part, else counted from the items, which are newer.
-const tally = computed<ToolTally[]>(() => (props.index?.tools && props.index.total > props.items.length ? props.index.tools : tallyTools(props.items)))
+const tally = computed<ToolTally[]>(() => {
+  const i = shownIndex.value
+  return i?.tools && i.total > props.items.length ? i.tools : tallyTools(props.items)
+})
 const TOOLS_SHOWN = 5
 const toolsOpen = ref(false)
 const toolsShown = computed(() => (toolsOpen.value ? tally.value : tally.value.slice(0, TOOLS_SHOWN)))

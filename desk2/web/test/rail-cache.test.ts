@@ -1,9 +1,10 @@
 // The rail's cache: a revisit finds the last-seen numbers at once, the least recently used session goes first past the bound,
 // and a reload (a fresh memory over the same storage) finds them too.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { RAIL_KEPT, cachedConnectors, keepConnectors, keepRailFacts, railFacts, resetRailCache } from '@/components/rail/rail-cache'
+import { RAIL_KEPT, cachedConnectors, indexFacts, keepConnectors, keepRailFacts, railFacts, resetRailCache } from '@/components/rail/rail-cache'
 import type { AhUsage } from '@/components/session-header/logic'
 import type { ConnectorView } from '@shared/connectors'
+import type { TranscriptIndex, TranscriptItem } from '@shared/protocol'
 
 const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 const store = new Map<string, string>()
@@ -38,6 +39,31 @@ test('a kept value is there on the next visit, and survives a reload', () => {
   reload()
   expect(railFacts('s1')?.usage?.tokens.total).toBe(5)
   expect(cachedConnectors()?.[0]?.name).toBe('Example')
+})
+
+test("an index's numbers and tool names are kept over a reload, and none of its text", () => {
+  const prompt = 'an example prompt that must stay out of storage'
+  const todo: TranscriptItem = { kind: 'todos', id: 't', todos: [{ content: 'an example to-do', status: 'pending' }] } as unknown as TranscriptItem
+  const index: TranscriptIndex = {
+    total: 40,
+    userMessages: [{ id: 'u1', position: 0, firstLine: prompt, images: 0 }],
+    latestTodos: todo,
+    runningTasks: [todo],
+    recentTasks: [todo],
+    lastUserText: prompt,
+    contextTokens: 84_300,
+    contextWindow: 258_400,
+    sessionTokens: 995_000,
+    sessionTurns: 124,
+    activeMs: 60_000,
+    tools: [{ name: 'Read', calls: 12, errors: 1 }],
+  }
+  keepRailFacts('s1', { index: indexFacts(index) })
+  reload()
+  expect(railFacts('s1')?.index).toEqual({ total: 40, contextTokens: 84_300, contextWindow: 258_400, sessionTokens: 995_000, sessionTurns: 124, activeMs: 60_000, tools: [{ name: 'Read', calls: 12, errors: 1 }] })
+  const stored = [...store.values()].join('')
+  expect(stored).not.toContain('example prompt')
+  expect(stored).not.toContain('example to-do')
 })
 
 test('past the bound the least recently used session is dropped', () => {

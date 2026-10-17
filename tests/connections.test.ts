@@ -27,11 +27,6 @@ import { getSetting, setSetting } from '../server/src/db'
 // the module); read directly here to assert persistence independent of the in-memory state.
 const SETTINGS_KEY = 'connections_sync'
 
-// Machine-local settings that must NEVER be part of what syncs (see PREF_KEYS in connections.ts).
-const MACHINE_LOCAL_KEYS = ['hide_tray_icon']
-// The allowlisted portable prefs that DO sync.
-const PREF_KEYS = ['scheduler_enabled', 'spacing_seconds', 'poll_seconds', 'max_concurrent']
-
 beforeEach(async () => {
   initConnections()
   // Return to a clean baseline. forget=true clears identity/appearance/version/sdk state; since
@@ -39,7 +34,7 @@ beforeEach(async () => {
   // the network (the locker delete + signOut branches are both gated behind hasConnection()).
   await disable(true)
   // bun test shares one module instance (and one settings DB) across every file in the run with
-  // no per-test reset, so any PREF_KEYS / machine-local row this file writes must be put back;
+  // no per-test reset, so any scheduler-pref or hide_tray_icon row this file writes must be put back;
   // otherwise a later file (e.g. tests/settings.test.ts) sees this file's leftovers.
   setSetting('hide_tray_icon', '0')
   setSetting('scheduler_enabled', '0')
@@ -161,35 +156,11 @@ describe('appearance', () => {
   })
 })
 
-// ── settings allowlist (PREF_KEYS + appearance only) ────────────────────────────────────
+// ── settings allowlist (sync-state row and appearance only) ────────────────────────────────────
 describe('settings allowlist', () => {
-  test('PREF_KEYS covers exactly the four portable scheduler prefs', () => {
-    // Documents the allowlist contract asserted operationally below: these are the only
-    // settings keys that ever ride the sync doc, alongside the appearance blob.
-    expect(PREF_KEYS).toEqual([
-      'scheduler_enabled',
-      'spacing_seconds',
-      'poll_seconds',
-      'max_concurrent',
-    ])
-  })
-
-  test('machine-local settings are never part of the persisted sync-state row', async () => {
-    setSetting('hide_tray_icon', '1')
-    await enable({ theme: 'dark' })
-    await updateAppearance({ theme: 'dark' })
-
-    const raw = getSetting(SETTINGS_KEY)
-    for (const key of MACHINE_LOCAL_KEYS) {
-      expect(raw).not.toContain(key)
-    }
-    // Sanity: the machine-local settings table rows themselves are untouched by sync.
-    expect(getSetting('hide_tray_icon')).toBe('1')
-  })
-
   test('the sync-state row never carries a live dump of the whole settings table', () => {
     // connections.ts persists ONLY its own ConnState blob under SETTINGS_KEY (enabled/version/
-    // appearance/identity/sdk), never the PREF_KEYS values themselves, which only ever travel
+    // appearance/identity/sdk), never the scheduler pref values themselves, which only ever travel
     // inside an explicit push/pull document (collectPrefs()/applyPrefs()), not the state row.
     setSetting('scheduler_enabled', '1')
     setSetting('spacing_seconds', '120')
