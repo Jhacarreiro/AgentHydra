@@ -43,6 +43,7 @@ export interface FreeInstance {
   provider: Provider
   name: string
   loggedIn: boolean
+  poolState?: 'pending' | 'retired'
   usage: FreeUsage | null
   lastActiveAt?: number | null
 }
@@ -398,6 +399,7 @@ export function eligibleAccounts(
   return instances.filter(
     (i) =>
       i.loggedIn &&
+      !i.poolState &&
       (!want.provider || i.provider === want.provider) &&
       (want.account == null
         ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id) && !providerDown(i.provider)
@@ -689,6 +691,15 @@ async function accountFor(
       Object.assign(it.s, {
         state: 'failed',
         error: `No Free thread has chat_id ${it.task.chat_id}${reason} (free_threads lists them).`,
+      })
+      return undefined
+    }
+    if (account.poolState === 'pending') return undefined
+    if (account.poolState === 'retired') {
+      Object.assign(it.s, {
+        state: 'failed',
+        error:
+          'This chat’s Free account was retired from the active pool. Renew it before continuing.',
       })
       return undefined
     }

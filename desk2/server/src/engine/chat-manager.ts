@@ -430,7 +430,7 @@ export class ChatManager {
   /** ChatGPT runs on the signed-in Free ChatGPT accounts. */
   private chatgptService(): ChatServiceInfo {
     const free = this.free()
-    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn).length : 0
+    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn && !i.poolState).length : 0
     const why = !free ? 'ChatGPT needs Free instances, which are not running in this Desk.' : accounts ? null : 'No ChatGPT account is signed in. Sign one in on the Free page.'
     return { kind: 'chatgpt', label: SERVICE_LABEL.chatgpt, ready: !why, accounts, ...(why ? { why } : {}) }
   }

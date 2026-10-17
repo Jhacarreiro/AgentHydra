@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
 - **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
 - **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
 
