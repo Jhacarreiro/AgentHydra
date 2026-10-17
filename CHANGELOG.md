@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **ChatGPT Free sends no longer stop working after the browser service goes idle.** On Windows the background browser could get stuck while shutting down, and every ChatGPT send then failed after about 25 seconds until it was killed by hand. It now always finishes shutting down, and a failed send says why instead of only "interrupted".
+
 - **A central routine can run on every computer at once.** `"eachRunner": true` in a routine document makes every runner carrying its `runsOn` labels run its own copy over its own data, unclaimed and of any kind, status routines included. It is signed with the rest of the document, and a Desk older than this lists such a document as broken rather than running it.
 
 - **Rejected and cleared logins no longer look available.** Empty CLI and decrypted Desktop credentials report signed out. An explicit authentication rejection marks only the unchanged CLI or Codex login it checked; network failures and verification refusals do not mark accounts dead.

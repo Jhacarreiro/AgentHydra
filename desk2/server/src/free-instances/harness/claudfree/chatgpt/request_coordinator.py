@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 from ..errors import ClaudeError
 from ..registry import chat_lock
 from .api import ChatGPTClient
-from .browser_pool import MAX_FRAME as BROKER_FRAME
+from .browser_pool import MAX_FRAME as BROKER_FRAME, close_server
 from .browser_request import adopt_cookies
 from .browser_slots import browser_slot
 from .http import ChatGPTHttp
@@ -507,11 +507,12 @@ async def serve(directory, version, root, python, browser_endpoint, *, cache_dir
             temporary.write_text(json.dumps({'port': port, 'token': coordinator.token, 'version': version, 'pid': os.getpid()}), encoding='utf-8')
             temporary.chmod(0o600)
             temporary.replace(endpoint)
-            async with server:
-                while coordinator.active or coordinator.leases.quarantined or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
-                    await asyncio.sleep(1)
+            while coordinator.active or coordinator.leases.quarantined or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
+                await asyncio.sleep(1)
         finally:
             endpoint.unlink(missing_ok=True)
+            # Bounded: an unbounded wait_closed() held the browser pool's owner lock forever (close_server).
+            await close_server(server)
             owner.assert_idle()
 
 

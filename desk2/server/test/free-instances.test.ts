@@ -528,6 +528,15 @@ describe('Free jobs and routes', () => {
     expect(service.threads()[0]?.status).toBe('failed')
     expect(calls).toBe(1)
   })
+  test("a runner failure's cause reaches the result and the thread, not only 'interrupted'", async () => {
+    // 2026-10-17: every ChatGPT send failed with a bare "interrupted" while the runner threw browser_pool_unavailable.
+    const { service, op } = fixture(async () => { throw new Error('browser_pool_unavailable') })
+    const job = service.start(op({ command: 'resume', chatId: CHAT, prompt: 'Example prompt' }))
+    for (let i = 0; i < 50 && !job.result; i++) await tick()
+    expect(job.result?.error?.code).toBe('operation_interrupted')
+    expect(job.result?.error?.message).toContain('browser_pool_unavailable')
+    expect(service.threads()[0]?.error).toContain('browser_pool_unavailable')
+  })
   test('log out runs the harness forget for that account, keeps it signed in when forget fails, and is refused while an operation runs', async () => {
     let release: (value: RunOutput) => void = () => {}
     const forgets: FreeRunRequest[] = []

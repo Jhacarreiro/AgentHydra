@@ -2,13 +2,18 @@
 
 import asyncio
 import json
+from pathlib import Path
+import socket
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
-from claudfree.chatgpt.browser_pool import MAX_FRAME, ContextBrowser, Pool
+from claudfree.chatgpt.browser_pool import MAX_FRAME, ContextBrowser, Pool, serve
 from claudfree.errors import ClaudeError
+from claudfree.registry import chat_lock
 
 
 def fixture():
@@ -355,6 +360,53 @@ class PoolGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(request_id, pool.seen)
         browser.create_context.assert_not_awaited()
         browser.stop.assert_not_awaited()
+
+
+def ping(port, token):
+    with socket.create_connection(('127.0.0.1', port), timeout=5) as connection:
+        connection.sendall((json.dumps({'op': 'ping', 'token': token}) + '\n').encode())
+        with connection.makefile('rb') as stream:
+            return json.loads(stream.readline())
+
+
+@unittest.skipUnless(sys.platform == 'win32', "the proactor transport that can fail to detach a connection is Windows'")
+class IdleExitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_exit_frees_endpoint_and_owner_lock_when_a_connection_never_detaches(self):
+        # 2026-10-17: two live brokers sat in Server.wait_closed() for hours, each with served
+        # connections whose shutdown() had raised, so CPython never detached them. Their owner lock
+        # and dead endpoint.json stopped every new broker, and every ChatGPT send failed at 25 s.
+        browser = SimpleNamespace(stopped=False, stop=AsyncMock())
+        zendriver = SimpleNamespace(start=AsyncMock(return_value=browser), cdp=SimpleNamespace())
+        served_port = None
+        real_shutdown = socket.socket.shutdown
+
+        def shutdown(sock, how):
+            if served_port is not None and sock.getsockname()[1] == served_port:
+                raise OSError(10057, 'The socket is not connected')
+            return real_shutdown(sock, how)
+
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            endpoint = directory / 'endpoint.json'
+            with patch.dict(sys.modules, {'zendriver': zendriver}), patch.object(socket.socket, 'shutdown', shutdown):
+                served = asyncio.create_task(serve(directory, 'fixture-version', idle_seconds=2))
+                for _ in range(200):
+                    if endpoint.exists() or served.done():
+                        break
+                    await asyncio.sleep(0.05)
+                info = json.loads(endpoint.read_text(encoding='utf-8'))
+                served_port = info['port']
+                self.assertTrue((await asyncio.to_thread(ping, served_port, info['token']))['ok'])
+                try:
+                    await asyncio.wait_for(asyncio.shield(served), 15)
+                except TimeoutError:
+                    served.cancel()
+                    await asyncio.gather(served, return_exceptions=True)
+                    self.fail('The idle broker never exited, so its owner lock and endpoint stayed taken.')
+            self.assertFalse(endpoint.exists())
+            with chat_lock(directory, 'owner'):
+                pass
+            browser.stop.assert_awaited_once()
 
 
 if __name__ == '__main__':

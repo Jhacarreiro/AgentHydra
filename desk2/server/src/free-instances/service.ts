@@ -687,8 +687,12 @@ export class FreeInstances {
       // finally saves the result together with its stats. Serializing here too
       // copied the entire history twice with no asynchronous work in between.
       spent = this.apply(r, job.result, false)
-    } catch {
-      job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
+    } catch (error) {
+      // The cause rides in the message: dropped, every ChatGPT send read only "interrupted" for an hour while the
+      // runner threw browser_pool_unavailable (2026-10-17). Only a leading code is carried ('browser_pool_unavailable',
+      // 'request_coordinator_unavailable: ...'), never the rest of a message, which could hold anything.
+      const cause = error instanceof Error ? /^[a-z][a-z0-9_]{2,63}(?=:|$)/.exec(error.message)?.[0] : undefined
+      job.result = failure('operation_interrupted', `The operation was interrupted${cause ? ` (${cause})` : ''}. Refresh the chat list and read the chat before sending again.`, r.chatId)
       // finally persists this recovery state together with the completed job's accounting.
       this.noteThread(r, 'failed', r.chatId, job.result.error!.message)
     } finally {
