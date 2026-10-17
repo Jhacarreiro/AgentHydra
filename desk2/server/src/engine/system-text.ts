@@ -230,6 +230,8 @@ export function taskItemFrom(n: TaskNotice, prev: TaskItem | undefined, ts: numb
 
 /** A program's message typed in as a user turn: `[AgentHydra · CliMayte] Not from the user. Ping 3, ...`. */
 const NOTE = /^\s*\[([^\]\n]{1,80})\]\s+Not from the user\.?[ \t]*\n?/
+/** The Urgency Advisor's nudge, delivered on the owner's behalf: `[Urgency Advisor · Duke] Sent on the owner's behalf.` then the nudge. */
+const ADVISOR = /^\s*\[Urgency Advisor · ([^\]\n]{1,60})\] Sent on the owner's behalf\.[ \t]*\n?/
 /** AgentHydra's preface of a held message the person sent now (its SENT_NOW_PREFIX, Send now on a CliMayte chat). */
 const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/
 /** AgentHydra's preface of an urgent message (its URGENT_PREFIX): Send now through an AgentHydra without deliver-now. */
@@ -238,7 +240,9 @@ const URGENT = /^\s*AgentHydra stopped your previous turn mid-step to deliver th
 const NAMED_LINE = /^[ \t]*\[(Image|File): source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
 
 /** Who sent a note and what it says; null when the text is the person's. */
-export function noteOf(text: string): { from: string; text: string } | null {
+export function noteOf(text: string): { from: string; text: string; advisor?: true } | null {
+  const a = ADVISOR.exec(text)
+  if (a) return { from: a[1].trim(), text: text.slice(a[0].length).trim(), advisor: true }
   const m = NOTE.exec(text)
   return m ? { from: m[1].trim(), text: text.slice(m[0].length).trim() } : null
 }
@@ -283,6 +287,36 @@ export function continuationOf(text: string): { said: string | null; messages: s
 }
 
 /**
+ * A user text that is exactly a stream-json user line, as a relaunched chat's prompt file was saved before
+ * the launch fix, read as the text it carries (again and again, for a file nested by several relaunches).
+ */
+export function unwrapEnvelope(text: string): string {
+  let out = text
+  for (let inner = envelopeText(out.trim()); inner !== null; inner = envelopeText(out.trim())) out = inner
+  return out
+}
+
+function envelopeText(text: string): string | null {
+  if (!text.startsWith('{')) return null
+  let line: { type?: unknown; message?: { content?: unknown } }
+  try {
+    line = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (line?.type !== 'user') return null
+  const content = line.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  return content.map((b) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('')
+}
+
+function unwrapped(raw: UserItem): UserItem {
+  const text = unwrapEnvelope(raw.text)
+  return text === raw.text ? raw : { ...raw, text }
+}
+
+/**
  * The prompts AgentHydra goes on with a CliMayte worker's own session by (server/src/climayte-lib.ts HANDOFF_PROMPT,
  * PAUSED_PROMPT, INTERRUPTED_PROMPT, TRANSIENT_PROMPT), each with the muted line it is shown as. A move has none:
  * CliMayte's move line ("CliMayte moved this chat from #88 to #83.") already says it. 2026-10-05, owner: "Why am I
@@ -313,7 +347,8 @@ const SENT_BACK = /^(?:The orchestrator checked your result and it did not pass\
  * resume prompts as a muted line, or nothing after a move; else the person's, with its named-file lines shown
  * as withNamedFiles does.
  */
-export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem | null {
+export function userTurn(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem | null {
+  const raw = unwrapped(item)
   const plain = raw.text.trim()
   if (RESUMED.has(plain)) {
     const line = RESUMED.get(plain)
@@ -341,7 +376,7 @@ function personTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): U
   const note = noteOf(item.text)
   if (note) {
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
-    return { ...rest, kind: 'note', from: note.from, text: note.text }
+    return { ...rest, kind: 'note', from: note.from, text: note.text, ...(note.advisor && { advisor: true as const }) }
   }
   return withNamedFiles(item, media)
 }
@@ -393,9 +428,9 @@ export function withoutNamedLines(text: string): string {
  * messages between two notes (several stay the list they were sent as, one is shown as written). Null when the list
  * holds no note. A ping squashes everything it quotes to one line, so no note holds `\n- ` and the list splits there.
  */
-function carriedEntries(text: string): Array<{ from: string; text: string } | string> | null {
+function carriedEntries(text: string): Array<NonNullable<ReturnType<typeof noteOf>> | string> | null {
   if (!text.startsWith('- ')) return null
-  const out: Array<{ from: string; text: string } | string[]> = []
+  const out: Array<NonNullable<ReturnType<typeof noteOf>> | string[]> = []
   for (const piece of text.slice(2).split('\n- ')) {
     const note = noteOf(piece)
     const last = out.at(-1)
@@ -413,7 +448,8 @@ function carriedEntries(text: string): Array<{ from: string; text: string } | st
  * turn's id. 2026-10-07, owner: "Why the heck do my agents keep getting sent physical texts? As if I sent them but
  * I didn't."
  */
-export function userTurns(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+export function userTurns(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+  const raw = unwrapped(item)
   // A pinned chat's first turn on a service that had not seen it (Pin service): his message, and one muted line
   // for the handoff it carried.
   const answer = raw.text.startsWith(PIN_INTRO) ? raw.text.indexOf(ANSWER_NOW) : -1
@@ -432,7 +468,7 @@ export function userTurns(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | nu
   let pictures = images
   return entries.map((e, i): UserItem | NoteItem => {
     const id = i ? `${turn.id}:carried:${i}` : turn.id
-    if (typeof e !== 'string') return { ...rest, id, kind: 'note', from: e.from, text: e.text }
+    if (typeof e !== 'string') return { ...rest, id, kind: 'note', from: e.from, text: e.text, ...('advisor' in e && e.advisor && { advisor: true as const }) }
     const said: UserItem = { ...turn, id, text: e }
     // The pictures named in the person's messages go with the first of them.
     if (pictures?.length) said.images = pictures

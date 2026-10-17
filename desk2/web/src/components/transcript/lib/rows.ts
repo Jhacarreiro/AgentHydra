@@ -49,6 +49,7 @@ function guessHeight(it: TranscriptItem): number {
     case 'assistant_text':
       return 32 + 22 * Math.min(60, Math.ceil(it.text.length / 95) + (it.text.match(/\n/g)?.length ?? 0) / 2) + (it.media?.length ? 240 : 0)
     case 'note':
+      return it.advisor ? 52 + 20 * Math.min(20, Math.floor(it.text.length / 90)) : 30
     case 'thinking':
     case 'tool_use':
     case 'system':

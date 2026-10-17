@@ -28,6 +28,13 @@ const pingItems: TranscriptItem[] = [
   { id: 'gr', ts: Date.now(), kind: 'assistant_text', text: 'Two results are in and one task still runs.' },
 ]
 
+// The Urgency Advisor's nudge, on the owner's side in dark orange, between the owner's message and a reply.
+const advisorItems: TranscriptItem[] = [
+  { id: 'au', ts: Date.now() - 300_000, kind: 'user', text: 'Please draft the quarterly summary and check the totals.' },
+  { id: 'aa', ts: Date.now() - 290_000, kind: 'assistant_text', text: 'Started. The draft has three sections so far.' },
+  { id: 'an', ts: Date.now() - 60_000, kind: 'note', from: 'Duke', advisor: true, text: 'This has run a while. Wrap up the totals first, then send what you have.' },
+  { id: 'ar', ts: Date.now(), kind: 'assistant_text', text: 'Understood. The totals are checked and the summary goes out next.' },
+]
 // Browser cards: one saved browser's calls around a command row are one card ("4 calls"), its picture an invented page
 // drawn here; a second chat's card has no picture (no full-screen button). The chats have a folder, so the gallery can
 // fire BROWSER_CLOSED_EVENT for BROWSER_CWD to show Closed.
@@ -197,6 +204,12 @@ onMounted(async () => {
       <h3 class="mb-2 text-ui text-text-muted">A program's note (an AgentHydra ping), closed</h3>
       <div class="h-65 overflow-hidden rounded-lg border border-border" data-gallery-note>
         <TranscriptView chat-id="gallery-note" :items="pingItems" :chat="null" />
+      </div>
+    </div>
+    <div>
+      <h3 class="mb-2 text-ui text-text-muted">The Urgency Advisor's nudge, on the owner's behalf</h3>
+      <div class="h-100 overflow-hidden rounded-lg border border-border" data-gallery-advisor>
+        <TranscriptView chat-id="gallery-advisor" :items="advisorItems" :chat="null" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
