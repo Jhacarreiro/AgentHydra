@@ -99,6 +99,10 @@ Quit is as quick as before; while its `requires` file is absent, Quit stops only
 opening anything, and exits quietly when the tray is already running. It is for an app's own window
 launcher, which starts the tray beside the window it is opening anyway.
 
+**The tooltip names the running version** when the app's `/api/health` carries `version` (and
+`distribution`), read from the watchdog's own probe, so it costs no extra request. Without a version
+it is the plain name. In Safe Mode it is `<name> (Safe Mode)`, or `<name> <version> (Safe Mode)` with a version: Safe Mode takes the distribution's place.
+
 ## What the watchdog writes to `misc/Tray.log`
 
 Every 5 s the health tick probes `/api/health`. Three silent probes in a row count as a death, and
