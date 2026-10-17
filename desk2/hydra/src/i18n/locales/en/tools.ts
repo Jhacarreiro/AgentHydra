@@ -19,7 +19,13 @@ export default {
     routines: 'Routines',
   },
   managers: {
-    settings: 'Settings',
+    // The switches on the manager pages are Desk's settings, read through useDeskSettings.ts.
+    switch: {
+      babysitter: 'Turn on the babysitter: it continues the chats a usage limit stopped, once the limit resets',
+      orchestrator: 'Turn on the orchestrator: it continues the chats an error stopped and peeks at running ones',
+      instanceManager: 'Turn on the instance manager: it moves the chats of an app that went down to an account with room',
+      saveError: 'Could not save it: {reason}',
+    },
     on: 'On',
     off: 'Off',
     lastLook: 'Last look',
@@ -93,6 +99,18 @@ export default {
         'gave-up': 'gave up',
         nudged: 'nudged',
         flagged: 'flagged',
+      },
+      model: {
+        label: 'Model',
+        opus: 'Opus (newest)',
+        sonnet: 'Sonnet (newest)',
+        haiku: 'Haiku (newest)',
+        custom: 'Custom id',
+        customAria: 'Custom model id',
+        idPlaceholder: 'claude-opus-5-5',
+        typeId: 'Type a full model id, such as claude-opus-5-5.',
+        runs: 'Runs {id}',
+        alias: 'Alias {alias}: the model it resolves to shows after the first judgment.',
       },
     },
     instances: {

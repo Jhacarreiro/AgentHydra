@@ -1,19 +1,31 @@
 <script setup lang="ts">
-// The Babysitter's page (read-only): what GET /api/babysitter answers, the chats a usage limit stopped and what it did.
-import { computed } from 'vue'
+// The Babysitter's page: what GET /api/babysitter answers, the chats a usage limit stopped and what it did. Its on/off
+// switch is Desk's `babysitter` setting (useDeskSettings.ts).
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useDeskSettings } from '@/composables/useDeskSettings'
 import type { Tools } from '@/composables/useTools'
 import { timeAgo } from '@/lib/format'
-import { EMBEDDED, openSettingsInDesk } from '@/lib/desk-embed'
+import { EMBEDDED } from '@/lib/desk-embed'
 import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, babysitterActDot, babysitterChatDot, babysitterDot } from '@/lib/managers'
 
 const props = defineProps<{ tools: Tools }>()
 const { t } = useI18n()
 
 const s = computed(() => props.tools.babysitter)
+
+// Desk's setting: the switch shows only inside Desk (EMBEDDED) where Desk's settings route answers.
+const desk = useDeskSettings()
+const saveError = ref<string | null>(null)
+const showSwitch = computed(() => EMBEDDED && desk.available === true)
+onMounted(() => void desk.refresh())
+async function setOn(on: boolean) {
+  saveError.value = await desk.save({ babysitter: on })
+  void props.tools.refresh()
+}
 // The stopped count takes the Babysitter's own colour while any chat is stopped (amber waiting, red needs a person).
 const stoppedClass = computed(() => {
   const dot = babysitterDot(s.value)
@@ -31,14 +43,22 @@ const resetText = (ms: number | null) => (ms == null ? t('tools.managers.babysit
         <span v-if="s" class="rounded-md border px-1.5 py-0.5 text-xs" :class="s.enabled ? 'text-success' : 'text-muted-foreground'">
           {{ s.enabled ? t('tools.managers.on') : t('tools.managers.off') }}
         </span>
-        <Button v-if="EMBEDDED" size="sm" variant="outline" class="ms-auto" @click="openSettingsInDesk('managers')">
-          {{ t('tools.managers.settings') }}
-        </Button>
+        <Switch
+          v-if="showSwitch"
+          size="sm"
+          class="ms-auto"
+          :model-value="desk.settings?.babysitter ?? false"
+          :disabled="desk.saving"
+          :aria-label="t('tools.managers.switch.babysitter')"
+          :title="t('tools.managers.switch.babysitter')"
+          @update:model-value="setOn"
+        />
       </div>
       <CardDescription>{{ t('tools.managers.babysitter.caption') }}</CardDescription>
     </CardHeader>
     <CardContent stack="sm">
       <p v-if="tools.error" class="text-xs text-destructive">{{ t('tools.managers.readError', { error: tools.error }) }}</p>
+      <p v-if="saveError" class="text-xs text-destructive">{{ t('tools.managers.switch.saveError', { reason: saveError }) }}</p>
       <p v-if="s?.error" class="text-xs text-destructive">{{ s.error }}</p>
       <p v-if="!s" class="text-sm text-muted-foreground">{{ t('tools.managers.nothingYet') }}</p>
 

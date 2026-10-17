@@ -58,6 +58,8 @@ export const overview = {
     runs: 'runs',
     okOfLast: 'ok of last {n}',
     name: '{name}, {state}. Last run {last}. Next run {next}.',
+    pauseSwitch: 'Pause {name}',
+    resumeSwitch: 'Resume {name}',
     proposalName: '{name}, {state}.',
   },
 }

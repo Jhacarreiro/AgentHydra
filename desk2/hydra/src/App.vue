@@ -139,7 +139,7 @@ watch(
   },
   { flush: 'sync' },
 )
-// Desk's Settings > Managers asked for the Tools tab (ToolsView takes the ask and selects its page).
+// Desk asked for the Tools tab: its Settings' Managers link (ToolsView takes the ask and selects its page).
 watch(toolsAsk, (ask) => { if (ask) view.value = 'tools' }, { flush: 'sync' })
 // Desk's session header asked for an account's row in Instances: its kind is drawn again if it was left
 // out, the row is scrolled to and marked; the other kinds are tried after it.

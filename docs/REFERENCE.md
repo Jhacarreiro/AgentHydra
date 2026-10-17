@@ -144,7 +144,7 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 moment of the stop.
 
 **Routines** is the babysitter's third sibling (Desk 2's `plugins/73-routines.ts`, logic in
-`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, Settings > Managers > Routines). A routine is one
+`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, AgentHydra's Tools tab). A routine is one
 standing job on this PC, on a schedule: a command, an AI prompt that runs as a chat you can open, or a Windows scheduled
 task. Routines run on the PC through AgentHydra's own CLI and accounts; the manager asks no model itself. The owner's
 rule for them: a routine runs only for something the owner asked for in the owner's own words, and an AI can only propose one.
@@ -206,9 +206,10 @@ proposals wait in
 Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, move one
 to the central store, and set its group and campaigns (`meta`) (the owner, 2026-10-16: an agent approves the routines he asks
 for, never handing the click back to him). Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard,
-switch the manager (`enabled`), edit a routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
-is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
-chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
+switch the manager (`enabled`), edit a routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in AgentHydra's Tools tab`. On the Tools tab's
+Overview each routine is a card whose small switch pauses or resumes it; the card opens its page (its schedule in words,
+its history, Run now and Open chat), and the Routine manager's page holds the manager's `enabled` switch (owner,
+2026-10-17: Desk's Settings > Managers, which listed them before, is now a link to the Tools tab). A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
 runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
 into `routines/<id>.json` without `why`, discard deletes it.

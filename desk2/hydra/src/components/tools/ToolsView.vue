@@ -1,8 +1,8 @@
 <template>
   <!-- Contract
     Core: 1 at first glance he knows what this is and what to do first: the overview says what needs him, and a failed or
-      broken routine's header says its one reason, its pill the only red. 2 keep what he picked: the Settings > Managers
-      words, Run now, the on/off switch, Edit, Mode, Move to central. 3 progressive disclosure: the overview first, then
+      broken routine's header says its one reason, its pill the only red. 2 keep what he picked: the manager pages' words,
+      Run now, the on/off switch, Edit, Mode, Move to central. 3 progressive disclosure: the overview first, then
       one page; the campaigns and the history under a routine, Details one tap deeper. 4 only a problem wears red or amber.
     Layout system: Desk's one sidebar (useDeskSidebar) or, standalone, this view's own column: an Overview row, then the
       Managers group and the Routines group, each labelled and counted. One page on the right. Rows 32px, thin dividers.
@@ -103,11 +103,12 @@
             :now="now"
             :loading="!loaded || tools.available === null"
             :error="loadError ?? tools.error"
+            :act="act"
             @select="select"
           />
           <BabysitterPage v-else-if="selected === 'm:babysitter'" :tools="tools" />
           <OrchestratorPage v-else-if="selected === 'm:orchestrator'" :tools="tools" />
-          <InstanceManagerPage v-else-if="selected === 'm:instances'" :status="tools.instanceManager" :now="now" />
+          <InstanceManagerPage v-else-if="selected === 'm:instances'" :status="tools.instanceManager" :now="now" @changed="tools.refresh()" />
 
           <div v-else-if="!status && loadError" class="flex items-center gap-2 text-ui text-destructive">
             <TriangleAlert class="size-3.5 shrink-0" aria-hidden="true" />
@@ -115,7 +116,7 @@
             <Button size="sm" variant="outline" @click="manualRefresh">{{ t('routines.retry') }}</Button>
           </div>
           <!-- The Routine manager's page opens while the first read is still on its way (it says "not read yet"). -->
-          <RoutineManagerPage v-else-if="selected === 'm:routines'" :routines="status" :now="now" @select="select" />
+          <RoutineManagerPage v-else-if="selected === 'm:routines'" :routines="status" :now="now" :act="act" @select="select" />
           <p v-else-if="!status" class="text-ui text-muted-foreground">{{ t('routines.loading') }}</p>
 
           <RoutineProposalPage v-else-if="selectedProposal" :proposal="selectedProposal" :act="act" />
@@ -295,7 +296,7 @@ async function select(key: string) {
   }
 }
 
-// Desk's Settings > Managers asked for the Tools tab, or for one of its pages (App.vue shows the tab; this selects it).
+// Desk asked for the Tools tab, or for one of its pages (App.vue shows the tab; this selects it).
 watch(
   toolsAsk,
   (ask) => {

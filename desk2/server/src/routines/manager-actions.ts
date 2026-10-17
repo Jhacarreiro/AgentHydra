@@ -18,7 +18,7 @@ import { approveMoving, discardMoving, movingIds, moveRoutine } from './manager-
 const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode', 'move', 'meta'] as const
 type ActionName = (typeof ACTIONS)[number]
 const OWNER_ACTIONS: readonly string[] = ['resume', 'discard', 'edit', 'mode']
-const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
+const OWNER_ONLY = { error: "only the owner can do that, in AgentHydra's Tools tab" }
 const SHAPE =
   'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "move"?: "<id>" (to the central store), "meta"?: { "id": "<id>", "group"?: "<1 to 40 characters>" | null, "campaigns"?: ["<campaign id>", ...] | null }, "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
 /** How long a routine's `modes.set` command may take. */

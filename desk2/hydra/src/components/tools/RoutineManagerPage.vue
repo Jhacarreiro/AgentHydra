@@ -1,17 +1,28 @@
 <script setup lang="ts">
 // The Routine manager's page (Tools > Managers): whether it runs, when it last looked and looks next, the central store
-// it reads, and the proposals waiting for a yes. Read-only; a proposal opens its own page through select.
-import type { RoutinesStatus } from '@desk/shared/routines'
-import { computed } from 'vue'
+// it reads, and the proposals waiting for a yes. Its switch is POST /api/routines { enabled } through ToolsView's `act`
+// (RoutineManagerPage's own switch). A proposal opens its own page through select.
+import type { RoutinesRequest, RoutinesStatus } from '@desk/shared/routines'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Switch } from '@/components/ui/switch'
 import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, managerDot } from '@/lib/managers'
 import { durationText, exactTime, relativeTime } from '@/lib/routine-words'
 
-const props = defineProps<{ routines: RoutinesStatus | null; now: number }>()
+const props = defineProps<{ routines: RoutinesStatus | null; now: number; act: (req: RoutinesRequest) => Promise<string | null> }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
 
 const { t } = useI18n()
+
+// The switch: a refusal (Desk's reason) shows in the page's own destructive line, and the status stays as it was.
+const switching = ref(false)
+const switchError = ref<string | null>(null)
+async function setEnabled(on: boolean) {
+  switching.value = true
+  switchError.value = await props.act({ enabled: on })
+  switching.value = false
+}
 
 const dot = computed(() => (props.routines ? managerDot(props.routines.enabled, !!props.routines.error || !!props.routines.store?.error) : undefined))
 
@@ -55,6 +66,16 @@ const store = computed(() => props.routines?.store ?? null)
           <span aria-hidden="true" class="size-2 rounded-full" :class="MANAGER_DOT_CLASS[dot ?? 'off']"></span>
           {{ word }}
         </span>
+        <Switch
+          v-if="routines"
+          size="sm"
+          class="ms-auto"
+          :model-value="routines.enabled"
+          :disabled="switching"
+          :aria-label="t('tools.routineManager.switch')"
+          :title="t('tools.routineManager.switch')"
+          @update:model-value="setEnabled"
+        />
       </div>
       <p class="text-ui text-muted-foreground">{{ t('tools.routineManager.caption') }}</p>
       <p class="flex flex-wrap gap-x-3 text-2xs text-muted-foreground">
@@ -63,6 +84,7 @@ const store = computed(() => props.routines?.store ?? null)
         <span v-if="routines">{{ t('tools.routineManager.looksEvery', { when: durationText(routines.everyMs) }) }}</span>
       </p>
       <p v-if="routines" class="text-2xs text-muted-foreground">{{ counts }}</p>
+      <p v-if="switchError" class="text-ui text-destructive">{{ t('tools.routineManager.switchError', { reason: switchError }) }}</p>
       <p v-if="routines?.error" class="text-ui text-destructive">{{ t('tools.routineManager.readError', { reason: routines.error }) }}</p>
     </header>
 

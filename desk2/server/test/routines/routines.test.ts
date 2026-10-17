@@ -608,7 +608,7 @@ describe('the plugin', () => {
     for (const body of [{ resume: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
-      expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
+      expect(((await res.json()) as { error: string }).error).toBe("only the owner can do that, in AgentHydra's Tools tab")
     }
     expect(d.settings.routines).toBe(true)
 

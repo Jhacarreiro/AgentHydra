@@ -1,5 +1,5 @@
 // The Tools tab's routines (components/routines/, the Routines group of components/tools/ToolsView.vue). Desk's own
-// routine words (Settings > Managers > Routines) are reused where the two say the same thing. Plurals: 'one | many',
+// routine words (the Routine manager's page, components/tools/RoutineManagerPage.vue) are reused where the two say the same thing. Plurals: 'one | many',
 // with the count as {n}.
 export default {
   folderAwaiting: 'Awaiting approval',
@@ -11,7 +11,7 @@ export default {
   paused: '{n} paused',
   loading: 'Loading routines…',
   loadFailed: 'Could not read the routines: {reason}',
-  managerOff: 'The routine manager is off, so nothing runs. Turn it on in Settings > Managers > Routines.',
+  managerOff: 'The routine manager is off, so nothing runs. Turn it on on the Routine manager’s page.',
   empty: 'No routines yet. A routine is a file in AgentHydra’s routines folder, written for something you asked for.',
   noMatch: 'Nothing matches “{q}”.',
   missingRoutine: 'That routine is gone. It may have been moved or removed.',

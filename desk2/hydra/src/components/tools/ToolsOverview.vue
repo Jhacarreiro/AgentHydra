@@ -1,15 +1,19 @@
 <script setup lang="ts">
 // The Tools tab's landing page: one tile per manager (Babysitter, Orchestrator, Instance manager, Routine manager) and one
 // tile per routine, in folders in the sidebar's order. A tile says its state in words and colour, its key number, and when
-// the manager last looked and when it looks next. Read-only; a tile emits the key of the page it opens.
+// the manager last looked and when it looks next. A tile emits the key of the page it opens. Each routine card has a small
+// switch that pauses or resumes that routine (owner, 2026-10-17: "a very small toggle ... inconspicuous"), a sibling of the
+// card's button, never inside it; a refusal shows on the card in the destructive colour, and on the switch's title.
 import type { BabysitterStatus } from '@desk/shared/babysitter'
 import type { InstanceManagerStatus } from '@desk/shared/instance-manager'
 import type { OrchestratorPlan } from '@desk/shared/orchestrator'
-import type { Routine, RoutineOutcome, RoutineProposal, RoutinesStatus } from '@desk/shared/routines'
+import type { Routine, RoutineOutcome, RoutineProposal, RoutinesRequest, RoutinesStatus } from '@desk/shared/routines'
 import { CircleCheck, CircleX, Clock } from '@lucide/vue'
-import { type Component, computed } from 'vue'
+import { type Component, computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Switch } from '@/components/ui/switch'
 import { folderName } from '@/lib/routine-sidebar'
+import { isRoutinePaused, routineSwitchRequest } from '@/lib/routine-switch'
 import { type RoutineTone, dotTone, exactTime, nextRunText, relativeTime, stateView } from '@/lib/routine-words'
 import { type ManagerDot, babysitterDot, instanceManagerDot, managerDot } from '@/lib/managers'
 
@@ -21,6 +25,7 @@ const props = defineProps<{
   now: number
   loading: boolean
   error: string | null
+  act: (req: RoutinesRequest) => Promise<string | null>
 }>()
 
 const emit = defineEmits<{ select: [key: string] }>()
@@ -58,6 +63,11 @@ interface RoutineCard {
   number: string
   noun: string
   waiting: boolean
+  /** The routine behind a routine card (null on a proposal, which has no switch). */
+  routine: Routine | null
+  /** On is not paused: the switch's state. */
+  on: boolean
+  switchLabel: string
 }
 
 // A routine needs a look when its state reads red or amber, the same test the sidebar's folder marks use.
@@ -255,7 +265,11 @@ function routineCard(x: Routine): RoutineCard {
   }
   const lastText = x.lastRunAt === null ? t('tools.overview.routine.noRun') : relativeTime(x.lastRunAt, props.now)
   const next = nextRunText(x, props.now)
+  const on = !isRoutinePaused(x)
   return {
+    routine: x,
+    on,
+    switchLabel: on ? t('tools.overview.routine.pauseSwitch', { name: x.name }) : t('tools.overview.routine.resumeSwitch', { name: x.name }),
     key: `r:${x.id}`,
     name: x.name,
     label: t('tools.overview.routine.name', { name: x.name, state: view.word, last: lastText, next }),
@@ -276,6 +290,9 @@ function routineCard(x: Routine): RoutineCard {
 function proposalCard(p: RoutineProposal): RoutineCard {
   const word = t('tools.overview.routine.waiting')
   return {
+    routine: null,
+    on: false,
+    switchLabel: '',
     key: `p:${p.id}`,
     name: p.name,
     label: t('tools.overview.routine.proposalName', { name: p.name, state: word }),
@@ -291,6 +308,18 @@ function proposalCard(p: RoutineProposal): RoutineCard {
     noun: '',
     waiting: true,
   }
+}
+
+// One flip in flight per routine: its switch is disabled meanwhile. A refusal stays on the card until the next flip.
+const busy = ref<Record<string, boolean>>({})
+const refusals = ref<Record<string, string>>({})
+async function flip(card: RoutineCard) {
+  if (!card.routine || busy.value[card.key]) return
+  busy.value[card.key] = true
+  const reason = await props.act(routineSwitchRequest(card.routine))
+  delete busy.value[card.key]
+  if (reason) refusals.value[card.key] = reason
+  else delete refusals.value[card.key]
 }
 
 const awaitingName = computed(() => t('tools.overview.folders.awaiting'))
@@ -383,18 +412,20 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
           <span class="text-2xs text-muted-foreground tabular-nums">{{ folder.cards.length }}</span>
         </h3>
         <ul role="list" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" :aria-busy="loading ? 'true' : undefined">
-          <li v-for="card in folder.cards" :key="card.key">
+          <li v-for="card in folder.cards" :key="card.key" class="relative">
             <button
               type="button"
               class="flex h-full w-full flex-col gap-2 rounded-lg border bg-card p-3 text-left focus-visible:outline-2 focus-visible:outline-primary"
               :aria-label="card.label"
               @click="emit('select', card.key)"
             >
-              <span class="flex items-center gap-2">
+              <!-- The title line keeps clear of the switch in the corner (the switch sits over the card, not inside it). -->
+              <span class="flex items-center gap-2" :class="card.routine && 'pe-7'">
                 <span aria-hidden="true" class="size-2 shrink-0 rounded-full" :class="[card.dotClass, card.pulse && 'motion-safe:animate-pulse']"></span>
                 <span class="min-w-0 flex-1 truncate text-ui font-medium" :title="card.name">{{ card.name }}</span>
               </span>
               <span class="text-2xs" :class="card.pillClass">{{ card.word }}</span>
+              <span v-if="refusals[card.key]" class="text-2xs text-destructive">{{ refusals[card.key] }}</span>
               <template v-if="!card.waiting">
                 <span v-if="card.last !== card.word" class="flex items-center gap-1 text-2xs text-muted-foreground" :title="exactTime(card.lastAt)">
                   <component :is="card.icon" v-if="card.icon" class="size-3.5 shrink-0" aria-hidden="true" />
@@ -407,6 +438,16 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
                 </span>
               </template>
             </button>
+            <Switch
+              v-if="card.routine"
+              size="sm"
+              class="absolute end-3 top-3 opacity-60 hover:opacity-100"
+              :model-value="card.on"
+              :disabled="!!busy[card.key]"
+              :aria-label="card.switchLabel"
+              :title="refusals[card.key] ?? card.switchLabel"
+              @update:model-value="flip(card)"
+            />
           </li>
         </ul>
       </div>

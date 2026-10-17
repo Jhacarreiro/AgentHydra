@@ -11,7 +11,6 @@ export const instanceManager = {
   nextLook: 'Next look',
   dueNow: 'Due now',
   noLook: 'Not looked yet',
-  settings: 'Settings',
   readError: 'Could not read it: {reason}',
   apps: {
     title: 'Watched apps',

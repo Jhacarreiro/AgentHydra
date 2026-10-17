@@ -1,17 +1,30 @@
 <script setup lang="ts">
-// The Instance manager's page (Tools > Managers): the apps it watches, and each recovery it made, newest first. Read-only;
-// Desk's Settings holds the switch and the rules.
+// The Instance manager's page (Tools > Managers): the apps it watches, and each recovery it made, newest first. Its on/off
+// switch is Desk's `instanceManager` setting (useDeskSettings.ts); the rules stay
+// in Desk's settings. A change emits `changed`, so ToolsView reads the status again.
 import type { InstanceManagerStatus } from '@desk/shared/instance-manager'
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button } from '@/components/ui/button'
-import { EMBEDDED, openSettingsInDesk } from '@/lib/desk-embed'
+import { Switch } from '@/components/ui/switch'
+import { useDeskSettings } from '@/composables/useDeskSettings'
+import { EMBEDDED } from '@/lib/desk-embed'
 import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, instanceManagerDot } from '@/lib/managers'
 import { exactTime, relativeTime } from '@/lib/routine-words'
 
 const props = defineProps<{ status: InstanceManagerStatus | null; now: number }>()
+const emit = defineEmits<{ changed: [] }>()
 
 const { t } = useI18n()
+
+// Desk's setting: the switch shows only inside Desk (EMBEDDED) where Desk's settings route answers.
+const desk = useDeskSettings()
+const saveError = ref<string | null>(null)
+const showSwitch = computed(() => EMBEDDED && desk.available === true)
+onMounted(() => void desk.refresh())
+async function setOn(on: boolean) {
+  saveError.value = await desk.save({ instanceManager: on })
+  emit('changed')
+}
 
 const dot = computed(() => instanceManagerDot(props.status))
 
@@ -47,11 +60,19 @@ const nextLook = computed(() => {
           <span aria-hidden="true" class="size-2 rounded-full" :class="MANAGER_DOT_CLASS[dot ?? 'off']"></span>
           {{ word }}
         </span>
-        <Button v-if="EMBEDDED" size="sm" variant="outline" class="ms-auto" @click="openSettingsInDesk('managers')">
-          {{ t('tools.instanceManager.settings') }}
-        </Button>
+        <Switch
+          v-if="showSwitch"
+          size="sm"
+          class="ms-auto"
+          :model-value="desk.settings?.instanceManager ?? false"
+          :disabled="desk.saving"
+          :aria-label="t('tools.managers.switch.instanceManager')"
+          :title="t('tools.managers.switch.instanceManager')"
+          @update:model-value="setOn"
+        />
       </div>
       <p class="text-ui text-muted-foreground">{{ t('tools.instanceManager.caption') }}</p>
+      <p v-if="saveError" class="text-ui text-destructive">{{ t('tools.managers.switch.saveError', { reason: saveError }) }}</p>
       <p class="flex flex-wrap gap-x-3 text-2xs text-muted-foreground">
         <span :title="exactTime(status?.checkedAt ?? null)">{{ lastLook }}</span>
         <span v-if="nextLook" :title="exactTime(status?.nextCheckAt ?? null)">{{ nextLook }}</span>

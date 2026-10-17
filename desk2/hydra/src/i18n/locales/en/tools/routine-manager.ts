@@ -1,6 +1,9 @@
 // The Routine manager page (RoutineManagerPage.vue): whether it runs, when it last looked, the central store and the
-// proposals waiting for a yes. Read-only; the routines themselves are the Routines folders.
+// proposals waiting for a yes. Its switch turns the manager on or off; the routines themselves are the Routines folders.
 export const routineManager = {
+  // The switch: POST /api/routines { enabled }.
+  switch: 'Turn on the routine manager: it runs the routines on their schedule',
+  switchError: 'Could not switch it: {reason}',
   title: 'Routine manager',
   caption: 'The standing manager that runs the routines on this PC and reads the shared store. Desk runs it; this page only shows it.',
   on: 'On',
