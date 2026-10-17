@@ -22,19 +22,27 @@
 // READING: a log is read on from where the last sweep stopped, with the replayed chat kept in meta (only
 // what is counted: each request's id, time, model and counts). A rewrite shows as the bytes just before
 // that offset no longer matching, and the log is then read from the top: safe, as every event is
-// written by id.
+// written by id. The entries are applied by vscode-chat-log.ts, which the session list replays with too.
 import { type FileHandle, stat as fsStat, open, readdir, readFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, join } from 'node:path'
 import { agentTool, rootsFor } from '../agent-catalog'
 import { pricesAsOf, priceTokens } from '../pricing'
 import { emptyModelSpend, weighTurnCounts } from '../usage-foreign'
+import {
+  applyChatOp,
+  type ChatOp,
+  type ChatPath,
+  parseChatOp,
+  uriPath,
+  workspaceJsonFolder,
+} from '../vscode-chat-log'
 import { linesFrom } from './lines'
 import { type KitStore, type UsageEventInput, yieldLoop } from './store'
 
 export const COPILOT_SOURCE = 'vscode-copilot'
-/** Bump to read every log again from the top (a change to what is extracted). */
-export const COPILOT_INGEST_VERSION = 1
+/** Bump to read every log again from the top (a change to what is extracted, or to the saved chat's shape:
+ *  2 keeps VS Code's own key names, so the shared replay follows its paths as written). */
+export const COPILOT_INGEST_VERSION = 2
 /** The bytes before a resume offset kept to tell an appended log from a rewritten one. */
 const TAIL_BYTES = 64
 /** A kind 0 line runs to megabytes: read in larger chunks than the stream's 64 KB. */
@@ -107,11 +115,13 @@ const KEPT = [
 type Kept = (typeof KEPT)[number]
 const isKept = (k: unknown): k is Kept => (KEPT as readonly unknown[]).includes(k)
 
+/** The counted part of a chat, under VS Code's own key names. */
 interface Chat {
-  session: string
-  /** `workingDirectory`, a URI, where the chat names one. */
-  workdir: string | null
-  requests: CountedRequest[]
+  sessionId: string
+  /** A URI, where the chat names one. */
+  workingDirectory?: string
+  /** A slot VS Code deleted reads undefined (null once saved), so the indexes after it still line up. */
+  requests: Array<CountedRequest | null | undefined>
 }
 
 /** What a log's meta keeps between sweeps. */
@@ -164,87 +174,66 @@ function countedResult(v: unknown): CountedResult | undefined {
   }
 }
 
-function setField(r: CountedRequest, k: Kept, v: unknown): void {
-  if (k === 'requestId' || k === 'modelId') r[k] = str(v)
-  else if (k === 'result') r.result = countedResult(v)
-  else r[k] = num(v)
+function countedField(k: Kept, v: unknown): unknown {
+  if (k === 'requestId' || k === 'modelId') return str(v)
+  if (k === 'result') return countedResult(v)
+  return num(v)
 }
 
 function countedRequest(v: unknown): CountedRequest {
   const raw = obj(v)
-  const r: CountedRequest = {}
-  for (const k of KEPT) setField(r, k, raw[k])
-  return r
-}
-
-function countedChat(v: unknown, session: string): Chat {
-  const c = obj(v)
-  return {
-    session: str(c.sessionId) ?? session,
-    workdir: str(c.workingDirectory) ?? null,
-    requests: (Array.isArray(c.requests) ? c.requests : []).map(countedRequest),
+  const r: Record<string, unknown> = {}
+  for (const k of KEPT) {
+    const c = countedField(k, raw[k])
+    if (c !== undefined) r[k] = c
   }
-}
-
-/** One log line: `{ kind, k, v, i }`. */
-interface Op {
-  kind?: unknown
-  k?: unknown
-  v?: unknown
-  i?: unknown
+  return r as CountedRequest
 }
 
 /**
- * Replays ops onto the counted chat. Only the paths that carry what is counted are followed: a request's
- * response, text and attachments (most of a log's bytes) are dropped on arrival. Every request an op
- * reaches is remembered, a removed one included, so its last state is written.
+ * Replays ops onto the counted chat (vscode-chat-log.ts applies them). Only what is counted is kept as it
+ * lands: a request's response, text and attachments (most of a log's bytes) are dropped on arrival, so an
+ * op inside one finds nothing to follow. Every request an op reaches is remembered, a removed one included,
+ * so its last state is written.
  */
 export class CopilotReplay {
   readonly touched = new Set<CountedRequest>()
   constructor(public chat: Chat) {}
 
-  apply(op: Op): void {
-    if (op.kind === 0) {
-      this.chat = countedChat(op.v, this.chat.session)
-      for (const r of this.chat.requests) this.touched.add(r)
-      return
-    }
-    const k = Array.isArray(op.k) ? (op.k as unknown[]) : null
-    if (!k?.length) return
-    if (k[0] !== 'requests') {
-      if (k.length === 1 && k[0] === 'workingDirectory')
-        this.chat.workdir = op.kind === 1 ? (str(op.v) ?? null) : null
-      return
-    }
-    const reqs = this.chat.requests
-    if (k.length === 1) {
-      if (op.kind === 2) {
-        if (typeof op.i === 'number') reqs.splice(op.i)
-        for (const v of Array.isArray(op.v) ? op.v : []) this.add(reqs, reqs.length, v)
-      } else if (op.kind === 1) {
-        reqs.length = 0
-        for (const v of Array.isArray(op.v) ? op.v : []) this.add(reqs, reqs.length, v)
-      }
-      return
-    }
-    const i = k[1]
-    if (typeof i !== 'number') return
-    if (k.length === 2) {
-      if (op.kind === 1) this.add(reqs, i, op.v)
-      return
-    }
-    const r = reqs[i]
-    const field = k[2]
-    // A deeper path is inside a field set whole (the schema writes `result` as one value) or not counted.
-    if (!r || k.length !== 3 || !isKept(field)) return
-    setField(r, field, op.kind === 1 ? op.v : undefined)
-    this.touched.add(r)
+  apply(op: ChatOp): void {
+    this.chat = applyChatOp(this.chat, op, this.keep) as Chat
   }
 
-  private add(reqs: CountedRequest[], at: number, v: unknown): void {
+  private readonly keep = (k: ChatPath, v: unknown): unknown => {
+    if (k.length === 0) {
+      const c = obj(v)
+      const workdir = str(c.workingDirectory)
+      return {
+        sessionId: str(c.sessionId) ?? this.chat.sessionId,
+        ...(workdir ? { workingDirectory: workdir } : {}),
+        requests: this.requests(c.requests),
+      } satisfies Chat
+    }
+    if (k[0] === 'workingDirectory') return k.length === 1 ? str(v) : undefined
+    if (k[0] !== 'requests') return undefined
+    if (k.length === 1) return this.requests(v)
+    if (k.length === 2) return v === undefined ? undefined : this.request(v)
+    // A deeper path is inside a field set whole (the schema writes `result` as one value) or not counted.
+    const field = k[2]
+    if (k.length !== 3 || !isKept(field)) return undefined
+    const r = this.chat.requests[k[1] as number]
+    if (r) this.touched.add(r)
+    return countedField(field, v)
+  }
+
+  private requests(v: unknown): CountedRequest[] {
+    return (Array.isArray(v) ? v : []).map((r) => this.request(r))
+  }
+
+  private request(v: unknown): CountedRequest {
     const r = countedRequest(v)
-    reqs[at] = r
     this.touched.add(r)
+    return r
   }
 }
 
@@ -256,15 +245,6 @@ const COUNTED_OP =
 function wanted(text: string): boolean {
   if (!text.startsWith('{"kind":')) return text.trim().length > 0
   return COUNTED_OP.test(text)
-}
-
-function parseOp(text: string): Op | null {
-  try {
-    const op = JSON.parse(text) as unknown
-    return op && typeof op === 'object' ? (op as Op) : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -348,7 +328,7 @@ export function copilotEvents(
   pc: string | null,
   fallbackTs: number,
 ): UsageEventInput[] {
-  const { session } = replay.chat
+  const session = replay.chat.sessionId
   const out: UsageEventInput[] = []
   for (const r of replay.touched) {
     if (!r.requestId) continue // nothing stable to key it by (none seen on 2026-10-17)
@@ -415,26 +395,11 @@ async function chatFiles(root: string): Promise<ChatFile[]> {
   return out
 }
 
-/** The folder a `file:` URI names, its drive letter upper-cased; null for a remote window (WSL, SSH, a
- *  container), which names no folder on this PC. */
-function uriPath(uri: string | null | undefined): string | null {
-  if (!uri?.startsWith('file:')) return null
-  try {
-    return fileURLToPath(uri).replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`)
-  } catch {
-    return null
-  }
-}
-
-/** The folder a workspace window had open: its folder, or the folder of its `.code-workspace` file. */
+/** The folder a workspace window had open (its workspace.json). */
 async function workspaceFolder(workspace: string | null): Promise<string | null> {
   if (!workspace) return null
   try {
-    const w = obj(JSON.parse(await readFile(join(workspace, 'workspace.json'), 'utf8')))
-    const folder = uriPath(str(w.folder))
-    if (folder) return folder
-    const file = uriPath(str(w.workspace))
-    return file ? dirname(file) : null
+    return workspaceJsonFolder(await readFile(join(workspace, 'workspace.json'), 'utf8'))
   } catch {
     return null
   }
@@ -442,8 +407,9 @@ async function workspaceFolder(workspace: string | null): Promise<string | null>
 
 /** Where a chat ran, kept as `copilot_cwd:<session>` for the Cost by project card (session-cwds.ts). */
 async function keepCwd(store: KitStore, chat: Chat, log: ChatFile): Promise<void> {
-  const cwd = uriPath(chat.workdir) ?? (await workspaceFolder(log.workspace))
-  if (cwd && store.getMeta(cwdKey(chat.session)) !== cwd) store.setMeta(cwdKey(chat.session), cwd)
+  const cwd = uriPath(chat.workingDirectory) ?? (await workspaceFolder(log.workspace))
+  const key = cwdKey(chat.sessionId)
+  if (cwd && store.getMeta(key) !== cwd) store.setMeta(key, cwd)
 }
 
 export const cwdKey = (session: string) => `copilot_cwd:${session}`
@@ -512,15 +478,13 @@ async function ingestLog(
   const cur = store.getCursor(log.path)
   if (unchanged(cur, st)) return null
   const { offset, saved } = await resume(store, log.path, cur, st.size)
-  const replay = new CopilotReplay(
-    saved?.chat ?? { session: sessionOf(log.path), workdir: null, requests: [] },
-  )
+  const replay = new CopilotReplay(saved?.chat ?? { sessionId: sessionOf(log.path), requests: [] })
   const sums = new Set(saved?.sums ?? [])
   let end = offset
   for await (const l of linesFrom(log.path, offset, CHUNK_BYTES)) {
     end = l.end
     if (!wanted(l.text)) continue
-    const op = parseOp(l.text)
+    const op = parseChatOp(l.text)
     if (op) replay.apply(op)
   }
   const events = copilotEvents(replay, sums, opts.pc ?? null, st.mtime)
@@ -547,7 +511,7 @@ async function ingestDocument(
   } catch {
     return null // locked or half written: no cursor, so the next sweep reads it again
   }
-  const replay = new CopilotReplay({ session: sessionOf(log.path), workdir: null, requests: [] })
+  const replay = new CopilotReplay({ sessionId: sessionOf(log.path), requests: [] })
   replay.apply({ kind: 0, v: doc })
   const events = copilotEvents(replay, new Set(), opts.pc ?? null, st.mtime)
   await store.upsertEventsAsync(events)

@@ -9,6 +9,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   listForeignSessions,
   listForeignSessionsAsync,
@@ -141,7 +142,7 @@ describe('VS Code Copilot', () => {
     }),
   )
 
-  test('the first question becomes the title, since Copilot stores none', () => {
+  test('the first question becomes the title when VS Code has none of its own', () => {
     const [s] = listForeignSessions('vscode-copilot', store)
     expect(s?.title).toBe('Read through my code and suggest cleanups')
     expect(s?.last_activity_at).toBe(1749765900000)
@@ -273,6 +274,122 @@ describe('VS Code Copilot sync and async listings agree', () => {
     const only = join(junk, 'workspaceStorage', 'ws-junk', 'chatSessions')
     for (let i = 0; i < 40; i++) write(join(only, `${i}.json`), JSON.stringify({ requests: [] }))
     expect(await listForeignSessionsAsync('vscode-copilot', junk)).toEqual([])
+  })
+})
+
+// Since 2025 VS Code writes a chat as an operation log, not a document: a whole-chat line, then sets and
+// pushes at paths (vscode-chat-log.ts). On the owner's PC 944 of 1,162 chat files were logs, and the
+// list read none of them. A window with no folder keeps its chats in globalStorage instead.
+describe('VS Code Copilot operation logs', () => {
+  const store = join(root, 'vscode-oplog')
+  const project = join(root, 'projects', 'example-app')
+  mkdirSync(project, { recursive: true })
+  const ws = join(store, 'workspaceStorage', 'f00dfeed')
+  write(join(ws, 'workspace.json'), JSON.stringify({ folder: pathToFileURL(project).href }))
+  const jl = (...ops: unknown[]) => ops.map((o) => JSON.stringify(o)).join('\n')
+  const ask = (id: string, at: number, text: string) => ({
+    requestId: id,
+    timestamp: at,
+    message: { text },
+    response: [],
+  })
+
+  const log = join(ws, 'chatSessions', 'chat-a.jsonl')
+  write(
+    log,
+    `${jl(
+      {
+        kind: 0,
+        v: {
+          version: 3,
+          sessionId: 'chat-a',
+          creationDate: 1760000000000,
+          requests: [ask('r1', 1760000001000, 'Explain the build script')],
+          inputState: { inputText: '' },
+        },
+      },
+      {
+        kind: 2,
+        k: ['requests', 0, 'response'],
+        v: [
+          { kind: 'thinking', value: ['Looking at ', 'the script.'] },
+          { value: 'A first draft' },
+        ],
+      },
+      // `i` cuts the array first: the draft goes, the thinking stays.
+      {
+        kind: 2,
+        k: ['requests', 0, 'response'],
+        i: 1,
+        v: [
+          {
+            kind: 'toolInvocationSerialized',
+            toolId: 'copilot_readFile',
+            pastTenseMessage: { value: 'Read build.ts' },
+          },
+          { value: 'It bundles the server.' },
+        ],
+      },
+      { kind: 1, k: ['inputState', 'inputText'], v: 'Example draft' },
+      {
+        kind: 2,
+        k: ['requests'],
+        v: [ask('r2', 1760000005000, 'And the tests?'), ask('r3', 1760000009000, 'Cut later')],
+      },
+      // A cut with nothing pushed: an edit removed the third request.
+      { kind: 2, k: ['requests'], i: 2 },
+    )}\n{"kind":1,"k":["customTitle"],"v":"Half writ`, // VS Code mid-write
+  )
+
+  const empty = join(store, 'globalStorage', 'emptyWindowChatSessions', 'chat-b.jsonl')
+  write(
+    empty,
+    jl(
+      {
+        kind: 0,
+        v: { version: 3, sessionId: 'chat-b', creationDate: 1760000100000, requests: [] },
+      },
+      { kind: 2, k: ['requests'], v: [ask('r1', 1760000101000, 'What does this regex match?')] },
+      { kind: 1, k: ['customTitle'], v: 'Regex question' },
+    ),
+  )
+
+  const listed = (id: string) =>
+    listForeignSessions('vscode-copilot', store).find((s) => s.session_id === id)
+
+  test('a log in a folder window lists with its first question, the folder, and its times', () => {
+    expect(listed('chat-a')).toMatchObject({
+      path: log,
+      title: 'Explain the build script',
+      cwd: project,
+      project,
+      created_at: 1760000000000,
+      // The newest request still in the chat: the one an edit cut does not date it.
+      last_activity_at: 1760000005000,
+    })
+  })
+
+  test("an empty window's log lists too, under the title VS Code gave it", () => {
+    expect(listed('chat-b')).toMatchObject({
+      path: empty,
+      title: 'Regex question',
+      cwd: '',
+      project: 'empty-window',
+      created_at: 1760000100000,
+      last_activity_at: 1760000101000,
+    })
+  })
+
+  test('the transcript is the chat the log ended with', () => {
+    const events = readForeignSession('vscode-copilot', log)
+    expect(events.map((e) => [e.role, e.kind, e.text, e.tool_name])).toEqual([
+      ['user', 'text', 'Explain the build script', null],
+      ['assistant', 'thinking', 'Looking at the script.', null],
+      ['assistant', 'tool_use', 'Read build.ts', 'copilot_readFile'],
+      ['assistant', 'text', 'It bundles the server.', null],
+      ['user', 'text', 'And the tests?', null],
+    ])
+    expect(events[4]?.timestamp).toBe(new Date(1760000005000).toISOString())
   })
 })
 
