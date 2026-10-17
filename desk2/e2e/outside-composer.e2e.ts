@@ -4,11 +4,12 @@
 // exactly the same ... There should be input boxes"). For a Claude Desktop chat and a Codex chat, both at work: the
 // composer's box is on screen and takes typing, the working line is the transcript's last row (inside the scroller,
 // above the composer), and no second status line sits between them.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -109,7 +110,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {} // floor-ok: a temp folder Edge still holds
+  try { rmRetry(SCRATCH) } catch {} // floor-ok: a temp folder Edge still holds
 }
 console.log(`${total - failed} of ${total} outside-composer checks pass`)
 process.exit(failed || !total ? 1 : 0)

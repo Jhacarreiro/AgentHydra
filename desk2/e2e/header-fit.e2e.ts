@@ -9,12 +9,13 @@
 // group is centred while it fits and otherwise sits 8px short of the buttons. Screenshots of the chat bar go to %TEMP%\header-fit\.
 // Prints PASS/FAIL per width; exits 1 on any FAIL. Run `bun run build` first.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
 import { CHROME_COLLAPSED, CHROME_OPEN } from '../web/src/components/sidebar/width'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -311,7 +312,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  try { rmRetry(SCRATCH) } catch {}
 }
 console.log(`${total - failed} of ${total} widths fit`)
 process.exit(failed || !total ? 1 : 0)

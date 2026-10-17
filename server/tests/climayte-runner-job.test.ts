@@ -4,16 +4,17 @@
 // tree has a ceiling on how many processes it may have alive at once (2026-10-03: a self-calling
 // shell function started about 3,000 processes and froze the desktop).
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type RunnerExit, type RunnerPids, runnerArgv } from '../src/climayte-runner'
+import { rmRetry } from './rm-retry'
 
 const dirs: string[] = []
 // Windows holds a folder for a moment after the process tree in it is gone (2026-10-15: EBUSY under a loaded run, once
 // the leftover ping was already confirmed dead), so the remove retries.
 afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10 })
+  for (const d of dirs.splice(0)) rmRetry(d)
 })
 
 /** Run the stand-in CLI `script` under the runner; what it printed and the exit file. */

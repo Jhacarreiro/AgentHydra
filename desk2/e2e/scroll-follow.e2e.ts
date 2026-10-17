@@ -6,11 +6,12 @@
 // they sent, each landing on the line under the top.
 // Starts the web Vite dev server hidden on E2E_PORT (default a free port) and stops it afterwards. Prints PASS/FAIL per case; exits 1 on
 // any FAIL.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -428,7 +429,7 @@ try {
   for (const s of sockets) s.close()
   edge?.kill()
   vite.kill()
-  try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  try { rmRetry(profile) } catch {}
 }
 
 for (const l of lines) console.log(l.line)

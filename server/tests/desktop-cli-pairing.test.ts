@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,6 +24,7 @@ import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
 import { pairDesktopCliLogins, pairingPlan, runPairing } from '../src/core/desktop-cli-pairing'
 import { instancesRoot } from '../src/core/paths'
 import { setSetting } from '../src/db'
+import { rmRetry } from './rm-retry'
 import './no-chats'
 
 // kept for the run: the default install's folder must not be the developer's real one. APPDATA keeps
@@ -32,7 +33,7 @@ const appData = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
 process.env.APPDATA = appData
 process.on('exit', () => {
   try {
-    rmSync(appData, { recursive: true, force: true, maxRetries: 10 })
+    rmRetry(appData)
   } catch {}
 })
 
@@ -72,8 +73,7 @@ async function scratch(fn: (names: string[]) => Promise<void>): Promise<void> {
     for (const c of listCliInstances())
       if (c.associatedDesktopDir && names.some((n) => c.associatedDesktopDir?.includes(n)))
         deleteCliInstance(c.id, c.name)
-    for (const n of names)
-      rmSync(join(instancesRoot(), n), { recursive: true, force: true, maxRetries: 10 })
+    for (const n of names) rmRetry(join(instancesRoot(), n))
   }
 }
 

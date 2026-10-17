@@ -21,6 +21,7 @@ import {
   resetUsageApiBackoff,
 } from '../src/usage'
 import { USAGE_API_URL } from '../src/usage-api'
+import { rmRetry } from './rm-retry'
 
 const UUID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const EMAIL = 'example@example.test'
@@ -30,8 +31,7 @@ const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
   resetUsageApiBackoff()
-  for (const dir of scratch.splice(0))
-    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+  for (const dir of scratch.splice(0)) rmRetry(dir)
 })
 
 const profile = (email = EMAIL, uuid: unknown = UUID) => Response.json({ account: { email, uuid } })

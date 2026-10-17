@@ -8,11 +8,12 @@
 // running task shows its Stop; a click on the task slides the panel in, its back arrow slides the cards back, Expand gives the
 // panel the chat's place and Restore gives it back, and Close shuts the rail. On an outside session: its facts are rows (no chips)
 // and every control on its cards is hit, and its Context card starts with its tokens in context.
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -235,7 +236,7 @@ try {
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])
-  try { rmSync(SCRATCH, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {} // floor-ok: a temp folder Edge still holds
+  try { rmRetry(SCRATCH) } catch {} // floor-ok: a temp folder Edge still holds
 }
 console.log(`${total - failed} of ${total} rail checks pass`)
 process.exit(failed || !total ? 1 : 0)

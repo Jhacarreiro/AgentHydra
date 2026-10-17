@@ -144,6 +144,13 @@ jobs:
       - name: Guardrail (subprocess tests must set an explicit timeout)
         run: bun scripts/checks/spawn-test-without-timeout.mjs
 
+      # Fails if an rmSync passes maxRetries or retryDelay. Bun ignores both (1.4.3 threw EBUSY after
+      # 0 ms with maxRetries: 10), so 33 test cleanups meant to ride out Windows holding a folder
+      # tried once, and climayte-runner-job failed this job on that EBUSY (2026-10-17). Tests use
+      # rmRetry instead. See the check's header.
+      - name: Guardrail (rmSync retry options are ignored under Bun)
+        run: bun scripts/checks/rm-retry-option-ignored.mjs
+
       # Fails if the transcript index can be born stale. It used to stamp its snapshot with a
       # timestamp captured BEFORE a ~9.5s sweep and keep it for TTL_MS=2000, so the snapshot was
       # never once fresh and every request scheduled another sweep — synchronously, inside a

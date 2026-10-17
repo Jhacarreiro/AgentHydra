@@ -4,7 +4,7 @@
 // tests/auto-update.test.ts, adapted for agenthydra's settings-table persistence.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -26,6 +26,7 @@ import {
   stopAutoUpdate,
 } from '../server/src/auto-update'
 import type { UpdateApplyResult, UpdateStatus } from '../server/src/updater-engine.mjs'
+import { rmRetry } from '../server/tests/rm-retry'
 
 // Reset the module's hooks + timer state after each case so they don't bleed across tests.
 afterEach(() => {
@@ -210,7 +211,7 @@ test('a database that never chose applies updates by itself (owner, 2026-10-05)'
     })
     expect(r.stdout.toString().trim()).toBe('true')
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 10 })
+    rmRetry(root)
   }
   // A cold bun loading the daemon's settings module: about a second here, several on a busy runner.
 }, 30_000)

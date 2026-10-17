@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { load, workers } from '../src/climayte-core'
 import { type CliMayteWorker, recentWorkers } from '../src/climayte-lib'
 import { climayteList } from '../src/climayte-view'
+import { rmRetry } from './rm-retry'
 
 const GROUP = 'pane-projection-synthetic'
 const NOW = 1_000_000
@@ -160,7 +161,7 @@ function removeScratch(home: string): void {
   const target = resolve(home)
   if (dirname(target) !== resolve(tmpdir()) || !basename(target).startsWith('climayte-pane-'))
     throw new Error('Refusing unexpected pane fixture cleanup')
-  rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+  rmRetry(target)
 }
 
 test('pane JSON is exactly existing lean JSON minus unused raw fields across states and UI fallbacks', () => {

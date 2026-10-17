@@ -16,11 +16,12 @@
 // never a control's text (a row's text is a chat title, a name cell's an account). GESTURE_ONLY=pane|desk and GESTURE_WHAT=<text>
 // pick cases; GESTURE_TRACE=1 prints each case's pointer, mouse, focus and click events (target tag, data-slot, data-state).
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { rmRetry } from '../server/test/rm-retry'
 
 const DESK = resolve(import.meta.dir, '..')
 // A free port each unless E2E_PORT / E2E_CDP_PORT name one: two sessions running this at once used to collide on 7819.
@@ -315,7 +316,7 @@ try {
   server.kill()
   await Promise.all([edge?.exited, server.exited])
   // A folder Edge's helpers still hold a moment longer is left to the temp cleaner.
-  for (const dir of [home, profile]) try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+  for (const dir of [home, profile]) try { rmRetry(dir) } catch {}
 }
 const failed = lines.filter((l) => !l.ok).length
 console.log(`${lines.length - failed} of ${lines.length} first gestures did their job`)

@@ -449,6 +449,29 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       `// Bun.spawn(['explorer', dir], { windowsHide: true })`,
     ],
   },
+  'rm-retry-option-ignored.mjs': {
+    broken: [
+      // The shape climayte-runner-job.test.ts shipped on 2026-10-15 and failed windows-latest with on 2026-10-17.
+      `afterEach(() => {
+         for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10 })
+       })`,
+      // retryDelay alone, laid out over lines as biome writes a long call.
+      `rmSync(join(tmpdir(), name), {
+         recursive: true,
+         force: true,
+         retryDelay: 300,
+       })`,
+    ],
+    fixed: [
+      `afterEach(() => {
+         for (const d of dirs.splice(0)) rmRetry(d)
+       })`,
+      // The words in a comment explaining the rule, and a retry option that is not rmSync's.
+      `// Bun's rmSync takes no maxRetries, so it is tried again here.
+       rmSync(dir, { recursive: true, force: true })
+       await fetchWithRetry(url, { maxRetries: 3 })`,
+    ],
+  },
   'spawn-test-without-timeout.mjs': {
     broken: [
       // Direction A: an inline spawn on the 5s default. The shape tests/launcher.test.ts:126 shipped.

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stopDashboardBackend } from '../src/dashboard-backend'
@@ -12,6 +12,7 @@ import {
   workspaceOf,
   writeDashboard,
 } from '../src/dashboards'
+import { rmRetry } from './rm-retry'
 
 const root = mkdtempSync(join(tmpdir(), 'dashboard-backend-test-'))
 const serverScript = join(root, 'tiny-backend.ts')
@@ -84,7 +85,7 @@ beforeAll(() => {
 afterAll(() => {
   for (const id of started) stopDashboardBackend(id)
   daemon.stop(true)
-  rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+  rmRetry(root)
 })
 
 describe('declaring a backend', () => {
