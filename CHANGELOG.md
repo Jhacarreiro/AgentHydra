@@ -7,6 +7,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [2.0.5] - 2026-10-16
+
+**TL;DR**
+
+- **AgentHydra is now free for noncommercial use**
+- **Routines replace ArchAIngel: scheduled jobs you approve, kept in one central place every PC can read**
+- **Codex chats continue in AgentHydra's window and move between Codex accounts with all their history**
+- **Pick several chats in the sidebar and act on them at once; park, duplicate or add a note to any chat**
+- **A chat sums up the seats it opened and shows what it handed to HSwarm and CliMayte**
+- **Command packs bring a team's slash commands and skills to every account**
+- **CliMayte is part of HSwarm, and Free ChatGPT and Claude accounts take on more of its work**
+- **People, and Sue, Dredd and the price check, are private add-ons; your people can follow you to other PCs**
+- **A revoked login no longer shows as "rate limited", and signing in again fixes it**
+- **AgentHydra no longer freezes for about an hour a day, and uses about half the CPU while CliMayte works**
+- **AgentHydra no longer types into your Claude windows by itself**
+- **Stuck shared chats finish, and a full chat store clears itself**
+- **Restart to update restarts AgentHydra itself too, and your always-on helpers keep running through it**
+- **Build tools are updated past three security advisories**
+
+**Everything in 2.0.5**
+
 - **Stuck shared chats finish, and a full chat store clears itself.** A shared chat whose transcript moved to a new session no longer sits at "receiving" on your other PC: it is sent again from the start, and a PC that finds pieces of a chat missing asks for it again. Once a day the sync store also frees transcript pieces no chat uses anymore, which had filled its room and stopped new chats from being shared.
 - **Hydra Desk no longer shows the built-in Default login.** It is absent from account lists, pickers and Settings, and new, imported, moved or retried chats go to a signed-in account with room. Existing chats recorded on it still open with their transcript.
 - **Unchanged Free chat lists keep their history cache.** Background account checks no longer make the app download and process the whole chat history when nothing changed. Real chat updates, titles and errors still refresh it.
