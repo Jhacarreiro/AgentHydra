@@ -37,8 +37,13 @@
 //                                session, meta.s) goes with it once no other row shares that session
 //   PUT    /v1/chats/:id/chunks/:seq {blob, by}: an append-only transcript piece, written once
 //                                -> {seq}; 409 {error:'taken', next} when that seq exists;
-//                                507 {error, used, room} when it would take chats past their room
+//                                507 {error, used, room} when it would take chats past their room;
+//                                a seq below the chat's floor (see ack) is refused as taken
 //   GET    /v1/chats/:id/chunks?from=n  {chunks:[{seq, blob, by, createdAt}], next, more}
+//                                or 410 {error:'gone', floor} when n is below the floor
+//   POST   /v1/chats/:id/ack {pc, next, o}  the reading PC holds every chunk of row :id's stream (meta.o)
+//                                below seq next -> {ok, floor}; chunks every reading PC holds are deleted
+//                                (the relay); 409 when the row is gone or carries another stream
 //   GET    /v1/free              {free:[{id, version, meta, updatedAt}]}   (Hydra Desk 2's Free web
 //   GET    /v1/free/:id          {id, version, blob, meta, updatedAt}       logins, one row per Free
 //   PUT    /v1/free/:id          {version, blob, meta} -> {version} | 409   instance, written like a
@@ -73,7 +78,7 @@ const chatRoom = (env) => {
 }
 
 // Bump when the schema below changes: a database at this PRAGMA user_version is not migrated again.
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 let schemaReady = false
 async function ensureSchema(db) {
   if (schemaReady) return
@@ -165,6 +170,18 @@ async function ensureSchema(db) {
         'INSERT OR IGNORE INTO chat_usage (id, chars) SELECT 1, COALESCE(SUM(length(blob)), 0) FROM chat_chunks',
       )
       .run()
+  // The relay (schema 4): what each reading PC acknowledged holding of a session's transcript (every
+  // chunk below `next`), and the floor below which its chunks were deleted once every reader held them.
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS chat_acks (chat TEXT NOT NULL, pc TEXT NOT NULL, next INTEGER NOT NULL, PRIMARY KEY (chat, pc))',
+    )
+    .run()
+  await db
+    .prepare(
+      'CREATE TABLE IF NOT EXISTS chat_floor (chat TEXT PRIMARY KEY, floor INTEGER NOT NULL)',
+    )
+    .run()
   // Prunes by time: without this index the prune reads every tombstone.
   await db.prepare('CREATE INDEX IF NOT EXISTS tombstones_time ON tombstones(time)').run()
   schemaReady = true
@@ -335,6 +352,9 @@ const usageNow = (env, chars) =>
 const SEEN_SAVE_MS = 3 * 60 * 1000
 const SEEN_KEEP_MS = 30 * 24 * 60 * 60 * 1000
 const SEEN_MAX = 32
+// The readers of a chat are the PCs seen in the last READER_MS (a changes poll or an ack): one gone longer
+// no longer holds its chunks, and asks for the chat again if it comes back.
+const READER_MS = 14 * 24 * 60 * 60 * 1000
 
 const higherHead = (a, b) => {
   if (!a) return b
@@ -381,6 +401,11 @@ export class StoreHead {
     if (op === 'head') {
       const head = await this.current()
       return json({ head, seen: await this.stamp(body?.pc) })
+    }
+    if (op === 'readers') {
+      await this.stamp(body?.pc)
+      const now = Date.now()
+      return json({ readers: Object.keys(this.seen).filter((p) => now - this.seen[p] < READER_MS) })
     }
     if (op === 'begin') {
       const token = crypto.randomUUID()
@@ -672,18 +697,91 @@ async function deleteChat(env, db, id, version) {
     .bind(session)
     .first()
   if (shared) return json({ ok: true })
-  const freed = await db
-    .prepare('SELECT COALESCE(SUM(length(blob)), 0) AS n FROM chat_chunks WHERE chat = ?')
-    .bind(session)
-    .first()
-  await db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(session).run()
+  // The transcript, its readers' acks and its floor go together, so a stream started over under the same
+  // session begins clean.
+  const [usage] = await db.batch([
+    db
+      .prepare(
+        'UPDATE chat_usage SET chars = MAX(0, chars - (SELECT COALESCE(SUM(length(blob)), 0) FROM chat_chunks WHERE chat = ?)) WHERE id = 1 RETURNING chars',
+      )
+      .bind(session),
+    db.prepare('DELETE FROM chat_chunks WHERE chat = ?').bind(session),
+    db.prepare('DELETE FROM chat_acks WHERE chat = ?').bind(session),
+    db.prepare('DELETE FROM chat_floor WHERE chat = ?').bind(session),
+  ])
   takenKept.delete(session)
-  const left = await db
-    .prepare('UPDATE chat_usage SET chars = MAX(0, chars - ?) WHERE id = 1 RETURNING chars')
-    .bind(freed?.n ?? 0)
-    .first()
-  await usageNow(env, left?.chars)
+  await usageNow(env, usage?.results?.[0]?.chars)
   return json({ ok: true })
+}
+
+const FLOOR_SQL = 'SELECT floor FROM chat_floor WHERE chat = ?'
+// Row :id still carries stream `o` (meta.o; NULL for a stream from a build before the relay).
+const SAME_STREAM = "EXISTS (SELECT 1 FROM chats WHERE id = ? AND json_extract(meta, '$.o') IS ?)"
+
+// POST /v1/chats/:id/ack {pc, next, o} — THE RELAY (owner, 2026-10-14): each PC keeps its own copy of a
+// chat, and the store carries the transcript only until the PCs that read it have it. Reading PC `pc`
+// holds every chunk of the stream below seq `next`. The readers are the PCs seen in the last READER_MS
+// other than the one the chat started on (meta.pc); a PC seen that never acks (a build before the relay,
+// or one with chats off) holds the chunks, so it keeps reading whole. The chunks below the lowest reader's
+// ack go with their room, and the floor is noted: a read below it is 410 and a write below it is taken.
+// Every write here acts only while the row still carries stream `o`, so an ack racing a start-over never
+// frees the new stream's chunks.
+async function ackChat(request, env, db, id) {
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    return json({ error: 'body must be JSON' }, 400)
+  }
+  const pc = body?.pc
+  const next = body?.next
+  const o = typeof body?.o === 'string' ? body.o : null
+  if (typeof pc !== 'string' || !ID_RE.test(pc)) return json({ error: 'bad pc' }, 400)
+  if (!Number.isInteger(next) || next < 0 || next > MAX_SEQ + 1)
+    return json({ error: 'bad next' }, 400)
+  const r = await db.prepare('SELECT meta FROM chats WHERE id = ?').bind(id).first()
+  let meta = null
+  try {
+    meta = JSON.parse(r?.meta ?? 'null')
+  } catch {}
+  const session = meta?.s
+  if (typeof session !== 'string' || !ID_RE.test(session) || (meta.o ?? null) !== o)
+    return json({ error: 'stream changed' }, 409)
+  const { readers } = await askHead(env, 'readers', { pc })
+  const [, acks, kept] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO chat_acks (chat, pc, next) SELECT ?, ?, ? WHERE ${SAME_STREAM} ON CONFLICT(chat, pc) DO UPDATE SET next = MAX(next, excluded.next)`,
+      )
+      .bind(session, pc, next, id, o),
+    db.prepare('SELECT pc, next FROM chat_acks WHERE chat = ?').bind(session),
+    db.prepare(FLOOR_SQL).bind(session),
+  ])
+  const had = new Map((acks.results ?? []).map((a) => [a.pc, a.next]))
+  const was = kept.results?.[0]?.floor ?? 0
+  const others = (readers ?? []).filter((p) => p !== meta.pc)
+  const floor = others.length ? Math.min(...others.map((p) => had.get(p) ?? 0)) : 0
+  if (floor <= was) return json({ ok: true, floor: was })
+  const below = 'chat = ? AND seq < ?'
+  const [usage] = await db.batch([
+    db
+      .prepare(
+        `UPDATE chat_usage SET chars = MAX(0, chars - (SELECT COALESCE(SUM(length(blob)), 0) FROM chat_chunks WHERE ${below})) WHERE id = 1 AND ${SAME_STREAM} RETURNING chars`,
+      )
+      .bind(session, floor, id, o),
+    db
+      .prepare(`DELETE FROM chat_chunks WHERE ${below} AND ${SAME_STREAM}`)
+      .bind(session, floor, id, o),
+    db
+      .prepare(
+        `INSERT INTO chat_floor (chat, floor) SELECT ?, ? WHERE ${SAME_STREAM} ON CONFLICT(chat) DO UPDATE SET floor = MAX(floor, excluded.floor)`,
+      )
+      .bind(session, floor, id, o),
+  ])
+  if (!usage?.results?.length) return json({ error: 'stream changed' }, 409)
+  takenKept.delete(session)
+  await usageNow(env, usage.results[0].chars)
+  return json({ ok: true, floor })
 }
 
 // Chunk seqs this isolate learned are already stored, per chat, for TAKEN_KEEP_MS. A client whose first
@@ -714,13 +812,13 @@ const knownTaken = (chat, seq) => {
   return kept.seqs.has(seq) ? kept : null
 }
 
-// Where a chat's chunks end, as the answer to a taken seq.
+// Where a chat's chunks end, as the answer to a taken seq: past the floor when every chunk left.
 async function takenAnswer(db, id, seq) {
-  const top = await db
-    .prepare('SELECT MAX(seq) AS top FROM chat_chunks WHERE chat = ?')
-    .bind(id)
-    .first()
-  const next = (top?.top ?? -1) + 1
+  const [top, kept] = await db.batch([
+    db.prepare('SELECT MAX(seq) AS top FROM chat_chunks WHERE chat = ?').bind(id),
+    db.prepare(FLOOR_SQL).bind(id),
+  ])
+  const next = Math.max((top.results?.[0]?.top ?? -1) + 1, kept.results?.[0]?.floor ?? 0)
   rememberTaken(id, seq, next)
   return json({ error: 'taken', next }, 409)
 }
@@ -751,13 +849,14 @@ async function putChunk(request, db, env, id, seq) {
   const used = await usageUsed(env, db)
   const room = chatRoom(env)
   if (used + blob.length > room) return json({ error: 'no room for more chats', used, room }, 507)
-  // The insert and the counter are one batch: the counter moves only when the chunk was stored.
+  // The insert and the counter are one batch: the counter moves only when the chunk was stored. A seq
+  // below the floor (its chunk left once every reader had it) is not stored again.
   const [result, total] = await db.batch([
     db
       .prepare(
-        'INSERT INTO chat_chunks (chat, seq, blob, by, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat, seq) DO NOTHING',
+        `INSERT INTO chat_chunks (chat, seq, blob, by, created_at) SELECT ?, ?, ?, ?, ? WHERE ? >= COALESCE((${FLOOR_SQL}), 0) ON CONFLICT(chat, seq) DO NOTHING`,
       )
-      .bind(id, seq, blob, by, Date.now()),
+      .bind(id, seq, blob, by, Date.now(), seq, id),
     db
       .prepare(
         'UPDATE chat_usage SET chars = chars + ? WHERE id = 1 AND changes() = 1 RETURNING chars',
@@ -778,13 +877,18 @@ async function putChunk(request, db, env, id, seq) {
 async function listChunks(db, id, fromParam) {
   const from = fromParam === null ? 0 : Number(fromParam)
   if (!Number.isInteger(from) || from < 0) return json({ error: 'bad from' }, 400)
-  const { results: sizes } = await db
-    .prepare(
-      'SELECT seq, length(blob) AS n FROM chat_chunks WHERE chat = ? AND seq >= ? ORDER BY seq',
-    )
-    .bind(id, from)
-    .all()
-  const all = sizes || []
+  const [sizes, kept] = await db.batch([
+    db
+      .prepare(
+        'SELECT seq, length(blob) AS n FROM chat_chunks WHERE chat = ? AND seq >= ? ORDER BY seq',
+      )
+      .bind(id, from),
+    db.prepare(FLOOR_SQL).bind(id),
+  ])
+  // The chunks below the floor left once every reader had them: this PC needs the chat sent again.
+  const floor = kept.results?.[0]?.floor ?? 0
+  if (from < floor) return json({ error: 'gone', floor }, 410)
+  const all = sizes.results || []
   let chars = 0
   let count = 0
   for (const r of all) {
@@ -948,6 +1052,12 @@ function route(request, db, env, url, path) {
   }
   const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
   if (c) return routeChunks(request, db, env, url, c)
+  const a = /^\/v1\/chats\/([^/]+)\/ack$/.exec(path)
+  if (a && !ID_RE.test(a[1])) return json({ error: 'bad id' }, 400)
+  if (a)
+    return request.method === 'POST'
+      ? ackChat(request, env, db, a[1])
+      : json({ error: 'method not allowed' }, 405)
   const m = /^\/v1\/(logins|queues|chats|free)\/([^/]+)$/.exec(path)
   return m ? routeRow(request, env, db, url, m) : json({ error: 'not found' }, 404)
 }
