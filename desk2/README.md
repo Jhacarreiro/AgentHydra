@@ -283,7 +283,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   chat is at work comes from its rollout's turn marks (`task_started` until `task_complete` or `turn_aborted`;
   `codexTurnOpen` in `bridge/codex-rollout.ts`), not from how recently it wrote: a command that ran a minute wrote
   nothing, so the chat read as idle after 30 s and its composer came and went (owner, 2026-10-14). An open turn quiet for
-  30 minutes counts as ended. Opening a session from a search while the
+  30 minutes counts as ended. An outside Claude Code chat whose turn ended while its background tasks run (a
+  `run_in_background` command, a Monitor, a background workflow or agent) is drawn running, the orange dot of a Desk chat
+  whose work still runs, never the idle ring (owner, 2026-10-16: "it's a lighter gray than the others, which means you
+  apparently believe it's inactive"): `bridge/background-tasks.ts` reads the tasks its live engine's transcript opened
+  and has not ended, reading only what was appended since its last look. Opening a session from a search while the
   session rail is shut shows the rail for two seconds, lying over the chat, then shuts it again; the pointer on it
   keeps it out (`peekHeader` in `session-header/state.ts`).
 - **Several rows at once** (owner, 2026-10-14: "click on one and then I hold Shift or Control ... multi-select so I
