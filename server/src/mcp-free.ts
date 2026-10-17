@@ -3,20 +3,22 @@
 // them the way climayte_run sends it into the CLI accounts (owner, 2026-10-06: "orchestrate threads into
 // free accounts"). They live in Desk 2's server, not this daemon, so every tool calls Desk 2's
 // /api/free (desk2/README.md, "Free instances"); this file keeps no account state of its own beyond the
-// batches it is sending, the rests after failed sends and each ChatGPT account's learned pace (free-pace.json).
+// batches it is sending (each saved in free-batches/, so the next daemon carries it on), the rests after
+// failed sends and each ChatGPT account's learned pace (free-pace.json).
 // Each Free account runs one operation at a time, so a batch waits for an idle account rather than ever being
 // refused for a busy one.
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
-import { writeJsonStoreAtomic } from './core/json-store'
+import { writeJsonStoreAtomic, writeJsonTextAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
+import { isPidAlive } from './core/process'
 import { desk2Present, desk2Url } from './desk2'
-import { freeBatchLifecycle } from './free-batch-lifecycle'
+import { freeBatchHandover } from './free-batch-handover'
 import { FreeBatchRetention } from './free-batch-retention'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
-import type { McpEngineTool } from './mcp-stdio.mjs'
 
 type Provider = 'claude' | 'chatgpt'
 interface FreeWindow {
@@ -717,6 +719,10 @@ interface Item {
   instanceId?: string
   requestId?: string
   startedAt?: number
+  /** Set, with requestId and instanceId, just before the send is posted, and saved first: a daemon that
+   *  died before Desk 2 answered left an operation that may exist, so the next one resends it under the
+   *  same request id, which Desk 2 answers with the operation it already has (service.ts start). */
+  sendingAt?: number
 }
 interface Batch {
   id: string
@@ -724,6 +730,9 @@ interface Batch {
   createdAt: number
   settled: boolean
   done: Promise<void>
+  /** The text last saved, and the save chain that keeps this batch's writes in order. */
+  saved?: string
+  saving?: Promise<void>
 }
 
 const batches = new Map<string, Batch>()
@@ -732,7 +741,155 @@ const QUEUE_LIMIT_MS = 30 * 60_000
 /** How often a running batch looks at Desk 2 again. */
 const TICK_MS = 1500
 const KEEP_BATCH_MS = 6 * 60 * 60_000
-const batchRetention = new FreeBatchRetention(batches, KEEP_BATCH_MS)
+/** A send left half-way is resent only inside this window: Desk 2 keeps a finished operation 15 minutes,
+ *  so a resend later than that could start a second one. Past it, the outcome is reported unknown. */
+const RESEND_WINDOW_MS = 10 * 60_000
+/** How long a restart lets a tick or an admission under way finish before it hands over anyway. */
+const PARK_TIMEOUT_MS = 20_000
+const batchDir = () => join(DATA_DIR, 'free-batches')
+const batchFile = (id: string) => join(batchDir(), `${id}.json`)
+const batchRetention = new FreeBatchRetention(batches, KEEP_BATCH_MS, undefined, (id) => {
+  try {
+    rmSync(batchFile(id), { force: true })
+  } catch {
+    // Held a moment (Defender, the indexer): a later adoption drops it as expired.
+  }
+})
+
+/** What survives the process. `owner` and `handedOff` say whether a live daemon still runs it. */
+interface SavedBatch {
+  v: 1
+  id: string
+  createdAt: number
+  settled: boolean
+  owner: number
+  handedOff: boolean
+  items: Item[]
+}
+
+/** Saves the batch when it changed. Writes of one batch go out in order, so the last state wins. */
+function saveBatch(b: Batch): Promise<void> {
+  const record: SavedBatch = {
+    v: 1,
+    id: b.id,
+    createdAt: b.createdAt,
+    settled: b.settled,
+    owner: process.pid,
+    handedOff: freeBatchHandover.isParked(),
+    items: b.items,
+  }
+  const text = JSON.stringify(record)
+  if (text === b.saved) return b.saving ?? Promise.resolve()
+  b.saved = text
+  b.saving = (b.saving ?? Promise.resolve())
+    .then(() => writeJsonTextAtomic(batchFile(b.id), text))
+    .catch((e) =>
+      console.error(
+        `[agenthydra] free batch ${b.id}: could not save it, a restart would lose it`,
+        e,
+      ),
+    )
+  return b.saving
+}
+
+/** Parks every batch for a restart and saves them; the successor adopts them. Bounded by PARK_TIMEOUT_MS. */
+export async function parkFreeBatches(timeoutMs = PARK_TIMEOUT_MS): Promise<void> {
+  await freeBatchHandover.park(timeoutMs)
+  await saveFreeBatches()
+}
+
+/** The handoff failed: this daemon keeps its batches and goes on sending them. */
+export function resumeFreeBatches(): void {
+  freeBatchHandover.resume()
+  void saveFreeBatches()
+}
+
+/** Every batch on disk as it is now (an exit). */
+export async function saveFreeBatches(): Promise<void> {
+  await Promise.all([...batches.values()].map((b) => saveBatch(b)))
+}
+
+function readSavedBatch(text: string): SavedBatch | null {
+  try {
+    const r = JSON.parse(text) as Partial<SavedBatch>
+    if (r?.v !== 1 || typeof r.id !== 'string' || !Array.isArray(r.items)) return null
+    if (!isNum(r.createdAt) || !isNum(r.owner)) return null
+    if (!r.items.every((it) => isRecord(it) && isRecord(it.task) && isRecord(it.s))) return null
+    return r as SavedBatch
+  } catch {
+    return null
+  }
+}
+
+let adopting: Promise<number> | null = null
+/** Takes on the batches an earlier daemon saved (its relaunch, a quit or a crash): finished ones answer
+ *  free_results again, the rest go on sending. One a live daemon still runs, never handed off, is left to it.
+ *  free_results waits for it, so a poll that lands as the new daemon boots still finds its batch. */
+export function adoptFreeBatches(now = Date.now()): Promise<number> {
+  adopting = adoptSaved(now).catch((e) => {
+    console.error('[agenthydra] free batches: could not read the saved ones', e)
+    return 0
+  })
+  return adopting
+}
+
+async function adoptSaved(now: number): Promise<number> {
+  let names: string[]
+  try {
+    names = (await readdir(batchDir())).filter((n) => n.endsWith('.json'))
+  } catch {
+    return 0
+  }
+  const files = await mapPool(names, 8, async (name) => {
+    const file = join(batchDir(), name)
+    return { file, text: await readFile(file, 'utf8').catch(() => null) }
+  })
+  let adopted = 0
+  for (const { file, text } of files) {
+    if (text === null) continue
+    const saved = readSavedBatch(text)
+    if (!saved || now - saved.createdAt > KEEP_BATCH_MS) {
+      await rm(file, { force: true }).catch(() => undefined)
+      continue
+    }
+    if (batches.has(saved.id)) continue
+    if (saved.owner !== process.pid && !saved.handedOff && isPidAlive(saved.owner)) {
+      console.warn(
+        `[agenthydra] free batch ${saved.id}: pid ${saved.owner} still runs it, so this daemon leaves it alone`,
+      )
+      continue
+    }
+    const b: Batch = {
+      id: saved.id,
+      items: saved.items,
+      createdAt: saved.createdAt,
+      settled: saved.settled,
+      done: Promise.resolve(),
+    }
+    batches.set(b.id, b)
+    if (!b.settled) launch(b)
+    adopted++
+  }
+  batchRetention.prune()
+  if (adopted) console.log(`[agenthydra] free batches: carried on ${adopted} from the last daemon`)
+  return adopted
+}
+
+/** Runs a batch until every task is settled, then keeps it (and its file) for free_results. */
+function launch(b: Batch): void {
+  b.done = runBatch(b)
+    .catch((e) => {
+      for (const it of b.items)
+        if (it.s.state === 'queued' || it.s.state === 'running')
+          Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+      releaseFreeBatchInputs(b.items)
+    })
+    .finally(() => {
+      b.settled = true
+      void saveBatch(b)
+      batchRetention.prune()
+    })
+}
 
 function finish(it: Item, result: FreeResult | undefined, account: FreeInstance | undefined) {
   it.s.seconds = it.startedAt ? Math.round((Date.now() - it.startedAt) / 1000) : undefined
@@ -763,9 +920,9 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
 const pending = (b: Batch) =>
   b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')
 
-/** Restart guards protect queued work as well as a provider operation already running. */
+/** Batches this daemon is still sending (health's freeBatchesPending). A restart no longer waits for them. */
 export function freeBatchPendingCount(): number {
-  return freeBatchLifecycle.activeCount()
+  return [...batches.values()].filter(pending).length
 }
 
 /** Polling ended without a final acknowledgement; this says nothing about provider success or failure. */
@@ -1021,9 +1178,12 @@ function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
   }
 }
 
-async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
-  const requestId = randomUUID()
+async function startTask(b: Batch, it: Item, account: FreeInstance, busy: Set<string>) {
+  // A send an earlier daemon left half-way goes out under its own request id again (Item.sendingAt).
+  const requestId = it.sendingAt && it.requestId ? it.requestId : randomUUID()
   const body = jobBody(it.task, account, requestId)
+  Object.assign(it, { requestId, instanceId: account.id, sendingAt: it.sendingAt ?? Date.now() })
+  await saveBatch(b)
   try {
     try {
       await desk('POST', '/jobs', body)
@@ -1055,6 +1215,7 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
     }
     saveFreeHealth()
     Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
+    delete it.sendingAt
     Object.assign(it.s, {
       state: 'running',
       account: accountLabel(account),
@@ -1063,54 +1224,94 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
     })
     busy.add(account.id)
   } catch (e) {
+    // Desk 2 answered, so it started nothing: the task is free to go anywhere next tick.
+    if ((e as DeskError).status)
+      for (const k of ['requestId', 'instanceId', 'sendingAt'] as const) delete it[k]
     // Busy since the status was read (another chat, a keepalive nudge): the next tick tries again.
     if ((e as DeskError).status === 409) busy.add(account.id)
     else Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
   }
 }
 
+/** A send an earlier daemon left half-way: resent to its own account under its own request id (Desk 2
+ *  answers with the operation if it has it, so nothing is sent twice), or reported unknown once Desk 2
+ *  may have forgotten it. */
+async function resumeSend(b: Batch, it: Item, tick: Tick): Promise<void> {
+  const account = tick.byId.get(it.instanceId ?? '')
+  if (account && Date.now() - (it.sendingAt ?? 0) <= RESEND_WINDOW_MS)
+    return startTask(b, it, account, tick.busy)
+  Object.assign(it.s, {
+    state: 'failed',
+    error:
+      'operation_unconfirmed: AgentHydra restarted while this send was being made, and it can no longer be checked. The provider operation may have happened: check free_threads and free_read before sending again. No automatic resend was made.',
+  })
+  delete it.sendingAt
+}
+
 /** Sends a batch: each queued task starts on an idle account (a continuation on its thread's own),
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
-  const until = Date.now() + QUEUE_LIMIT_MS
+  // From the batch's own start, so a restart does not give its queue a fresh 30 minutes.
+  const until = b.createdAt + QUEUE_LIMIT_MS
   const cache: BatchReads = {
     threads: null,
     chatIds: b.items.flatMap((it) => (it.task.chat_id ? [it.task.chat_id] : [])),
   }
   await seedOnce()
+  let away: Error | null = null
   while (pending(b)) {
-    let status: FreeStatus
+    // Parked for a restart, the batch waits here; the next daemon carries it on from its file.
+    const leave = await freeBatchHandover.tick()
+    let pause = TICK_MS
     try {
-      status = await readStatus()
-    } catch (e) {
-      // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
-      if (Date.now() > until || (e as DeskError).status !== 0)
-        failQueued(b, String((e as Error).message))
-      releaseFreeBatchInputs(b.items, cache)
-      await sleep(TICK_MS * 2)
-      if (Date.now() > until) {
-        failQueued(b, String((e as Error).message))
+      if (away && Date.now() > until) {
+        failQueued(b, away.message)
         markUnconfirmedFreeOperations(b.items)
         releaseFreeBatchInputs(b.items, cache)
         break
       }
+      away = await tickBatch(b, cache, until)
+      if (away) pause = TICK_MS * 2
+    } finally {
+      leave()
+      await saveBatch(b)
+    }
+    if (pending(b)) await sleep(pause)
+  }
+}
+
+/** One look at Desk 2: reads the running tasks, starts queued ones. Returns Desk 2's error when it is away. */
+async function tickBatch(b: Batch, cache: BatchReads, until: number): Promise<Error | null> {
+  let status: FreeStatus
+  try {
+    status = await readStatus()
+  } catch (e) {
+    // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
+    if (Date.now() > until || (e as DeskError).status !== 0)
+      failQueued(b, String((e as Error).message))
+    releaseFreeBatchInputs(b.items, cache)
+    return e as Error
+  }
+  const tick = readTick(b, status)
+  const running = b.items.filter((x) => x.s.state === 'running')
+  // These reads are independent. Keep health, retries and provider probe accounting in the same
+  // task order as before, even when Desk answers them in a different order.
+  const replies = await readJobs(running, cache)
+  for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
+  for (const it of b.items.filter((x) => x.s.state === 'queued')) {
+    // A restart began: nothing new is sent here; the next daemon starts it.
+    if (freeBatchHandover.isParked()) break
+    if (it.sendingAt) {
+      await resumeSend(b, it, tick)
       continue
     }
-    const tick = readTick(b, status)
-    const running = b.items.filter((x) => x.s.state === 'running')
-    // These reads are independent. Keep health, retries and provider probe accounting in the same
-    // task order as before, even when Desk answers them in a different order.
-    const replies = await readJobs(running, cache)
-    for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
-    for (const it of b.items.filter((x) => x.s.state === 'queued')) {
-      const account = await accountFor(it, tick, cache)
-      if (account) await startTask(it, account, tick.busy)
-    }
-    if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
-    // Retry decisions and queued starts are settled before any input is released.
-    releaseFreeBatchInputs(b.items, cache)
-    if (pending(b)) await sleep(TICK_MS)
+    const account = await accountFor(it, tick, cache)
+    if (account) await startTask(b, it, account, tick.busy)
   }
+  if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+  // Retry decisions and queued starts are settled before any input is released.
+  releaseFreeBatchInputs(b.items, cache)
+  return null
 }
 
 function snapshot(b: Batch) {
@@ -1127,9 +1328,20 @@ function snapshot(b: Batch) {
       ? {}
       : {
           poll: `free_results { batch: "${b.id}" }`,
-          note: 'Still sending: the batch goes on after this call. Poll it; nothing is lost by waiting.',
+          note: freeBatchHandover.isParked()
+            ? 'AgentHydra is restarting onto new code: this batch is saved, and the next daemon sends the rest in a few seconds. Poll it; nothing is lost.'
+            : 'Still sending: the batch goes on after this call. Poll it; nothing is lost by waiting.',
         }),
   }
+}
+
+/** Waits for the batch, at most `ms`. A restart cuts the wait short, so the caller has its answer and the
+ *  batch id before this daemon exits; while one is under way a wait is a second at most. */
+async function waitFor(b: Batch, ms: number): Promise<void> {
+  const cut = freeBatchHandover.isParked()
+    ? sleep(Math.min(ms, 1000))
+    : Promise.race([sleep(ms), freeBatchHandover.nextPark()])
+  await Promise.race([b.done, cut])
 }
 
 function waitMs(a: Record<string, unknown>): number {
@@ -1320,38 +1532,29 @@ export const FREE_TOOLS: HydraTool[] = [
         task: readTask(t, i),
         s: { task: i, state: 'queued' },
       }))
-      const release = freeBatchLifecycle.acquire()
-      let transferred = false
+      // Never refused for a restart: a restart lets this preflight finish, and a batch admitted while it
+      // is under way is saved for the next daemon to send.
+      const leave = freeBatchHandover.track()
+      let b: Batch
       try {
         // Fail before anything is queued when Desk 2 cannot be reached at all.
         await readStatus()
-        const b: Batch = {
+        b = {
           id: randomUUID().slice(0, 8),
           items,
           createdAt: Date.now(),
           settled: false,
           done: Promise.resolve(),
         }
-        b.done = runBatch(b)
-          .catch((e) => {
-            for (const it of b.items)
-              if (it.s.state === 'queued' || it.s.state === 'running')
-                Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-            releaseFreeBatchInputs(b.items)
-          })
-          .finally(() => {
-            release()
-            b.settled = true
-            batchRetention.prune()
-          })
-        transferred = true
         batches.set(b.id, b)
+        await saveBatch(b)
+        launch(b)
         batchRetention.prune()
-        await Promise.race([b.done, sleep(waitMs(a))])
-        return snapshot(b)
       } finally {
-        if (!transferred) release()
+        leave()
       }
+      await waitFor(b, waitMs(a))
+      return snapshot(b)
     },
   },
   {
@@ -1364,7 +1567,7 @@ export const FREE_TOOLS: HydraTool[] = [
   {
     name: 'free_results',
     description:
-      "A free_chat batch: each task's state (queued, running, done, failed), account, chat_id and reply. Waits up to `wait_s` (at most 45, the default) for the batch to finish. Batches are kept 6 hours in this AgentHydra's memory; a restart loses them, never the threads (free_threads, free_read).",
+      "A free_chat batch: each task's state (queued, running, done, failed), account, chat_id and reply. Waits up to `wait_s` (at most 45, the default) for the batch to finish. Batches are kept 6 hours and outlive an AgentHydra restart: the next daemon carries each one on and answers for it here.",
     inputSchema: S(
       {
         batch: { type: 'string' },
@@ -1377,12 +1580,13 @@ export const FREE_TOOLS: HydraTool[] = [
     ),
     run: async (a) => {
       batchRetention.prune()
+      if (!batches.has(str(a.batch))) await adopting
       const b = batches.get(str(a.batch))
       if (!b)
         throw new Error(
-          `no batch ${str(a.batch)} here (kept 6 hours, lost on a restart): free_threads lists the threads, free_read reads one`,
+          `no batch ${str(a.batch)} here (kept 6 hours): free_threads lists the threads, free_read reads one`,
         )
-      await Promise.race([b.done, sleep(waitMs(a))])
+      await waitFor(b, waitMs(a))
       return snapshot(b)
     },
   },

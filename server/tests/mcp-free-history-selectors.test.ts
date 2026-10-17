@@ -1,14 +1,15 @@
 // Real MCP contracts against an isolated stand-in window; no provider traffic or browsers.
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
-import { freeBatchLifecycle } from '../src/free-batch-lifecycle'
 import {
   accountLabel,
   FREE_TOOLS,
   type FreeInstance,
   freeBatchPendingCount,
   markUnconfirmedFreeOperations,
+  parkFreeBatches,
   releaseFreeBatchInputs,
   resetFreeHealth,
+  resumeFreeBatches,
 } from '../src/mcp-free'
 
 const CHAT = '11111111-1111-4111-8111-111111111111'
@@ -78,6 +79,9 @@ function completeJobs(): void {
   holdJobs = false
   for (const job of jobs.values()) job.state = 'done'
 }
+
+/** Longer than a batch's tick (mcp-free.ts TICK_MS), so a send that was going to happen has. */
+const TICK_WAIT_MS = 2000
 
 async function until(check: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000
@@ -176,7 +180,7 @@ beforeEach(() => {
   holdJobs = statusFails = false
   statusGate = null
   releaseStatus = null
-  freeBatchLifecycle.abortRestart()
+  resumeFreeBatches()
   resetFreeHealth()
 })
 
@@ -190,7 +194,7 @@ afterEach(async () => {
     if (admission.status === 'fulfilled' && admission.value?.batch)
       batches.push(admission.value.batch)
   for (const batch of new Set(batches.splice(0))) await run('free_results', { batch, wait_s: 10 })
-  freeBatchLifecycle.abortRestart()
+  resumeFreeBatches()
   resetFreeHealth()
 })
 
@@ -320,41 +324,46 @@ test('a continuation batch captures all IDs once, keeps duplicate routing and pr
   }
 }, 30_000)
 
-test('a batch admission is counted before a slow status preflight and remains held after wait_s zero', async () => {
+test('a restart lets an admission in its preflight finish, refuses no task, and a failed handoff sends it', async () => {
   holdJobs = true
   statusGate = new Promise((resolve) => {
     releaseStatus = resolve
   })
-  const pending = run('free_chat', { tasks: [{ prompt: 'Synthetic admitted task' }], wait_s: 0 })
-  expect(freeBatchPendingCount()).toBe(1)
-  expect(freeBatchLifecycle.beginRestart()).toBe(false)
-  expect(posted).toHaveLength(0)
+  const pending = run('free_chat', { tasks: [{ prompt: 'Synthetic admitted task' }], wait_s: 45 })
+  let parked = false
+  const parking = parkFreeBatches(10_000).then(() => {
+    parked = true
+  })
+  await Bun.sleep(50)
+  expect(parked).toBe(false)
   releaseStatus!()
   statusGate = null
+  await parking
+  // Admitted and answered at once with its batch, and nothing sent by the parked daemon.
   const batch = await pending
   batches.push(batch.batch)
+  expect(batch.tasks.map((t: { state: string }) => t.state)).toEqual(['queued'])
+  expect(batch.note).toContain('restarting')
+  await Bun.sleep(TICK_WAIT_MS)
+  expect(posted).toHaveLength(0)
+  // No successor took over: this daemon goes on sending.
+  resumeFreeBatches()
   await until(() => posted.length > 0)
-  expect(freeBatchPendingCount()).toBe(1)
   completeJobs()
   expect((await run('free_results', { batch: batch.batch, wait_s: 10 })).finished).toBe(true)
   expect(freeBatchPendingCount()).toBe(0)
-}, 15_000)
+}, 20_000)
 
-test('failed preflight releases admission and restart admission refuses a task before any dispatch', async () => {
+test('a failed preflight starts no batch and holds no restart', async () => {
   statusFails = true
   await expect(
     run('free_chat', { tasks: [{ prompt: 'Synthetic preflight failure' }], wait_s: 0 }),
   ).rejects.toThrow('Synthetic unavailable window')
   expect(freeBatchPendingCount()).toBe(0)
-  statusFails = false
-  expect(freeBatchLifecycle.beginRestart()).toBe(true)
-  const before = reads.length
-  await expect(
-    run('free_chat', { tasks: [{ prompt: 'Synthetic rejected admission' }], wait_s: 0 }),
-  ).rejects.toThrow('restarting')
-  expect(reads).toHaveLength(before)
+  const started = Date.now()
+  await parkFreeBatches(10_000)
+  expect(Date.now() - started).toBeLessThan(1000)
   expect(posted).toHaveLength(0)
-  expect(freeBatchPendingCount()).toBe(0)
 })
 
 test('abandoned running operations keep their request and chat evidence and report an unknown outcome', () => {

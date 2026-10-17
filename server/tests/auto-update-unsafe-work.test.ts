@@ -8,7 +8,6 @@ import {
   startAutoUpdate,
   stopAutoUpdate,
 } from '../src/auto-update'
-import { FreeBatchLifecycle } from '../src/free-batch-lifecycle'
 import type { UpdateApplyResult, UpdateStatus } from '../src/updater-engine.mjs'
 
 afterEach(() => {
@@ -33,13 +32,28 @@ function status(): UpdateStatus {
     reason: null,
   }
 }
+/** Work a restart would lose (a chat move, orchestrator.ts moveRestartRefusal), as the daemon wires hasUnsafeWork. */
+function unsafeWork() {
+  let n = 0
+  return {
+    begin: () => {
+      n++
+      let ended = false
+      return () => {
+        if (!ended) n--
+        ended = true
+      }
+    },
+    running: () => n > 0,
+  }
+}
 function applied(): UpdateApplyResult {
   return { ok: true, message: 'updated', restartRequired: true, status: status(), output: [] }
 }
 
 test('volatile work is a hard gate even beyond the soft one-hour defer', async () => {
-  const lifecycle = new FreeBatchLifecycle()
-  const release = lifecycle.acquire()
+  const work = unsafeWork()
+  const release = work.begin()
   let applies = 0
   let restarts = 0
   setAutoUpdateHooks({
@@ -48,7 +62,7 @@ test('volatile work is a hard gate even beyond the soft one-hour defer', async (
       applies++
       return applied()
     },
-    hasUnsafeWork: () => lifecycle.activeCount() > 0,
+    hasUnsafeWork: work.running,
     hasActiveRuns: () => true,
     relaunch: () => {
       restarts++
@@ -61,7 +75,7 @@ test('volatile work is a hard gate even beyond the soft one-hour defer', async (
 })
 
 test('work begun during apply defers restart, then hands over without another check or apply', async () => {
-  const lifecycle = new FreeBatchLifecycle()
+  const work = unsafeWork()
   let release!: () => void
   let checks = 0
   let applies = 0
@@ -73,13 +87,13 @@ test('work begun during apply defers restart, then hands over without another ch
     },
     apply: async () => {
       applies++
-      release = lifecycle.acquire()
+      release = work.begin()
       return applied()
     },
-    hasUnsafeWork: () => lifecycle.activeCount() > 0,
+    hasUnsafeWork: work.running,
     relaunch: () => {
       restarts++
-      return lifecycle.beginRestart()
+      return true
     },
   })
   expect(await runAutoUpdateOnce()).toMatchObject({
@@ -96,18 +110,14 @@ test('work begun during apply defers restart, then hands over without another ch
     relaunched: true,
   })
   expect([checks, applies, restarts]).toEqual([1, 1, 1])
-  expect(() => lifecycle.acquire()).toThrow('restarting')
 })
 
-test('new work cannot enter while an asynchronous successor handshake is pending', async () => {
-  const lifecycle = new FreeBatchLifecycle()
+test('a second restart request while a successor handshake is pending shares it', async () => {
   let ready!: (ok: boolean) => void
   let attempts = 0
   setAutoUpdateHooks({
-    hasUnsafeWork: () => lifecycle.activeCount() > 0,
     relaunch: () => {
       attempts++
-      expect(lifecycle.beginRestart()).toBe(true)
       return new Promise<boolean>((resolve) => {
         ready = resolve
       })
@@ -116,7 +126,6 @@ test('new work cannot enter while an asynchronous successor handshake is pending
   const handoff = relaunchAfterUpdate()
   const sameHandoff = relaunchAfterUpdate()
   await Promise.resolve()
-  expect(() => lifecycle.acquire()).toThrow('No Free task was started')
   expect(attempts).toBe(1)
   ready(true)
   expect(await handoff).toBe(true)
@@ -138,16 +147,16 @@ test('a failed handoff remains pending and retries without reinstalling', async 
   expect([attempts, checks]).toEqual([2, 0])
 })
 
-test('deferred manual source updates keep their original restart guard after Free work finishes', async () => {
-  const lifecycle = new FreeBatchLifecycle()
-  const release = lifecycle.acquire()
+test('deferred manual source updates keep their original restart guard after unsafe work finishes', async () => {
+  const work = unsafeWork()
+  const release = work.begin()
   let sourceWorkActive = true
   let restarts = 0
   setAutoUpdateHooks({
-    hasUnsafeWork: () => lifecycle.activeCount() > 0,
+    hasUnsafeWork: work.running,
     relaunch: () => {
       restarts++
-      return lifecycle.beginRestart()
+      return true
     },
   })
   expect(await relaunchAfterUpdate(() => !sourceWorkActive)).toBe(false)
@@ -157,20 +166,6 @@ test('deferred manual source updates keep their original restart guard after Fre
   sourceWorkActive = false
   expect((await runAutoUpdateOnce()).relaunched).toBe(true)
   expect(restarts).toBe(1)
-})
-
-test('work admitted between the readiness check and handoff reservation prevents shutdown', async () => {
-  const lifecycle = new FreeBatchLifecycle()
-  setAutoUpdateHooks({
-    hasUnsafeWork: () => lifecycle.activeCount() > 0,
-    relaunch: () => lifecycle.beginRestart(),
-  })
-  const handoff = relaunchAfterUpdate()
-  const release = lifecycle.acquire()
-  expect(await handoff).toBe(false)
-  expect(lifecycle.activeCount()).toBe(1)
-  release()
-  expect((await runAutoUpdateOnce()).relaunched).toBe(true)
 })
 
 test('a thrown handoff remains pending rather than reporting an applied update as failed', async () => {
@@ -192,20 +187,20 @@ test('a thrown handoff remains pending rather than reporting an applied update a
 })
 
 test('a requested manual update retries its pending handoff promptly while auto-apply is off', async () => {
-  const lifecycle = new FreeBatchLifecycle()
-  const release = lifecycle.acquire()
+  const work = unsafeWork()
+  const release = work.begin()
   const wasEnabled = autoUpdateEnabled()
   const timers = spyOn(globalThis, 'setTimeout')
   let applies = 0
   try {
     setAutoUpdateEnabled(false)
     setAutoUpdateHooks({
-      hasUnsafeWork: () => lifecycle.activeCount() > 0,
+      hasUnsafeWork: work.running,
       apply: async () => {
         applies++
         return applied()
       },
-      relaunch: () => lifecycle.beginRestart(),
+      relaunch: () => true,
     })
     startAutoUpdate()
     expect(await relaunchAfterUpdate()).toBe(false)
