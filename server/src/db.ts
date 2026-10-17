@@ -421,7 +421,10 @@ create table if not exists session_stats (
 )
 `)
 db.exec('create index if not exists session_stats_last_ts on session_stats(last_ts)')
-db.exec('create index if not exists session_stats_gone on session_stats(gone_at)')
+// Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66% of rows match, so the
+// planner scans regardless. Dropped on every open, not in the user_version step below: this line created it on every
+// open until 2026-10-17, so each start after that step's one run put it back.
+db.exec('drop index if exists session_stats_gone')
 
 // The recent-edits feed. Its own table, and the only unbounded-per-session list in the tier, so it
 // carries a GLOBAL row cap (analytics.ts pruneEdits) rather than growing with the store.
@@ -576,9 +579,6 @@ if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_v
     // The edits cap delete orders by (ts desc, id desc); the old ts-only index could not serve it.
     db.exec('create index if not exists idx_session_edits_ts_id on session_edits(ts desc, id desc)')
     db.exec('drop index if exists idx_session_edits_ts')
-    // Nothing reads session_stats by gone_at through this index (no INDEXED BY anywhere) and ~66%
-    // of rows match, so the planner scans regardless.
-    db.exec('drop index if exists session_stats_gone')
     db.exec('pragma user_version = 1')
   })()
 }
