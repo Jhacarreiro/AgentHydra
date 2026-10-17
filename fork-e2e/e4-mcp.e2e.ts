@@ -2,10 +2,11 @@
 // a relay over HTTP) and HTTP (POST /api/mcp on the daemon). docs/REFERENCE.md says they share one
 // dispatcher and cannot drift; this checks it from the client's side, on a seeded Claude transcript.
 //
-// add_queue_item is here on purpose. tests/mcp.test.ts ('add_queue_item POSTs the body to
-// /api/queue') stubs fetch and asserts a success, while the tool's own description says the daemon
-// refuses every call with HTTP 409 (server/src/mcp-session-tools.ts) and POST /api/queue does
-// (server/src/routes/queue.ts, the no-headless refusal). Only a live daemon can show which is true.
+// add_queue_item is here on purpose. Until upstream 61ccec1e, tests/mcp.test.ts stubbed fetch and
+// asserted a success, while the tool's own description says the daemon refuses every call with HTTP
+// 409 (server/src/mcp-session-tools.ts) and POST /api/queue does (server/src/routes/queue.ts, the
+// no-headless refusal). Upstream now tests the refusal at the route and the MCP side against a stubbed
+// 409; this checks both together on a live daemon.
 import { expect, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
