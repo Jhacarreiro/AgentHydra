@@ -33,6 +33,8 @@ export type EmbedIcon =
   | 'circle-check'
   | 'circle-x'
   | 'ban'
+  | 'pause'
+  | 'play'
 
 export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'danger' | 'accent'
 
@@ -136,6 +138,8 @@ export type DeskMessage =
   | { type: 'desk:open-worker'; id: string; pc?: string }
   /** Open the HSwarm tab, on that job of its Jobs node when one is named. */
   | { type: 'desk:open-hswarm'; job?: string }
+  // Desk's Settings > Managers > Routines row: the Routines tab, on one routine when `id` is given.
+  | { type: 'desk:open-routine'; id?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
    *  polls rest until it slides back in; the frame stays loaded either way. Desk says it when the frame
    *  is ready and each time the pane slides in or out; on true the copy sends its current sidebar again. */

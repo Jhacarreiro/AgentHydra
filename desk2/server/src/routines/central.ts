@@ -23,11 +23,15 @@ const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/
 const REPO = /^[a-z0-9][\w.-]{0,99}\/[\w.-]{1,100}$/
 const KEY = /^ed25519:[A-Za-z0-9_-]{43}$/
 
-/** The local contract's keys a routine document's front matter carries (its name is `title`, its prompt the body). */
-const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes']
+/** The local contract's keys a routine document's front matter carries (its name is `title`, its prompt the body). `group` and
+ *  `campaigns` (shared/routines.ts, GROUP AND CAMPAIGNS) are contract keys too. Rollout order: a Desk older than this code
+ *  refuses a document that carries either one ('unknown key'), so every runner gets this code before any document carries
+ *  them (one runner today). */
+const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes', 'group', 'campaigns']
 const CENTRAL_KEYS = ['kind', 'format', 'title', 'description', 'why', 'timeZone', 'workdir', 'runsOn', 'approval']
-/** What an approval does not sign: the approval itself, and the one-line description a store's page shows. */
-const UNSIGNED = ['approval', 'description']
+/** What an approval does not sign: the approval itself, the one-line description a store's page shows, and the group and
+ *  campaigns a routine works for, so setting them leaves the routine approved and running. */
+const UNSIGNED = ['approval', 'description', 'group', 'campaigns']
 
 export interface Approval {
   by: string

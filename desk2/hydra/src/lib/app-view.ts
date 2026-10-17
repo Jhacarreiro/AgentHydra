@@ -26,8 +26,8 @@
 
 import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
-export type AppView = 'instances' | 'analytics' | 'hswarm'
-export const APP_VIEWS: readonly AppView[] = ['instances', 'analytics', 'hswarm']
+export type AppView = 'instances' | 'analytics' | 'hswarm' | 'routines'
+export const APP_VIEWS: readonly AppView[] = ['instances', 'analytics', 'hswarm', 'routines']
 
 /** Tabs that were folded into another one, and where they went. The Instances tab is one tab now
  *  (Desktop, CLI and Free are kind toggles in it, owner 2026-10-07), so every old Instances id lands

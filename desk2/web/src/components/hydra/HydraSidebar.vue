@@ -17,6 +17,8 @@ import {
   ListChecks,
   LoaderCircle,
   Network,
+  Pause,
+  Play,
   PictureInPicture2,
   PiggyBank,
   Plug,
@@ -69,7 +71,9 @@ const ICONS: Record<EmbedIcon, Component> = {
   'list-checks': ListChecks,
   'circle-check': CircleCheck,
   'circle-x': CircleX,
-  ban: Ban
+  ban: Ban,
+  pause: Pause,
+  play: Play
 }
 const icon = (name: EmbedIcon | undefined): Component | null => (name ? (ICONS[name] ?? null) : null)
 const TONE: Record<EmbedTone, string> = {

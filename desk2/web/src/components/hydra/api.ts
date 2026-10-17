@@ -40,7 +40,8 @@ const hydraFrameUp = ref(false)
 const PANE_VIEW_KEY = 'agenthydra.app.view'
 const KEPT_PREFIX = 'hydra-desk2.hydra-sidebar.'
 const OWN_SIDEBAR: Record<string, { title: string; icon: SidebarModel['icon'] }> = {
-  hswarm: { title: 'HSwarm', icon: 'network' }
+  hswarm: { title: 'HSwarm', icon: 'network' },
+  routines: { title: 'Routines', icon: 'clock' }
 }
 
 // A copy of the renames in hydra/src/lib/app-view.ts (RENAMED_VIEWS; desk2/web cannot import from hydra/).

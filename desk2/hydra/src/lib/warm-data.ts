@@ -66,6 +66,8 @@ const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
   analytics: ['analytics'],
   // CliMayte's page lists the Free logins' private chats beside its tasks.
   hswarm: ['hswarm', 'climayte', 'routing', 'free'],
+  // The Routines tab polls Desk's own /api/routines while it is on screen (components/routines/RoutinesView.vue).
+  routines: [],
 } satisfies Record<AppView, readonly WarmKind[]>
 
 let currentView = ''

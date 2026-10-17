@@ -43,6 +43,8 @@ function routineView(m: Manager, s: Seen, t: number, moving: Set<string>): Routi
     running: mem.running ? { ...mem.running } : null,
     runs: [...mem.runs],
     runsTotal: Math.max(mem.runs.length, m.runCounts.get(entry.id) ?? 0),
+    group: def?.group ?? null,
+    campaigns: def?.campaigns ?? null,
     ...(entry.central
       ? {
           source: 'central' as const,

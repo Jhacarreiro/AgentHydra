@@ -30,8 +30,10 @@ export default {
   navLabel: 'Main',
   tabDesktop: 'Desktop',
   shortcutHswarm: 'Go to HSwarm',
+  shortcutRoutines: 'Go to Routines',
   tabAnalytics: 'Analytics',
   tabCli: 'CLI',
   tabFree: 'Free',
   tabHswarm: 'HSwarm',
+  tabRoutines: 'Routines',
 }

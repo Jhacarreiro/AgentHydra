@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Boxes, Layers, Maximize2, Minimize2, RotateCw } from '@lucide/vue'
+import { BarChart3, Boxes, CalendarClock, Layers, Maximize2, Minimize2, RotateCw } from '@lucide/vue'
 import {
   type Component,
   computed,
@@ -43,6 +43,7 @@ import {
   openSettingsInDesk,
   PANE_OPEN_EVENT,
   resendSidebar,
+  routinesAsk,
   setDeskView,
   showUpdateDotInDesk,
   TITLE_BAR_ATTR,
@@ -66,6 +67,7 @@ const QueueBuilder = lazyView(() => import('@/components/QueueBuilder.vue'))
 const QueueView = lazyView(() => import('@/components/QueueView.vue'))
 const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
 const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
+const RoutinesView = lazyView(() => import('@/components/routines/RoutinesView.vue'))
 const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
@@ -137,6 +139,8 @@ watch(
   },
   { flush: 'sync' },
 )
+// Desk's Settings > Managers > Routines row asked for the Routines tab (RoutinesView takes the ask and selects its routine).
+watch(routinesAsk, (ask) => { if (ask) view.value = 'routines' }, { flush: 'sync' })
 // Desk's session header asked for an account's row in Instances: its kind is drawn again if it was left
 // out, the row is scrolled to and marked; the other kinds are tried after it.
 watch(deskInstanceAsk, async (ask) => {
@@ -188,6 +192,14 @@ useShortcuts([
     },
   },
   {
+    keys: 'mod+5',
+    labelKey: 'app.shortcutRoutines',
+    groupKey: 'app.shortcutGroupApp',
+    run: () => {
+      view.value = 'routines'
+    },
+  },
+  {
     keys: 'mod+7',
     labelKey: 'app.shortcutHswarm',
     groupKey: 'app.shortcutGroupApp',
@@ -229,16 +241,18 @@ const nav: { id: AppView; labelKey: string; icon: typeof Boxes }[] = [
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
+  { id: 'routines', labelKey: 'app.tabRoutines', icon: CalendarClock },
 ]
 // The tab on screen. Instances is the fallback, as the v-else chain it replaces was.
 const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
   instances: InstancesView,
   hswarm: HSwarmView,
+  routines: RoutinesView,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
 const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'instances'))
-const viewProps = computed(() => (view.value === 'hswarm' ? { class: 'h-full' } : {}))
+const viewProps = computed(() => (view.value === 'hswarm' || view.value === 'routines' ? { class: 'h-full' } : {}))
 
 provide(OPEN_VIEW, (v: AppView) => {
   if (v === 'hswarm') openHswarmSavings()

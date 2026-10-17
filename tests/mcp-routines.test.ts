@@ -1,4 +1,4 @@
-// The routines MCP tool (server/src/mcp-routines.ts): the agent may read, run, pause, propose, approve and move, and nothing else. The
+// The routines MCP tool (server/src/mcp-routines.ts): the agent may read, run, pause, propose, approve, move and meta, and nothing else. The
 // owner's rules are in the description the agent reads, so these tests pin the arguments and the words, not a live Desk.
 
 import { describe, expect, test } from 'bun:test'
@@ -11,11 +11,12 @@ const schema = tool?.inputSchema as {
 }
 
 describe('the routines tool arguments', () => {
-  test('the tool is named routines, and takes only fresh, run, pause, propose, approve and move', () => {
+  test('the tool is named routines, and takes only fresh, run, pause, propose, approve, move and meta', () => {
     expect(tool).toBeDefined()
     expect(Object.keys(schema.properties).sort()).toEqual([
       'approve',
       'fresh',
+      'meta',
       'move',
       'pause',
       'propose',
@@ -35,7 +36,15 @@ describe('the routines tool arguments', () => {
     expect(schema.properties.propose.description?.startsWith('MUTATES:')).toBe(true)
     expect(schema.properties.approve.description?.startsWith('MUTATES:')).toBe(true)
     expect(schema.properties.move.description?.startsWith('MUTATES:')).toBe(true)
+    expect(schema.properties.meta.description?.startsWith('MUTATES:')).toBe(true)
     expect(schema.properties.fresh.description).not.toContain('MUTATES')
+  })
+
+  test('the meta argument names the group, the campaigns and null for removing either', () => {
+    const d = schema.properties.meta.description ?? ''
+    expect(d).toContain('group')
+    expect(d).toContain('campaigns')
+    expect(d).toContain('null')
   })
 
   test('the propose argument asks for id, why and the contract', () => {
@@ -55,6 +64,7 @@ describe('the routines tool description', () => {
     expect(d).toContain('temporary background task')
     expect(d).toContain('never hand the click in Settings > Managers > Routines back to him')
     expect(d).toContain('Approve or move only what he asked for in his own words')
+    expect(d).toContain("`meta` (sets a routine's group")
   })
 
   test("says that resume and discard are the owner's alone", () => {

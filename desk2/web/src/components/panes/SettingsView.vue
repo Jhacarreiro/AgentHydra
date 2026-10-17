@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Check, Hourglass, ListChecks } from '@lucide/vue'
+import { Check, ChevronRight, Hourglass, ListChecks } from '@lucide/vue'
 import { routineCountLine, storeLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
@@ -28,7 +28,14 @@ import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SEL
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
-import { ahUpdateDot, seeAhUpdateDot } from '@/components/hydra/api'
+import { ahUpdateDot, openHydra, seeAhUpdateDot, tellHydra } from '@/components/hydra/api'
+
+// The Routines tab of AgentHydra's pane (its row at the top of this section): slides the pane in, then asks its
+// Routines tab for the list, or for the one routine named.
+function openRoutinesTab(id?: string) {
+  openHydra()
+  tellHydra({ type: 'desk:open-routine', id })
+}
 import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
 import { useInstanceSettings } from './instances'
@@ -731,6 +738,15 @@ onBeforeUnmount(() => {
               <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
                    centred down the list. -->
               <div v-if="r.id === 'routines' && routines" class="basis-full">
+                <!-- The Routines tab of AgentHydra: every routine in one list with its page (owner, 2026-10-16). -->
+                <button
+                  type="button"
+                  class="mb-2 flex w-full items-center justify-between gap-2 rounded-md border border-border px-2.5 py-2 text-left text-ui-sm leading-4.5 hover:bg-fill-hover"
+                  @click="openRoutinesTab()"
+                >
+                  <span class="flex items-center gap-1.5"><ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />Routines tab</span>
+                  <ChevronRight class="size-3.5 text-text-muted" aria-hidden="true" />
+                </button>
                 <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
                   No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                 </div>
