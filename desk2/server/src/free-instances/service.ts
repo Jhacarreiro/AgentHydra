@@ -10,7 +10,7 @@ import { runFree, type FreeRunner } from './runner'
 import { ManagedFreeRuntime, SetupRefused, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
 import { readLogin, type FreeSyncHost } from './sync'
-import { poolCount, poolVictims } from './pool-policy'
+import { poolCount, poolPlan, poolVictims } from './pool-policy'
 import { addStat, statRows } from './stats'
 import { addTokens, estimateTokens, type TokenEntry, tokenWindows } from './tokens'
 
@@ -133,6 +133,33 @@ export class FreeInstances {
   }
   private async poolSaved(): Promise<void> {
     if (!await this.store.saveDurable()) throw new FreeError('The pool change could not be confirmed on disk. Keep the imported login and resolve the same admission before changing it.', 503, 'pool_persist_failed')
+  }
+  /** Release an idle Free slot while preserving the account's saved login and history. */
+  retirePool(id: string): Promise<{ ok: true; id: string; retired: true; count: number }> {
+    return this.poolSerial(async () => {
+      if (this.stopping) throw new FreeError('Desk is stopping. Retire this account after reconnecting.', 503)
+      const instance = this.instance(id)
+      if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish before retiring it.', 409, 'pool_busy')
+      if (instance.poolState === 'pending' || instance.poolAdmission?.state === 'pending')
+        throw new FreeError('Resolve this account’s pending import before retiring it.', 409, 'pool_pending')
+      if (poolPlan(instance) !== 'free') throw new FreeError('Only a verified Free account can be retired from the pool.', 409, 'pool_changed')
+      const retired = instance.poolState === 'retired'
+      if (!retired) {
+        if (!instance.loggedIn || !instance.email || instance.checkedAt == null || (instance as FreeInstance & { movedAway?: unknown }).movedAway)
+          throw new FreeError('Verify this Free account before retiring it from the pool.', 409, 'pool_verification_failed')
+        this.poolLogin(instance)
+      }
+      this.forgetting.add(id)
+      try {
+        instance.poolState = 'retired'
+        try { await this.poolSaved() }
+        catch (error) {
+          if (!retired) { delete instance.poolState; this.store.save() }
+          throw error
+        }
+        return { ok: true, id, retired: true, count: poolCount(this.store.data.instances, instance.provider) }
+      } finally { this.forgetting.delete(id) }
+    })
   }
   /** Staging precedes the caller's cookie export. No pending account can generate or sync a login. */
   admitPool(value: unknown): Promise<{ requestId: string; instance: FreeInstance; existing: boolean; pending: true }> {

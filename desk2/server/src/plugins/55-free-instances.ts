@@ -62,6 +62,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   router.use('*', bodyLimit({ maxSize: 450_000, onError: c => c.json({ error: 'Request is too large.' }, 413) }))
   router.get('/status', c => c.json(service.status()))
   router.get('/pool', c => c.json({ version: 1 }))
+  router.post('/pool/instances/:id/retire', async c => c.json(await service.retirePool(c.req.param('id'))))
   router.post('/pool/admissions', async c => c.json(await service.admitPool(await c.req.json().catch(() => null)), 201))
   router.post('/pool/admissions/:requestId/commit', async c => c.json(await service.commitPool(c.req.param('requestId'))))
   router.post('/pool/admissions/:requestId/abort', async c => c.json(await service.abortPool(c.req.param('requestId'))))

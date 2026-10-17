@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Make room in the Free pool without losing saved logins.** An idle Free account can leave the active pool while keeping its login and history. Busy, pending and paid accounts stay protected.
+
 - **Claude verification refusals preserve saved logins.** A temporary verification page no longer marks an account signed out. Explicit expired or invalid sessions still require renewal.
 
 - **Fresh ChatGPT logins finish importing when cookies refresh.** The account check now proves the saved login after a legitimate refresh, while still rejecting a different account or a later change. A valid renewal no longer stays pending just because ChatGPT rotated its cookies.

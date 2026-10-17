@@ -169,6 +169,66 @@ afterEach(async () => {
   }
 }, 30_000)
 
+native('retiring an idle Free account durably releases its slot without touching its login', async () => {
+  const f = fixture()
+  const row = f.account('retire@example.test', 'free', { provider: 'claude', lastActiveAt: 123 })
+  f.account('keep@example.test', 'free', { provider: 'claude' })
+  const original = readFileSync(f.file(row))
+  const url = `/api/free/pool/instances/${row.id}/retire`
+  expect((await f.app.request(url, { method: 'POST', headers: { origin: 'https://example.test' } })).status).toBe(403)
+  for (let retry = 0; retry < 2; retry++) {
+    const response = await f.app.request(url, { method: 'POST' })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, id: row.id, retired: true, count: 1 })
+  }
+  expect(new FreeStorage(f.home).data.instances.find(i => i.id === row.id)?.poolState).toBe('retired')
+  expect(row.loggedIn).toBe(true)
+  expect(row.lastActiveAt).toBe(123)
+  expect(readFileSync(f.file(row))).toEqual(original)
+  expect(f.service.syncHost().busy(row.id)).toBe(true)
+  expect(() => f.service.start({ requestId: randomUUID(), instanceId: row.id, provider: 'claude', command: 'chat', prompt: 'Synthetic request' })).toThrow('retired')
+  f.service.refreshNext()
+  expect(f.commands).toEqual([])
+})
+
+native('pool retirement refuses busy, pending, unverified and non-Free accounts', async () => {
+  const f = fixture()
+  for (const plan of ['go', 'plus', 'pro', 'unknown']) {
+    const row = f.account(`${plan}@example.test`, plan)
+    await expect(f.service.retirePool(row.id)).rejects.toMatchObject({ code: 'pool_changed' })
+    expect(row.poolState).toBeUndefined()
+  }
+  const pending = await f.stage('pending@example.test')
+  await expect(f.service.retirePool(pending.instance.id)).rejects.toMatchObject({ code: 'pool_pending' })
+  const unverified = f.account('unverified@example.test', 'free', { loggedIn: false })
+  await expect(f.service.retirePool(unverified.id)).rejects.toMatchObject({ code: 'pool_verification_failed' })
+  const busy = f.account('busy@example.test')
+  const hold = gate()
+  f.handle(async r => { if (r.instanceId === busy.id) await hold.promise; return undefined })
+  const job = f.service.start({ requestId: randomUUID(), instanceId: busy.id, provider: 'chatgpt', command: 'read', chatId: CHAT })
+  await expect(f.service.retirePool(busy.id)).rejects.toMatchObject({ code: 'pool_busy' })
+  expect(busy.poolState).toBeUndefined()
+  hold.release()
+  await until(() => job.state === 'done')
+  await f.service.stop()
+  await expect(f.service.retirePool(busy.id)).rejects.toMatchObject({ status: 503 })
+})
+
+native('failed retirement acknowledgement restores active metadata and preserves credentials', async () => {
+  const f = fixture()
+  const row = f.account('retire@example.test')
+  const original = readFileSync(f.file(row))
+  const save = f.store.saveDurable.bind(f.store)
+  spies.push(spyOn(f.store, 'saveDurable').mockImplementationOnce(async () => { await save(); return false }))
+  await expect(f.service.retirePool(row.id)).rejects.toMatchObject({ code: 'pool_persist_failed' })
+  await f.service.settled()
+  expect(row.poolState).toBeUndefined()
+  expect(new FreeStorage(f.home).data.instances.find(i => i.id === row.id)?.poolState).toBeUndefined()
+  expect(readFileSync(f.file(row))).toEqual(original)
+  expect(f.commands).toEqual([])
+  expect(await f.service.retirePool(row.id)).toMatchObject({ ok: true, retired: true, count: 0 })
+})
+
 native(
   'admission is durable, idempotent, provider-free and remains pending after restart',
   async () => {
