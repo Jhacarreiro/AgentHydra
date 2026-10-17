@@ -57,6 +57,14 @@ export function mcpServerEntry(name: string, workspace: string, configFile = def
   return isObj(global) ? global : null
 }
 
+/** Why a tool refused, in its own words: a JSON failure envelope's `detail` (else its `error`), else the text as it came. */
+function refusalOf(text: string | undefined): string {
+  if (!text) return 'no reason given'
+  const envelope = jsonObjectIn(text)
+  const said = isObj(envelope) ? [envelope.detail, envelope.error].find((v): v is string => typeof v === 'string' && v.trim() !== '') : undefined
+  return (said ?? text).slice(0, 300)
+}
+
 /** The feed in an MCP tool result: its structuredContent, else the first text part that is (or holds) a JSON object with sections. */
 export function feedFromToolResult(result: unknown): unknown {
   if (!isObj(result)) throw new SourceError('the tool gave no result')
@@ -64,7 +72,7 @@ export function feedFromToolResult(result: unknown): unknown {
   const texts = (Array.isArray(result.content) ? result.content : [])
     .map((c) => (isObj(c) && c.type === 'text' && typeof c.text === 'string' ? c.text : ''))
     .filter(Boolean)
-  if (result.isError === true) throw new SourceError(`the tool refused: ${(texts[0] ?? 'no reason given').slice(0, 300)}`)
+  if (result.isError === true) throw new SourceError(`the tool refused: ${refusalOf(texts[0])}`)
   for (const t of texts) {
     const found = jsonObjectIn(t)
     if (isObj(found) && 'sections' in found) return found
