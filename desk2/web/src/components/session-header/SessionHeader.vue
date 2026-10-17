@@ -90,7 +90,10 @@ const cloud = useCloud()
 
 // AgentHydra's row for the session, then its usage and credential scan; any of them may not answer
 // (a CliMayte worker's session is not in its index), and the header says what it knows.
-const row = ref<AhSessionRow | null>(null)
+// Replaced whole, never edited, so a shallowRef: `row.value === r` then compares the row itself. As a deep ref its value was
+// a proxy, never equal to the row read, and the usage and secrets reads, which drop an answer for a row no longer shown,
+// dropped every one: an outside Claude session showed no tokens or cost, and "2 turns" where usage counted 234 (2026-10-17).
+const row = shallowRef<AhSessionRow | null>(null)
 const usage = shallowRef<AhUsage | null>(null)
 const secrets = shallowRef<AhSecrets | null>(null)
 const instances = computed(() => ahInstances.value ?? [])
