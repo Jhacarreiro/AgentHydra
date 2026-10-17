@@ -108,6 +108,30 @@ def test_a_hugging_face_key_out_of_credit_gets_one_chance_per_window(tmp_path, m
     assert p.available() == 0
 
 
+# Contract: a provider with no balance endpoint whose EVERY key is disabled for credit still gets its once-a-window
+# chance, at the route health check that decides whether any work goes there. Regression: all 51 Hugging Face keys were
+# disabled for credit on 2026-10-05 to 10-07 and none was let out again. Probation ran only at the start of a job on the
+# provider, and route_health called a leg with every key disabled dead, so no job went there: 0 requests in 8 days, and a
+# monthly allowance that came back would never have been seen.
+def test_a_provider_whose_every_key_is_out_of_credit_still_gets_its_chance_at_the_route_check(monkeypatch):
+    import time as time_mod
+
+    from hswarm import client as client_mod
+    from hswarm import jobs, keys
+
+    monkeypatch.setenv("HF_TOKENS", "hf_a,hf_b")
+    pool = keys.pool_for("huggingface")
+    for k in ("hf_a", "hf_b"):
+        pool.broke(k, status=402)
+    leg = "rank:glm-5-3:huggingface"
+    assert not jobs.route_health(leg)["serves"]  # inside the window: still dead
+    real = time_mod.time
+    monkeypatch.setattr(client_mod.time, "time", lambda: real() + client_mod.NO_CREDIT_RECHECK_S + 60)
+    health = jobs.route_health(leg)
+    assert health["serves"] and "ready" in health["legs"][0], health
+    assert pool.available() == 2
+
+
 def test_the_probe_path_gives_that_chance_and_the_balance_providers_are_untouched(tmp_path, monkeypatch):
     import asyncio
 

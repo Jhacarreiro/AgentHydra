@@ -70,6 +70,24 @@ Exporter aliases declared by a provider share its canonical pool: `google_*_keys
 `gemini_api_keys`. Unconfigured providers in checker exports fail before editing any lists; add their provider
 configuration first. Alias routing is included in the count report.
 
+### Free-tier quotas: what a refused key costs (2026-10-17)
+
+A census of the 726 Gemini keys that morning: 76 answered 200, 549 answered 429 with a quota of **0** for their project
+in the region the call lands in (`us-south1`), 86 answered 403 "reported as leaked", and the rest were out of prepaid
+credit or invalid. The keys belong to 542+ different projects, so each key is its own quota; more keys do add capacity.
+
+- **A day-spent model benches that key for that model only.** Gemini's free cap is 20 requests a day per project per
+  model, and when 3.8 Flash is spent the same key still serves 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite. The key comes
+  back for that model when the refusal's RetryInfo says, which is 00:00 UTC ("Please retry in 18h29m" at 05:30 UTC), not
+  midnight Pacific. `hswarm keys` counts the spent keys per model (`spent`), and route health reads a leg whose every
+  key has spent its model as resting until then.
+- **A zero quota rests only the key that says it, until the daily reset** (`no_quota` in `hswarm keys`). It used to rest
+  30 minutes, and from 2026-10-13 five such answers in a row rested the whole pool: the 76 live keys sat benched behind
+  the 549 empty ones, and Gemini answered no call for four days.
+- **A key reported as leaked is disabled at its first 403**; that block does not lift.
+- **A provider with no balance endpoint** (Hugging Face) gets its once-a-day probation at the route health check too, so
+  a pool whose every key is disabled for credit still finds out when the allowance comes back.
+
 ### Key vault
 
 Keys follow you between machines, encrypted, never through git. `$HSWARM_HOME/secrets/` holds one list per provider

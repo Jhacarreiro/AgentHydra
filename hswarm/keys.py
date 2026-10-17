@@ -20,7 +20,7 @@ import time
 import httpx
 
 from . import config, keylimits
-from .client import ChatClient, KeyPool, read_key_state, tls
+from .client import NO_QUOTA, ChatClient, KeyPool, read_key_state, tls
 
 
 _POOLS: dict[tuple[str, str], tuple[float, tuple[str, ...], "KeyPool | None"]] = {}
@@ -113,6 +113,16 @@ def _report(only: str | None, verbose: bool, counts_only: bool) -> dict:
             "disabled": sum(1 for r in rows if r["disabled"]),
             "free_only": sum(1 for r in rows if r["free_only"]),
         }
+        # Of the resting keys, those with no quota at all where the calls land (asked again at the daily reset), and per
+        # model the keys that have spent today's allowance for it: 549 of 726 Gemini keys read just "resting" before.
+        if no_quota := sum(1 for r in rows if r["state"] == "resting" and r.get("why") == NO_QUOTA):
+            entry["no_quota"] = no_quota
+        spent: dict[str, int] = {}
+        for r in rows:
+            for m in r.get("spent") or ():
+                spent[m] = spent.get(m, 0) + 1
+        if spent:
+            entry["spent"] = spent
         placed = [r["region"] for r in rows if r.get("region")]
         if placed:  # keys served on another of the provider's regions than base_url (client.find_region), per region
             entry["regions"] = {u: placed.count(u) for u in dict.fromkeys(placed)}

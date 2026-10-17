@@ -276,7 +276,13 @@ def _leg_health(leg: str) -> tuple[str, str]:
     pool = keys.pool_for(prov) if prov else None
     if pool is None:
         return "nokey", f"{leg} ({prov or 'unknown provider'}: no key on this machine)"
-    wake = pool.soonest_wake(free=config.api_model_id(leg).endswith(":free"))
+    if not config.PROVIDERS.get(prov, {}).get("balance_path"):
+        # No balance endpoint: probation is a credit-disabled key's only way back, and it ran only when a job started on
+        # the provider. A leg whose every key is disabled reads dead here, so no job went there and none came back (all
+        # 51 Hugging Face keys, disabled 2026-10-05 to 10-07: 0 requests in 8 days). Offline: it reads the shared state.
+        pool.probation()
+    api_id = config.api_model_id(leg)
+    wake = pool.soonest_wake(free=api_id.endswith(":free"), model=api_id)
     if wake <= NO_CREDIT_TRIP_S:
         return "ok", f"{leg} ({prov}: " + ("ready)" if wake == 0 else f"every key resting, the soonest free in {wake:.0f}s)")
     if wake == float("inf"):
