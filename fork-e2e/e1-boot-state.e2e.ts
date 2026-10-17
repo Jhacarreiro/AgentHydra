@@ -11,7 +11,7 @@ const lane = scenario('E1')
 const home = lane.home()
 const db = home.env.AGENTHYDRA_DB as string
 
-/** Whether the store has the session_stats_gone index the schema drops (server/src/db.ts:427). */
+/** Whether the store has the session_stats_gone index the schema drops on every open (server/src/db.ts). */
 function hasGoneIndex(): boolean {
   const s = new Database(db, { readonly: true })
   try {
@@ -89,7 +89,7 @@ test('E1: the next boot on the same store keeps every setting, auto-update off i
 // Until upstream 3d7c1966 the base schema created this index on every open and the v1 step dropped
 // it only once, so every start after the first brought it back, the second daemon's too (the schema
 // runs on import, before the single-instance guard).
-test('E1: no start after the first brings back the index the schema v1 step dropped', () => {
+test('E1: the session_stats_gone index stays dropped on every start, the second daemon included', () => {
   expect(goneIndex).toEqual({ firstBoot: false, secondStart: false, reboot: false })
 })
 
