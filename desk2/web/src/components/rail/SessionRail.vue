@@ -144,7 +144,12 @@ watch(
     if (deskSession.value && before === 'working' && now !== 'working') void readDeskUsage(deskSession.value)
   }
 )
-const codexTokens = computed(() => (isCodex.value && !props.outside && props.chat?.tokensUsed ? props.chat.tokensUsed : null))
+// An outside Codex session's comes from its rollout's running total (the index's sessionTokens): the daemon's usage route
+// answers Codex "source-unsupported", so its header shows no tokens.
+const codexTokens = computed(() => {
+  if (props.outside) return props.index?.sessionTokens ?? null
+  return isCodex.value && props.chat?.tokensUsed ? props.chat.tokensUsed : null
+})
 const deskUsageText = computed(() => (codexTokens.value !== null ? `${formatCompact(codexTokens.value)} tokens` : deskSession.value ? usageSummary(deskUsage.value) : null))
 const deskUsageTip = computed(() =>
   codexTokens.value !== null ? `${codexTokens.value.toLocaleString()} tokens this Codex thread has used so far. No cost is shown: a Codex plan is not billed per token.` : usageDetail(deskUsage.value)

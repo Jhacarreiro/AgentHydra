@@ -753,9 +753,11 @@ export function createBridge(opts: BridgeOptions = {}) {
   const indexKept = new Map<string, { key: string; index: TranscriptIndex }>()
   const INDEX_KEPT = 50
   const INDEX_WARM = 20
-  /** The size|mtime key of the session's file, '' when its place is not known yet or it is gone. */
+  /** The size|mtime key of the session's file: its Claude Code .jsonl, else its Codex rollout (a Codex chat's items come from
+   *  the daemon's tail, which grows with the rollout); '' when neither is known or the file is gone. Before the rollout counted,
+   *  a Codex chat had no key, so its index was never kept and the warm-up rebuilt the same one at every poll. */
   async function fileKey(sessionId: string): Promise<string> {
-    const file = foundAt.get(sessionId)
+    const file = foundAt.get(sessionId) ?? (await codexRollout(sessionId).catch(() => null))
     if (!file) return ''
     try {
       const st = await stat(file)
@@ -781,7 +783,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     if (key && kept && kept.key === key) return kept
     // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
     // for a chat with none, a Codex rollout's last token_count (with its window).
-    let context: { tokens: number; window: number | null } | null = null
+    let context: { tokens: number; window: number | null; total?: number | null } | null = null
     try {
       if (key && file) {
         const tokens = lastContextTokens(file)
@@ -793,7 +795,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     } catch {
       // gone since it was found: no context, the rest of the index stands
     }
-    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null } }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null, sessionTokens: context?.total ?? null } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)

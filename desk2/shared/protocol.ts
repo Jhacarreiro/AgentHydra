@@ -346,6 +346,9 @@ export interface TranscriptIndex {
   contextTokens?: number | null
   /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
   contextWindow?: number | null
+  /** An outside Codex session's: the tokens its thread has used so far (its rollout's total_token_usage), which AgentHydra's
+   *  usage route does not count for Codex; null when the rollout has none, absent on a Claude Code session. */
+  sessionTokens?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
   /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,
