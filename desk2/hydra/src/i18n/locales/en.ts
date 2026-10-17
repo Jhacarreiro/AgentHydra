@@ -21,6 +21,7 @@ import scheduler from './en/scheduler'
 import sessions from './en/sessions'
 import settings from './en/settings'
 import swarmStats from './en/swarmStats'
+import tools from './en/tools'
 
 export default {
   analytics,
@@ -44,4 +45,5 @@ export default {
   sessions,
   settings,
   swarmStats,
+  tools,
 }

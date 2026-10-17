@@ -1,24 +1,22 @@
-// The managers' state, read from Desk's server: GET /api/babysitter, GET /api/diagnostics/orchestrator (the
-// orchestrator's plan) and GET /api/routines. One poll at the CliMayte node's cadence (WARM_MS), and only while
-// the Managers node or one of its pages is on screen (`shown`). A 404 means this window runs without Desk, where
-// these routes do not answer: `available` is false and nothing errors. The paths are relative, as routines-api.ts's
-// are: they are Desk's own routes, never API_BASE's (/ah, the daemon's), where every read answered 404 until 2026-10-16.
-import type { RoutinesRequest, RoutinesStatus } from '@desk/shared/routines'
+// The Tools tab's managers, read from Desk's server: GET /api/babysitter, GET /api/diagnostics/orchestrator (the
+// orchestrator's plan) and GET /api/instance-manager. One poll (WARM_MS) while the tab is on screen (`active`) and
+// the pane is visible. Routines are not here: ToolsView polls them with getRoutines (routines-api.ts). The paths are
+// relative, as routines-api.ts's are: they are Desk's own routes, never API_BASE's (/ah, the daemon's), where every
+// read answered 404 until 2026-10-16. A 404 means this window runs without Desk, where these routes do not answer:
+// `available` is false and nothing errors.
 import type { BabysitterStatus } from '@desk/shared/babysitter'
+import type { InstanceManagerStatus } from '@desk/shared/instance-manager'
 import type { OrchestratorPlan } from '@desk/shared/orchestrator'
 import { onBeforeUnmount, reactive, shallowRef, watch } from 'vue'
-import { postRoutines } from '@/lib/routines-api'
 import { WARM_MS } from '@/lib/warm-data'
 
-export function useManagers(shown: { readonly value: boolean }) {
+export function useTools(active: { readonly value: boolean }) {
   const babysitter = shallowRef<BabysitterStatus | null>(null)
   const orchestrator = shallowRef<OrchestratorPlan | null>(null)
-  const routines = shallowRef<RoutinesStatus | null>(null)
+  const instanceManager = shallowRef<InstanceManagerStatus | null>(null)
   // null until the first read; false when Desk's routes do not answer (the window runs without Desk).
   const available = shallowRef<boolean | null>(null)
   const error = shallowRef<string | null>(null)
-  // The routine whose action is in flight, so its button waits for the answer.
-  const busy = shallowRef<string | null>(null)
   let timer: number | undefined
 
   // Null when the route is not there (404): this window runs without Desk.
@@ -31,29 +29,18 @@ export function useManagers(shown: { readonly value: boolean }) {
 
   async function refresh(): Promise<void> {
     try {
-      const [b, o, r] = await Promise.all([
+      const [b, o, i] = await Promise.all([
         read<BabysitterStatus>('/api/babysitter'),
         read<OrchestratorPlan>('/api/diagnostics/orchestrator'),
-        read<RoutinesStatus>('/api/routines'),
+        read<InstanceManagerStatus>('/api/instance-manager'),
       ])
-      available.value = b !== null && r !== null
+      available.value = b !== null && o !== null && i !== null
       babysitter.value = b
       orchestrator.value = o
-      routines.value = r
+      instanceManager.value = i
       error.value = null
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
-    }
-  }
-
-  // One action on one routine (POST /api/routines, through the Routines tab's call, which carries the owner header
-  // Desk asks of every action but `meta`); the answer is the whole status again.
-  async function act(body: RoutinesRequest, id: string): Promise<void> {
-    busy.value = id
-    try {
-      routines.value = await postRoutines(body)
-    } finally {
-      busy.value = null
     }
   }
 
@@ -62,7 +49,7 @@ export function useManagers(shown: { readonly value: boolean }) {
     timer = undefined
   }
   watch(
-    () => shown.value,
+    () => active.value,
     (on) => {
       stop()
       if (!on) return
@@ -75,7 +62,7 @@ export function useManagers(shown: { readonly value: boolean }) {
   )
   onBeforeUnmount(stop)
 
-  return reactive({ babysitter, orchestrator, routines, available, error, busy, refresh, act })
+  return reactive({ babysitter, orchestrator, instanceManager, available, error, refresh })
 }
 
-export type Managers = ReturnType<typeof useManagers>
+export type Tools = ReturnType<typeof useTools>

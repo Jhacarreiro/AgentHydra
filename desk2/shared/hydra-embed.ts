@@ -35,6 +35,7 @@ export type EmbedIcon =
   | 'ban'
   | 'pause'
   | 'play'
+  | 'wrench'
 
 export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'danger' | 'accent'
 
@@ -95,8 +96,9 @@ export interface SidebarModel {
   search?: { value: string; placeholder: string; label: string }
   legend?: { dot: EmbedTone | 'hollow'; label: string }[]
   legendNote?: string
-  /** Groups of rows; a group's label is a small header over them. */
-  sections: { key: string; label?: string; hint?: string; rows: SidebarRow[] }[]
+  /** Groups of rows; a group's label is a small header over them, and its count (default: its rows) is
+   *  shown beside the label. */
+  sections: { key: string; label?: string; count?: number; hint?: string; rows: SidebarRow[] }[]
   selected?: string | null
   /** Said where the rows would be when there are none. */
   empty?: string
@@ -104,7 +106,7 @@ export interface SidebarModel {
   footer?: SidebarButton[]
 }
 
-/** The Settings pages the copy opens Desk's Settings on: Updates, Managers (the HSwarm Managers node's pages), and each Instances table's page. */
+/** The Settings pages the copy opens Desk's Settings on: Updates, Managers (the Tools tab's manager pages), and each Instances table's page. */
 export const AH_SETTINGS_PAGES = ['updates', 'managers', 'cli', 'desktop', 'free'] as const
 export type AhSettingsPage = (typeof AH_SETTINGS_PAGES)[number]
 
@@ -136,11 +138,11 @@ export type DeskMessage =
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' | 'free' }
   /** Open this CliMayte task on the CliMayte node of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
-  /** Open the HSwarm tab, on that job of its Jobs node when one is named, or on `node`, a node of its tree such as
-   *  'managers/babysitter' (Settings > Managers' View more). */
-  | { type: 'desk:open-hswarm'; job?: string; node?: string }
-  // Desk's Settings > Managers > Routines row: the Routines tab, on one routine when `id` is given.
-  | { type: 'desk:open-routine'; id?: string }
+  /** Open the HSwarm tab, on that job of its Jobs node when one is named. */
+  | { type: 'desk:open-hswarm'; job?: string }
+  /** Open the Tools tab on one of its sidebar keys: overview, m:babysitter, m:orchestrator, m:instances, m:routines,
+   *  r:<routine id>, p:<proposal id>; the overview when none (Settings > Managers' View more and Open in Tools). */
+  | { type: 'desk:open-tools'; key?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
    *  polls rest until it slides back in; the frame stays loaded either way. Desk says it when the frame
    *  is ready and each time the pane slides in or out; on true the copy sends its current sidebar again. */

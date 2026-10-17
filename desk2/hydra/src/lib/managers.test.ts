@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { BabysitterChatState, BabysitterStatus } from '@desk/shared/babysitter'
-import { babysitterDot, canRunRoutine, jobOfRoutine, managerDot, routineDot, workerOfRoutine } from './managers'
+import type { InstanceManagerStatus, Recovery, RecoveredChat, RecoveryState } from '@desk/shared/instance-manager'
+import { babysitterDot, canRunRoutine, instanceManagerDot, jobOfRoutine, managerDot, routineDot, workerOfRoutine } from './managers'
 
 describe('a routine\'s work', () => {
   test('a CliMayte worker belongs to the routine when its group begins with the id and a dash', () => {
@@ -73,6 +74,57 @@ describe('the dots', () => {
       expect(babysitterDot(look(['waiting', needsPerson]))).toBe('bad')
     }
     expect(babysitterDot(look([], { error: 'Desk chats did not load' }))).toBe('bad')
+  })
+})
+
+describe('the Instance manager dot', () => {
+  const recovery = (state: RecoveryState, chats: RecoveredChat[] = []): Recovery => ({
+    id: 'recovery-1',
+    kind: 'desktop',
+    from: { ref: 'desktop:example', num: 1, name: 'Example app' },
+    to: null,
+    cause: 'crashed',
+    causeDetail: '',
+    state,
+    detail: '',
+    at: 0,
+    updatedAt: 0,
+    chats,
+  })
+  const look = (recoveries: Recovery[] = [], extra: Partial<InstanceManagerStatus> = {}): InstanceManagerStatus => ({
+    enabled: true,
+    everyMs: 20_000,
+    checkedAt: 0,
+    nextCheckAt: null,
+    instances: [],
+    recoveries,
+    error: null,
+    ...extra,
+  })
+  const chat = (state: RecoveredChat['state']): RecoveredChat => ({ id: 'chat-1', title: 'Example chat', state, detail: '' })
+
+  test('no dot before the first read, and on or off with nothing to recover', () => {
+    expect(instanceManagerDot(null)).toBeUndefined()
+    expect(instanceManagerDot(look())).toBe('ok')
+    expect(instanceManagerDot(look([], { enabled: false }))).toBe('off')
+  })
+
+  test('red when the read failed, a recovery failed, or a chat in one is stuck', () => {
+    expect(instanceManagerDot(look([], { error: 'Could not read the apps' }))).toBe('bad')
+    expect(instanceManagerDot(look([recovery('failed')]))).toBe('bad')
+    expect(instanceManagerDot(look([recovery('moving', [chat('stuck')])]))).toBe('bad')
+  })
+
+  test('amber while a recovery waits, opens, moves or watches', () => {
+    for (const state of ['waiting', 'opening', 'moving', 'watching'] as const) {
+      expect(instanceManagerDot(look([recovery(state)]))).toBe('warn')
+    }
+  })
+
+  test('a recovery that came back, was left or is done reads as on', () => {
+    for (const state of ['came-back', 'left', 'done'] as const) {
+      expect(instanceManagerDot(look([recovery(state, [chat('running')])]))).toBe('ok')
+    }
   })
 })
 

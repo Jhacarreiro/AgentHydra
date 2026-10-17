@@ -1,4 +1,4 @@
-// What a routine says, as pure functions for the Routines tab: its state as a word and a tone, times as '2 h ago' and
+// What a routine says, as pure functions for the Tools tab's routines: its state as a word and a tone, times as '2 h ago' and
 // 'in 3 h', a duration, and a schedule in plain words with its time zone. The schedule and time wording is copied from
 // desk2/web/src/components/panes/routine-view.ts and routine-details.ts (hydra may not import from web/); keep the two
 // in step. Times in ms.

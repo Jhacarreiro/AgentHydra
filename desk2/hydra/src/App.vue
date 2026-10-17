@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Boxes, CalendarClock, Layers, Maximize2, Minimize2, RotateCw } from '@lucide/vue'
+import { BarChart3, Boxes, Layers, Maximize2, Minimize2, RotateCw, Wrench } from '@lucide/vue'
 import {
   type Component,
   computed,
@@ -43,10 +43,10 @@ import {
   openSettingsInDesk,
   PANE_OPEN_EVENT,
   resendSidebar,
-  routinesAsk,
   setDeskView,
   showUpdateDotInDesk,
   TITLE_BAR_ATTR,
+  toolsAsk,
 } from '@/lib/desk-embed'
 import { refreshForView } from '@/lib/warm-data'
 import { startWarmData } from '@/lib/warm-kinds'
@@ -67,7 +67,7 @@ const QueueBuilder = lazyView(() => import('@/components/QueueBuilder.vue'))
 const QueueView = lazyView(() => import('@/components/QueueView.vue'))
 const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
 const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
-const RoutinesView = lazyView(() => import('@/components/routines/RoutinesView.vue'))
+const ToolsView = lazyView(() => import('@/components/tools/ToolsView.vue'))
 const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
@@ -139,8 +139,8 @@ watch(
   },
   { flush: 'sync' },
 )
-// Desk's Settings > Managers > Routines row asked for the Routines tab (RoutinesView takes the ask and selects its routine).
-watch(routinesAsk, (ask) => { if (ask) view.value = 'routines' }, { flush: 'sync' })
+// Desk's Settings > Managers asked for the Tools tab (ToolsView takes the ask and selects its page).
+watch(toolsAsk, (ask) => { if (ask) view.value = 'tools' }, { flush: 'sync' })
 // Desk's session header asked for an account's row in Instances: its kind is drawn again if it was left
 // out, the row is scrolled to and marked; the other kinds are tried after it.
 watch(deskInstanceAsk, async (ask) => {
@@ -193,10 +193,10 @@ useShortcuts([
   },
   {
     keys: 'mod+5',
-    labelKey: 'app.shortcutRoutines',
+    labelKey: 'app.shortcutTools',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
-      view.value = 'routines'
+      view.value = 'tools'
     },
   },
   {
@@ -241,18 +241,18 @@ const nav: { id: AppView; labelKey: string; icon: typeof Boxes }[] = [
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
-  { id: 'routines', labelKey: 'app.tabRoutines', icon: CalendarClock },
+  { id: 'tools', labelKey: 'app.tabTools', icon: Wrench },
 ]
 // The tab on screen. Instances is the fallback, as the v-else chain it replaces was.
 const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
   instances: InstancesView,
   hswarm: HSwarmView,
-  routines: RoutinesView,
+  tools: ToolsView,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
 const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'instances'))
-const viewProps = computed(() => (view.value === 'hswarm' || view.value === 'routines' ? { class: 'h-full' } : {}))
+const viewProps = computed(() => (view.value === 'hswarm' || view.value === 'tools' ? { class: 'h-full' } : {}))
 
 provide(OPEN_VIEW, (v: AppView) => {
   if (v === 'hswarm') openHswarmSavings()

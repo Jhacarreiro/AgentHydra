@@ -28,14 +28,7 @@ import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SEL
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
-import { ahUpdateDot, openHydra, openSwarmNodeInHydra, seeAhUpdateDot, tellHydra } from '@/components/hydra/api'
-
-// The Routines tab of AgentHydra's pane (its row at the top of this section): slides the pane in, then asks its
-// Routines tab for the list, or for the one routine named.
-function openRoutinesTab(id?: string) {
-  openHydra()
-  tellHydra({ type: 'desk:open-routine', id })
-}
+import { ahUpdateDot, openToolInHydra, seeAhUpdateDot } from '@/components/hydra/api'
 import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
 import { useInstanceSettings } from './instances'
@@ -747,12 +740,12 @@ onBeforeUnmount(() => {
               </template>
 
               <!-- The Babysitter's viewer wraps onto its own full-width line, as the routine list does: what is stopped now,
-                   coloured, and View more for its page in AgentHydra (HSwarm > Managers > Babysitter). -->
+                   coloured, and View more for its page in AgentHydra's Tools tab (Managers > Babysitter). -->
               <div v-if="r.id === 'babysitter' && babysitterView" class="basis-full">
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-3 rounded-md border border-border px-2.5 py-2 text-left text-ui-sm leading-4.5 hover:bg-fill-hover"
-                  @click="openSwarmNodeInHydra('managers/babysitter')"
+                  @click="openToolInHydra('m:babysitter')"
                 >
                   <span class="flex min-w-0 items-start gap-2">
                     <span class="mt-1.25 inline-block size-2 shrink-0 rounded-full" :style="{ background: babysitterView.dot }" aria-hidden="true" />
@@ -769,13 +762,13 @@ onBeforeUnmount(() => {
               <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
                    centred down the list. -->
               <div v-if="r.id === 'routines' && routines" class="basis-full">
-                <!-- The Routines tab of AgentHydra: every routine in one list with its page (owner, 2026-10-16). -->
+                <!-- The Tools tab of AgentHydra: every routine in one list with its page (owner, 2026-10-16). -->
                 <button
                   type="button"
                   class="mb-2 flex w-full items-center justify-between gap-2 rounded-md border border-border px-2.5 py-2 text-left text-ui-sm leading-4.5 hover:bg-fill-hover"
-                  @click="openRoutinesTab()"
+                  @click="openToolInHydra()"
                 >
-                  <span class="flex items-center gap-1.5"><ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />Routines tab</span>
+                  <span class="flex items-center gap-1.5"><ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />Open in Tools</span>
                   <ChevronRight class="size-3.5 text-text-muted" aria-hidden="true" />
                 </button>
                 <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">

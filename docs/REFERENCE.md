@@ -228,7 +228,7 @@ agent to approve or move only a routine the owner asked for in his own words, to
 nobody asked for, and to prefer a temporary background task it manages itself.
 
 **Group and campaigns.** Two optional keys say where a routine belongs; neither changes what it runs. `group` is the folder
-the Routines tab lists it under (1 to 40 characters, one line). `campaigns` lists the CrAInium's Campaigns arm ids it works for
+the Tools tab's Routines group lists it under (1 to 40 characters, one line). `campaigns` lists the CrAInium's Campaigns arm ids it works for
 (1 to 10, each `^[a-z0-9][a-z0-9-]{0,63}$`, no repeats). A central document keeps both outside its approval, as it keeps
 `description`, so setting them leaves the routine approved and running. Each routine's `group` and `campaigns` (null when
 absent) are on its entry in `GET /api/routines`. `GET /api/routines/:id/campaigns` (`?fresh=1` skips its 60-second cache)

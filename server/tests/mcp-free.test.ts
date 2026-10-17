@@ -596,6 +596,8 @@ describe('free_chat through a stand-in Desk 2', () => {
 
   test('a new thread its account refuses is answered by another idle account, and the refusing one rests', async () => {
     // 2026-10-07: a failing ChatGPT account stayed first in line and took ~3,700 sends in a row.
+    // From no lease: an earlier test's new Claude thread holds its account for four minutes.
+    resetFreeHealth()
     const out = await run('free_chat', { tasks: [{ prompt: 'refused' }] })
     expect(out.tasks[0]).toMatchObject({ state: 'done', response: 're: refused' })
     expect(out.tasks[0].retried).toContain('http_rejected')

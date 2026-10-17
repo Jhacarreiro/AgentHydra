@@ -3,6 +3,7 @@
 // job whose label begins `<id>`.
 
 import { babysitterAttention, type BabysitterAct, type BabysitterChatState, type BabysitterStatus } from '@desk/shared/babysitter'
+import type { InstanceManagerStatus, RecoveryState } from '@desk/shared/instance-manager'
 import type { RoutineOutcome, RoutineState } from '@desk/shared/routines'
 
 /** The dot a node or a row shows, as the tree draws it (HSwarmView's DOT_CLASS). */
@@ -45,6 +46,19 @@ export function babysitterDot(s: BabysitterStatus | null | undefined): ManagerDo
 /** What the Babysitter did, as its dot: a delivered continue is green, anything else is red. */
 export function babysitterActDot(did: BabysitterAct['did']): ManagerDot {
   return did === 'resumed' ? 'ok' : 'bad'
+}
+
+/** Recovery states that are still moving: the app is down or coming back, or the chats are being moved and watched. */
+const RECOVERY_UNDER_WAY: RecoveryState[] = ['waiting', 'opening', 'moving', 'watching']
+
+/** The Instance manager's dot: red when its read failed, a recovery failed or a chat in one is stuck; amber while a
+ * recovery is under way; else on or off. Undefined before the first read. */
+export function instanceManagerDot(status: InstanceManagerStatus | null): ManagerDot | undefined {
+  if (!status) return undefined
+  const trouble = status.recoveries.some((r) => r.state === 'failed' || r.chats.some((c) => c.state === 'stuck'))
+  if (status.error || trouble) return 'bad'
+  if (status.recoveries.some((r) => RECOVERY_UNDER_WAY.includes(r.state))) return 'warn'
+  return managerDot(status.enabled, false)
 }
 
 /** Whether a CliMayte worker in this group is a routine's work: the group starts `routine-<id>-`. */

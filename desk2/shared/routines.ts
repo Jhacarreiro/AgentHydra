@@ -94,7 +94,7 @@
 
 // GROUP AND CAMPAIGNS (owner, 2026-10-16: a Routines tab with the routines "grouped into folders", and the CrAInium's
 //   Campaigns arm connected to AgentHydra). Two optional keys say where a routine belongs; neither changes what a run does:
-//   "group"      the folder the Routines tab lists it under (a company, say): 1 to 40 characters.
+//   "group"      the folder the Tools tab's Routines group lists it under (a company, say): 1 to 40 characters.
 //   "campaigns"  the campaigns of the CrAInium's Campaigns arm it works for: 1 to 10 campaign ids (CAMPAIGN_ID).
 //   A central document keeps them in its front matter outside its approval, as it keeps "description", so setting them
 //   leaves the routine approved and running. POST `meta` sets them on a routine (any caller); GET /api/routines/:id/campaigns
@@ -204,7 +204,7 @@ export interface RoutineDefinition {
   until?: string
   describe?: boolean
   modes?: RoutineModes
-  /** The Routines tab's folder for it (GROUP AND CAMPAIGNS above). */
+  /** The Tools tab's Routines folder for it (GROUP AND CAMPAIGNS above). */
   group?: string
   /** The campaigns it works for (GROUP AND CAMPAIGNS above). */
   campaigns?: string[]
@@ -301,7 +301,7 @@ export interface Routine {
   latestRun?: CentralRun | null
   /** This computer's routine is moving to the central store: its document waits for the owner's approve (proposals). */
   moving?: true
-  /** The Routines tab's folder for it, or null (GROUP AND CAMPAIGNS above). */
+  /** The Tools tab's Routines folder for it, or null (GROUP AND CAMPAIGNS above). */
   group: string | null
   /** The campaigns it works for, or null when it names none. */
   campaigns: string[] | null

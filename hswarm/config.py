@@ -348,6 +348,20 @@ ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL
 # Claude thread is not asked: Sonnet won without it, and the extra turn spends its account's 5-hour window.
 _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT = ("decision", "research")
 ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
+# `route_via_free_asks`: per profile, the models a TOOL-FREE task's Free thread asks for, best first, spelled as
+# route_via_free_tool_asks spells them: "haiku@claude" or "sonnet@claude" on a Claude account, "@chatgpt" on any ChatGPT
+# account (whatever its model). Routine and general work ask ChatGPT first, then Haiku on Claude; decision and research
+# ask Sonnet on Claude first, then ChatGPT (2026-10-17: ChatGPT's sends were failing, so the Claude ask leads where the
+# task has a choice). Critical is not listed: it stays off Free for tool-free work. A profile not listed asks for its Claude
+# family on whichever account is idle.
+_ROUTE_VIA_FREE_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"routine": ("@chatgpt", "haiku@claude"),
+                                                            "general": ("@chatgpt", "haiku@claude"),
+                                                            "decision": ("sonnet@claude", "@chatgpt"),
+                                                            "research": ("sonnet@claude", "@chatgpt")}
+ROUTE_VIA_FREE_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_ASKS_DEFAULT)
+# `route_via_free_wait_s`: how long a job task whose next route is the paid API waits for a Free account with room before it
+# goes there (free_route.consult, wait). Asks never wait.
+ROUTE_VIA_FREE_WAIT_S = 90.0
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -589,7 +603,7 @@ def _apply_free_settings(doc: dict) -> None:
 
 def _apply_free_lists(doc: dict) -> None:
     global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
     if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
@@ -605,6 +619,13 @@ def _apply_free_lists(doc: dict) -> None:
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
                                     if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+    fas = doc.get("route_via_free_asks")
+    if isinstance(fas, dict):
+        ROUTE_VIA_FREE_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fas.items()
+                               if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+    fws = doc.get("route_via_free_wait_s")
+    if _is_number(fws) and fws >= 0:
+        ROUTE_VIA_FREE_WAIT_S = float(fws)
 
 
 def _apply_load_roles_panel(doc: dict) -> None:
@@ -636,7 +657,8 @@ _BUILTIN_DOCS = _builtins()
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES, ROUTE_VIA_FREE_ASKS
+    global ROUTE_VIA_FREE_WAIT_S
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -650,6 +672,7 @@ def _reset() -> None:
     ROUTE_VIA_FREE_TOOL_ASKS = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
     ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
     ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S = dict(_ROUTE_VIA_FREE_ASKS_DEFAULT), 90.0
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

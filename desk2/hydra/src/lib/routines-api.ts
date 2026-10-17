@@ -1,4 +1,4 @@
-// The Routines tab's calls to Desk's own routines API (desk2/server, the routine manager's routes), not the daemon's
+// The Tools tab's calls to Desk's own routines API (desk2/server, the routine manager's routes), not the daemon's
 // /ah/api/*: this copy of AgentHydra's window is served by Desk at /ah/, and standalone it is on Desk's origin too, so
 // the paths are relative. Shapes are desk2/shared/routines.ts (the contract). Owner-only actions (every POST but
 // `meta`) answer 403 unless the request carries X-Desk-Caller: window, which Desk's own web sends the same way

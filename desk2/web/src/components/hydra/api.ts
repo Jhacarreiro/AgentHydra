@@ -41,11 +41,11 @@ const PANE_VIEW_KEY = 'agenthydra.app.view'
 const KEPT_PREFIX = 'hydra-desk2.hydra-sidebar.'
 const OWN_SIDEBAR: Record<string, { title: string; icon: SidebarModel['icon'] }> = {
   hswarm: { title: 'HSwarm', icon: 'network' },
-  routines: { title: 'Routines', icon: 'clock' }
+  tools: { title: 'Tools', icon: 'wrench' }
 }
 
 // A copy of the renames in hydra/src/lib/app-view.ts (RENAMED_VIEWS; desk2/web cannot import from hydra/).
-const RENAMED_VIEWS: Record<string, string> = { corch: 'cli', instances: 'desktop', sessions: 'hswarm', climayte: 'hswarm' }
+const RENAMED_VIEWS: Record<string, string> = { corch: 'cli', instances: 'desktop', sessions: 'hswarm', climayte: 'hswarm', routines: 'tools' }
 
 /** The tab the pane will open on, as app-view.ts decides: its own window's sessionStorage first, then the
  *  durable localStorage value, each through the renames. Only tabs with a sidebar matter here, so an
@@ -171,9 +171,9 @@ export function openSwarmInHydra(job?: string): void {
   openHydra()
 }
 
-/** Slides AgentHydra in on a node of the HSwarm tab's tree, such as 'managers/babysitter' (Settings > Managers' View more). */
-export function openSwarmNodeInHydra(node: string): void {
-  tellHydra({ type: 'desk:open-hswarm', node })
+/** Slides AgentHydra in on the Tools tab, on one of its sidebar keys (such as 'm:babysitter'; none is the overview). */
+export function openToolInHydra(key?: string): void {
+  tellHydra({ type: 'desk:open-tools', key })
   openHydra()
 }
 

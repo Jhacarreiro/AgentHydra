@@ -43,14 +43,14 @@ folders changed to Desk 2's.
 A first, quick version of each, to see whether the direction is right. The layout is Desk's own: the
 sidebar on the left stays put, and only the pane on the right changes.
 
-### Routines tab
+### Tools tab
 
-**TL;DR:** AgentHydra's pages have a top-level Routines tab, beside Instances, Analytics and HSwarm. Every routine is listed in Desk's one sidebar, grouped into folders, with its state at a glance; the page shows one template per routine, with Run now, Pause or Resume, Edit, its run history and its campaigns.
+**TL;DR:** AgentHydra's pages have a top-level Tools tab (mod+5), beside Instances, Analytics and HSwarm. It holds the managers (Babysitter, Orchestrator, Instance manager, Routine manager) and the routines. An overview opens first, with each one at a glance. Desk's one sidebar splits into Managers and Routines; the routines list is grouped into folders, and each routine's page has Run now, Pause or Resume, Edit, its run history and its campaigns.
 
 <details>
-<summary><b>Read more: the Routines tab</b></summary>
+<summary><b>Read more: the Tools tab</b></summary>
 
-It reads Desk's own `GET /api/routines` on the page's origin, so it works embedded at `/ah/` and standalone. Owner-only actions (resume, discard, edit, mode, the manager switch) send `X-Desk-Caller: window`, as Desk's own web does. The list refreshes every 20 seconds while the tab is on screen, and every 3 seconds while a routine runs or an action is in flight. Proposals sit first under "Awaiting approval"; a folder that holds a failed or broken routine keeps its mark. Desk's Settings > Managers > Routines has a "Routines tab" row that opens the tab.
+It reads Desk's own `GET /api/routines` on the page's origin, so it works embedded at `/ah/` and standalone. Owner-only actions (resume, discard, edit, mode, the manager switch) send `X-Desk-Caller: window`, as Desk's own web does. The list refreshes every 20 seconds while the tab is on screen, and every 3 seconds while a routine runs or an action is in flight. Proposals sit first under "Awaiting approval"; a folder that holds a failed or broken routine keeps its mark. Desk's Settings > Managers has an "Open in Tools" button that opens the tab, and the Babysitter's "View more" opens its page there. The managers moved here from HSwarm; HSwarm keeps CliMayte, Savings, Providers, Routing, Jobs and Help.
 
 </details>
 

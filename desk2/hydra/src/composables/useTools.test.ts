@@ -4,7 +4,7 @@
 import { expect, it } from 'bun:test'
 import { nextTick, ref } from 'vue'
 import type { BabysitterStatus } from '@desk/shared/babysitter'
-import { useManagers } from './useManagers'
+import { useTools } from './useTools'
 
 const babysitter: BabysitterStatus = {
   enabled: true,
@@ -32,7 +32,7 @@ const babysitter: BabysitterStatus = {
   ],
 }
 
-it("the managers' pages read Desk's own routes, not the daemon's", async () => {
+it("the Tools tab's managers read Desk's own routes, not the daemon's", async () => {
   const realFetch = globalThis.fetch
   const g = globalThis as { window?: unknown }
   const hadWindow = 'window' in g
@@ -41,16 +41,16 @@ it("the managers' pages read Desk's own routes, not the daemon's", async () => {
   globalThis.fetch = (async (url: string | URL) => {
     const path = String(url)
     if (!path.startsWith('/api/')) return new Response('not found', { status: 404 })
-    const body = path === '/api/babysitter' ? babysitter : path === '/api/routines' ? { enabled: true, routines: [], proposals: [] } : {}
+    const body = path === '/api/babysitter' ? babysitter : path === '/api/instance-manager' ? { enabled: true, instances: [], recoveries: [] } : {}
     return new Response(JSON.stringify(body), { status: 200 })
   }) as typeof fetch
-  const shown = ref(true)
+  const active = ref(true)
   try {
-    const managers = useManagers(shown)
-    await managers.refresh()
-    expect([managers.available, managers.error, managers.babysitter?.stopped.length]).toEqual([true, null, 1])
+    const tools = useTools(active)
+    await tools.refresh()
+    expect([tools.available, tools.error, tools.babysitter?.stopped.length]).toEqual([true, null, 1])
   } finally {
-    shown.value = false
+    active.value = false
     await nextTick()
     globalThis.fetch = realFetch
     if (!hadWindow) delete g.window

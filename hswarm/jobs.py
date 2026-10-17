@@ -232,6 +232,14 @@ def _tripped(leg: str) -> str | None:
     return msg if time.monotonic() < until else None
 
 
+def _route_notes(climayte_note: dict | None, free_note: dict | None) -> dict | None:
+    """selection.route for a task that both CliMayte and the Free accounts turned away: CliMayte's note, with Free's under
+    `free`, so a Free try is not hidden behind CliMayte's note."""
+    if climayte_note and free_note:
+        return {**climayte_note, "free": free_note}
+    return climayte_note or free_note
+
+
 def _spent_legs(model: str, plan: list[str]) -> list[str]:
     """The legs of `model`'s route that route_plan dropped because their provider has no key with credit. A plan
     that is not drawn from that route (an unknown model's `[model]`) has nothing cut short."""
@@ -856,13 +864,14 @@ class JobManager:
             # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
             ask_id = f"ask-{uuid.uuid4().hex[:8]}"
             served, miss = await free_route.consult(ask_id, free)
+            self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
             if served is not None:
                 return served
-            self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
         from .dispatch import ask_selected
         res = await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
-        if miss and miss.get("short"):  # no Free account had room: the ask's ledger line says so (ledger.short_fields)
-            res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or miss}
+        if miss:  # the Free try that did not serve the ask rides on its API row: its short (ledger.short_fields) or its miss
+            route_now = (res.selection or {}).get("route") or {}
+            res.selection = {**(res.selection or {}), "route": {**route_now, **(miss if miss.get("short") else {"free": miss})}}
         return res
 
     async def ask_role(self, role: str, prompt: str, **kw) -> Result:
@@ -894,34 +903,52 @@ class JobManager:
 
     @staticmethod
     def _book_free_miss(note: dict | None, job_id: str, task_id: str, caller: dict | None) -> None:
-        """A Free try HSwarm did not accept is an extra ledger row (the API run that follows is the task)."""
+        """A Free try HSwarm did not accept is an extra ledger row (the API run that follows is the task). A task that moved
+        on to another Free account carries its earlier failed tries under `earlier` (free_route.consult): each is a row."""
         try:
-            if row := free_miss_row(note or {}, job_id, task_id, caller):
-                ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}) + "\n")
+            for one in [*(note or {}).pop("earlier", []), note or {}]:
+                if row := free_miss_row(one, job_id, task_id, caller):
+                    ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}) + "\n")
         except Exception:  # noqa: BLE001 - bookkeeping never fails the task
             pass
 
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
-        # Before the plan's own route runs: an agentic task goes to an idle CliMayte account first, at no extra cost (climayte_route.py).
-        served, route_note = await climayte_route.consult(job.id, task, caller=job.caller)
+        # A read or web tool task asks the owner's Free web accounts first (free_route.py), then CliMayte, then the paid
+        # API: CliMayte cannot take web tools, and Free is the cheaper try for read work too. Edit and all tasks, and
+        # tool-free ones, keep CliMayte first, then Free (an idle CliMayte account costs nothing extra either).
+        free_first = task.tools != "none" and free_route.eligible(task)
+        free_note = None
+        if free_first:
+            served, free_note = await free_route.consult(job.id, task)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        served, climayte_note = await climayte_route.consult(job.id, task, caller=job.caller)
         if served is not None:
             return served, None
         # Let through at submit for CliMayte, which did not take it: a route that cannot serve at all is refused now,
         # as submit would have, not run into its timeouts.
-        if route_note and route_note.get("floor_miss") and (why := no_route_left([task])):
+        if climayte_note and climayte_note.get("floor_miss") and (why := no_route_left([task])):
             res = Result(id=task.id, backend=task.backend, model=task.model, status="error", error=why,
                          started=now_iso(), finished=now_iso())
-            res.selection = {"route": route_note}
-            climayte_route.mark_dropped(res, route_note)
+            res.selection = {"route": _route_notes(climayte_note, free_note)}
+            climayte_route.mark_dropped(res, res.selection["route"])
             return res, None
-        # then the owner's Free web accounts, for a tool-free task (free_route.py)
-        served, free_note = await free_route.consult(job.id, task)
-        if served is not None:
-            return served, None
-        self._book_free_miss(free_note, job.id, task.id, job.caller)
-        route_note = route_note or free_note
+        if not free_first:
+            served, free_note = await free_route.consult(job.id, task)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        # No Free account had room and CliMayte did not take the task: the paid API is next, so the job waits for a Free
+        # account with room first (route_via_free_wait_s).
+        if free_note and free_note.get("short"):
+            served, free_note = await free_route.consult(job.id, task, wait=True)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        route_note = _route_notes(climayte_note, free_note)
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
         if route_note and isinstance(res, Result):  # a later offer to CliMayte in the walk (dispatch._climayte_before) is newer
             res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or route_note}

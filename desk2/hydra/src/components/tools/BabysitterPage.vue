@@ -5,67 +5,67 @@ import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { Managers } from '@/composables/useManagers'
+import type { Tools } from '@/composables/useTools'
 import { timeAgo } from '@/lib/format'
 import { EMBEDDED, openSettingsInDesk } from '@/lib/desk-embed'
 import { MANAGER_DOT_CLASS, MANAGER_TEXT_CLASS, babysitterActDot, babysitterChatDot, babysitterDot } from '@/lib/managers'
 
-const props = defineProps<{ managers: Managers }>()
+const props = defineProps<{ tools: Tools }>()
 const { t } = useI18n()
 
-const s = computed(() => props.managers.babysitter)
+const s = computed(() => props.tools.babysitter)
 // The stopped count takes the Babysitter's own colour while any chat is stopped (amber waiting, red needs a person).
 const stoppedClass = computed(() => {
   const dot = babysitterDot(s.value)
   return s.value?.stopped.length && dot ? MANAGER_TEXT_CLASS[dot] : ''
 })
-const sourceName = (src: string) => t(`hswarm.v.managers.babysitter.source.${src}`, src)
-const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.babysitter.noReset') : t('hswarm.v.managers.babysitter.resets', { when: new Date(ms).toLocaleString() }))
+const sourceName = (src: string) => t(`tools.managers.babysitter.source.${src}`, src)
+const resetText = (ms: number | null) => (ms == null ? t('tools.managers.babysitter.noReset') : t('tools.managers.babysitter.resets', { when: new Date(ms).toLocaleString() }))
 </script>
 
 <template>
   <Card size="sm">
     <CardHeader>
       <div class="flex flex-wrap items-center gap-2">
-        <CardTitle size="lg">{{ t('hswarm.v.managers.babysitter.title') }}</CardTitle>
+        <CardTitle size="lg" data-page-title tabindex="-1">{{ t('tools.managers.babysitter.title') }}</CardTitle>
         <span v-if="s" class="rounded-md border px-1.5 py-0.5 text-xs" :class="s.enabled ? 'text-success' : 'text-muted-foreground'">
-          {{ s.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off') }}
+          {{ s.enabled ? t('tools.managers.on') : t('tools.managers.off') }}
         </span>
         <Button v-if="EMBEDDED" size="sm" variant="outline" class="ms-auto" @click="openSettingsInDesk('managers')">
-          {{ t('hswarm.v.managers.settings') }}
+          {{ t('tools.managers.settings') }}
         </Button>
       </div>
-      <CardDescription>{{ t('hswarm.v.managers.babysitter.caption') }}</CardDescription>
+      <CardDescription>{{ t('tools.managers.babysitter.caption') }}</CardDescription>
     </CardHeader>
     <CardContent stack="sm">
-      <p v-if="managers.error" class="text-xs text-destructive">{{ t('hswarm.v.managers.readError', { error: managers.error }) }}</p>
+      <p v-if="tools.error" class="text-xs text-destructive">{{ t('tools.managers.readError', { error: tools.error }) }}</p>
       <p v-if="s?.error" class="text-xs text-destructive">{{ s.error }}</p>
-      <p v-if="!s" class="text-sm text-muted-foreground">{{ t('hswarm.v.managers.nothingYet') }}</p>
+      <p v-if="!s" class="text-sm text-muted-foreground">{{ t('tools.managers.nothingYet') }}</p>
 
       <template v-if="s">
         <div class="grid grid-cols-2 gap-2">
           <div class="min-w-0 rounded-lg border bg-card px-3 py-2">
-            <div class="text-xs text-muted-foreground">{{ t('hswarm.v.managers.babysitter.stopped') }}</div>
+            <div class="text-xs text-muted-foreground">{{ t('tools.managers.babysitter.stopped') }}</div>
             <div class="text-2xl font-semibold leading-8" :class="stoppedClass">{{ s.stopped.length }}</div>
           </div>
           <div class="min-w-0 rounded-lg border bg-card px-3 py-2">
-            <div class="text-xs text-muted-foreground">{{ t('hswarm.v.managers.babysitter.accounts') }}</div>
+            <div class="text-xs text-muted-foreground">{{ t('tools.managers.babysitter.accounts') }}</div>
             <div class="text-2xl font-semibold leading-8">{{ s.accounts.length }}</div>
             <p class="truncate text-xs text-muted-foreground">
-              {{ t('hswarm.v.managers.lastLook') }}: {{ timeAgo(s.checkedAt) }} · {{ t('hswarm.v.managers.nextLook') }}: {{ s.nextCheckAt ? new Date(s.nextCheckAt).toLocaleTimeString() : '—' }}
+              {{ t('tools.managers.lastLook') }}: {{ timeAgo(s.checkedAt) }} · {{ t('tools.managers.nextLook') }}: {{ s.nextCheckAt ? new Date(s.nextCheckAt).toLocaleTimeString() : '—' }}
             </p>
           </div>
         </div>
 
-        <h3 class="text-sm font-medium">{{ t('hswarm.v.managers.babysitter.chats') }}</h3>
-        <p v-if="!s.stopped.length" class="text-sm text-muted-foreground">{{ t('hswarm.v.managers.babysitter.noChats') }}</p>
+        <h3 class="text-sm font-medium">{{ t('tools.managers.babysitter.chats') }}</h3>
+        <p v-if="!s.stopped.length" class="text-sm text-muted-foreground">{{ t('tools.managers.babysitter.noChats') }}</p>
         <Table v-else>
           <TableHeader>
             <TableRow>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.chatHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.stateHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.resetHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.accountHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.chatHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.stateHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.resetHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.accountHead') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -75,7 +75,7 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
               <TableCell size="xs" :title="c.reason">
                 <span class="inline-flex items-center gap-1.5 font-medium" :class="MANAGER_TEXT_CLASS[babysitterChatDot(c.state)]">
                   <span class="size-2 rounded-full" :class="MANAGER_DOT_CLASS[babysitterChatDot(c.state)]" />
-                  {{ t(`hswarm.v.managers.babysitter.chatState.${c.state}`, c.state) }}
+                  {{ t(`tools.managers.babysitter.chatState.${c.state}`, c.state) }}
                 </span>
               </TableCell>
               <TableCell size="xs" muted>{{ resetText(c.resetsAt) }}</TableCell>
@@ -84,14 +84,14 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
           </TableBody>
         </Table>
 
-        <h3 class="text-sm font-medium">{{ t('hswarm.v.managers.babysitter.acts') }}</h3>
-        <p v-if="!s.acts.length" class="text-sm text-muted-foreground">{{ t('hswarm.v.managers.babysitter.noActs') }}</p>
+        <h3 class="text-sm font-medium">{{ t('tools.managers.babysitter.acts') }}</h3>
+        <p v-if="!s.acts.length" class="text-sm text-muted-foreground">{{ t('tools.managers.babysitter.noActs') }}</p>
         <Table v-else>
           <TableHeader>
             <TableRow>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.whenHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.chatHead') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.managers.babysitter.didHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.whenHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.chatHead') }}</TableHead>
+              <TableHead>{{ t('tools.managers.babysitter.didHead') }}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -99,7 +99,7 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
               <TableCell size="xs" class="whitespace-nowrap">{{ timeAgo(a.at) }}</TableCell>
               <TableCell class="max-w-[16rem]" truncate>{{ a.title }}</TableCell>
               <TableCell size="xs">
-                <span class="font-medium" :class="MANAGER_TEXT_CLASS[babysitterActDot(a.did)]">{{ t(`hswarm.v.managers.babysitter.did.${a.did}`, a.did) }}</span>
+                <span class="font-medium" :class="MANAGER_TEXT_CLASS[babysitterActDot(a.did)]">{{ t(`tools.managers.babysitter.did.${a.did}`, a.did) }}</span>
                 <span class="text-muted-foreground"> · {{ a.detail }}</span>
               </TableCell>
             </TableRow>

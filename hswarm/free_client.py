@@ -39,6 +39,10 @@ TURN_CAP_S = 180.0  # the longest one turn may take on its account before the le
 # failing over to a paid route: in the A/B of 2026-10-13, one relaunch failed 10 of the 20 tasks in flight on each arm.
 RELAUNCH_WAIT_S = 60.0  # how long a cut turn waits for the daemon to answer again
 THREAD_POLL_S = 5.0  # how often a cut turn looks at its thread
+# A new thread whose send was cut after the daemon took it may have landed under its name: its listing is watched this
+# long before the message is sent again under the same name (_recover). Nothing is sent twice: name_conflict proves it.
+NEW_THREAD_WAIT_S = 20.0
+ANSWER_WAIT_S = 60.0  # how long a turn failed as answer_not_confirmed is read back from its thread for the reply (_exchange)
 _CUT = (OSError, ValueError, KeyError, IndexError, TypeError, asyncio.TimeoutError)
 
 PROTOCOL = """# Tools you have in this chat
@@ -139,10 +143,14 @@ class FreeChatClient:
     """One task's Free thread. `chat` has the provider client's shape (agent._call_turn's keywords); every keyword
     a web chat cannot honour (max_tokens, thinking, temperature) is accepted and ignored."""
 
-    def __init__(self, job_id: str, task: Task, family: str | None = None, call=None, provider: str | None = None):
+    def __init__(self, job_id: str, task: Task, family: str | None = None, call=None, provider: str | None = None,
+                 exclude: list[int] | None = None, moved: int = 0):
         self.job_id, self.task = job_id, task
         self.family = family  # a new thread's model: "haiku", "sonnet" (a ChatGPT account ignores both), "gpt-6", ...
         self.provider = provider  # the provider a new thread must run on, else whichever account is idle
+        self.exclude = list(exclude or ())  # instance numbers of the accounts that already failed this task (exclude_accounts)
+        self.moved = moved  # how many Free accounts failed this task before this thread (its name's " m<k>")
+        self.failure: TurnError | None = None  # the last turn that gave no reply (free_route reads its error to move on)
         self.call = call  # free_route._call: one tool call on AgentHydra's MCP endpoint
         self.chat_id: str | None = None
         self.account = None
@@ -168,6 +176,11 @@ class FreeChatClient:
             parts = [tool_text(tools)] if tools else []
             parts += [f"# Your brief\n\n{b}" for b in brief if b]
             parts += ["# The task\n\n" + "\n\n".join(task)] if task else []
+            # A thread opened to carry on a task that an earlier Free account was cut off in (free_route's moves): its
+            # turns so far come with it, so the work is not done again.
+            base = len("\n\n".join(p for p in parts if p))
+            if done := self._progress(messages, MAX_PROMPT_CHARS - base - 400):
+                parts.append("# Work so far (an earlier chat was cut off)\n\n" + done)
             if tools:
                 parts.append(START)
             return self._fit("\n\n".join(p for p in parts if p))
@@ -184,6 +197,34 @@ class FreeChatClient:
         return self._fit("\n\n".join(p for p in parts if p))
 
     @staticmethod
+    def _progress(messages: list[dict], budget: int) -> str:
+        """The turns a cut-off chat already had, as the thread shows them: each reply's tool calls as <tool_call> lines
+        (its text when it had none), each tool result in <tool_result> tags. Over the budget, the oldest go first."""
+        names = {c.get("id"): (c.get("function") or {}).get("name") for m in messages if m.get("role") == "assistant"
+                 for c in m.get("tool_calls") or ()}
+        blocks = []
+        for m in messages:
+            if m.get("role") == "assistant":
+                calls = m.get("tool_calls") or ()
+                lines = [] if calls else [_content(m).strip()]
+                for c in calls:
+                    fn = c.get("function") or {}
+                    args = fn.get("arguments")
+                    args = args if isinstance(args, str) and args.strip() else json.dumps(args or {}, ensure_ascii=False)
+                    lines.append(f'<tool_call>{{"name": {json.dumps(fn.get("name") or "tool")}, "arguments": {args}}}</tool_call>')
+                if any(lines):
+                    blocks.append("\n".join(line for line in lines if line))
+            elif m.get("role") == "tool":
+                blocks.append(f'<tool_result name="{names.get(m.get("tool_call_id")) or "tool"}">\n{_content(m)}\n</tool_result>')
+        kept, used = [], 0
+        for b in reversed(blocks):
+            if used + len(b) + 2 > budget:
+                break
+            kept.append(b)
+            used += len(b) + 2
+        return "\n\n".join(reversed(kept))
+
+    @staticmethod
     def _fit(text: str) -> str:
         """A message over free_chat's limit keeps its head and tail (the request and the newest output) and says what
         it cut; the worker can page a spilled result back with fetch_output."""
@@ -195,11 +236,18 @@ class FreeChatClient:
     async def chat(self, messages: list[dict], model: str | None = None, tools: list[dict] | None = None, **_) -> ChatResult:
         started = time.monotonic()
         sent_chars, seconds = 0, 0.0
+        if self.chat_id is None and any(m.get("role") in ("assistant", "tool") for m in messages):
+            # A resumed thread: its turns so far are in the render, so it counts as having asked for its tools already
+            # (no NUDGE, no FRESH thread for a reply that is only the next step).
+            self.called = self.called or any(m.get("tool_calls") for m in messages if m.get("role") == "assistant")
+            self.sent = len(messages)
         text = self.render(messages, tools)
         while True:
             try:
+                self.failure = None
                 one = await self._turn(text)
             except TurnError as e:
+                self.failure = e
                 if not redo(e, self.chat_id, self.redone):
                     raise
                 self.redone += 1
@@ -248,11 +296,13 @@ class FreeChatClient:
         item: dict = {"prompt": text}
         if self.chat_id is None:
             item["name"] = (f"hswarm {self.job_id} {self.task.id}" + (f" r{self.fresh + 1}" if self.fresh else "")
-                            + (f" g{self.redone + 1}" if self.redone else ""))
+                            + (f" g{self.redone + 1}" if self.redone else "") + (f" m{self.moved}" if self.moved else ""))
             if self.family:
                 item["model"] = self.family
             if self.provider:
                 item["provider"] = self.provider
+            if self.exclude:
+                item["exclude_accounts"] = self.exclude
         else:
             item["chat_id"] = self.chat_id
         one = await turn(self.call, item, TURN_CAP_S)
@@ -263,7 +313,13 @@ class FreeChatClient:
         return one
 
     async def aclose(self) -> None:
-        pass
+        """Ends the thread's lease on its Claude account (free_release) when the task ends; a failed release is ignored,
+        since the lease lapses four minutes after the thread's last turn."""
+        if self.chat_id and self.call:
+            try:
+                await self.call("free_release", {"chat_id": self.chat_id}, 10)
+            except _CUT:
+                pass  # floor-ok: best effort; an unreleased lease lapses four minutes after the thread's last turn
 
 
 class ToolsRefused(RuntimeError):
@@ -291,7 +347,9 @@ async def turn(call, item: dict, cap_s: float) -> dict:
         return await _exchange(call, item, deadline, cap_s, seen)
     except _CUT as e:
         taken = bool(seen.get("batch"))
-        if not taken and _answered(e):  # the daemon refused the message itself, as before any relaunch
+        # The daemon refused a continued thread's message itself: nothing is in flight to wait for. A new thread's send
+        # that a tool error cut is looked for under its name first (_recover), since the daemon may have taken it.
+        if not taken and _answered(e) and item.get("chat_id"):
             raise TurnError(503, f"free accounts unavailable ({type(e).__name__}: {e})", "send") from e
         one = await _recover(call, item, started, deadline, cap_s, unsent=not taken and _refused(e))
         if one is None:
@@ -313,11 +371,32 @@ async def _exchange(call, item: dict, deadline: float, cap_s: float, seen: dict)
         if one.get("state") == "done":
             return one
         if one.get("state") == "failed":
+            # The message went and the reply was stored, but the tab did not confirm it: the thread has the answer.
+            if str(one.get("error") or "").startswith("answer_not_confirmed") and one.get("chat_id"):
+                if text := await _stored_reply(call, one["chat_id"]):
+                    return {**one, "state": "done", "response": text}
             raise TurnError(503, f"free account failed the turn: {one.get('error') or 'no reason'}", "failed", one)
         left = deadline - time.monotonic()
         if left <= 1:
             raise TurnError(504, f"free account still {one.get('state') or 'silent'} after {cap_s:.0f} s", "timeout", one)
         sent = await call("free_results", {"batch": batch, "wait_s": int(min(WAIT_S, left))}, min(WAIT_S, left) + 5)
+
+
+async def _stored_reply(call, chat_id: str) -> str:
+    """The last reply a thread stored, read back for up to ANSWER_WAIT_S ("" when none came): what answer_not_confirmed
+    leaves behind, since the message was sent and answered and only the tab failed to confirm it."""
+    until = time.monotonic() + ANSWER_WAIT_S
+    while True:
+        try:
+            read = await call("free_read", {"chat_id": chat_id, "last": 1}, 30)
+            last = (read.get("messages") or [{}])[-1]
+            if isinstance(last, dict) and last.get("role") == "assistant" and str(last.get("text") or "").strip():
+                return str(last["text"])
+        except _CUT:
+            pass  # the daemon went away: keep looking until the wait is over
+        if time.monotonic() >= until:
+            return ""
+        await asyncio.sleep(min(THREAD_POLL_S, max(0.0, until - time.monotonic())))
 
 
 async def _recover(call, item: dict, started: float, deadline: float, cap_s: float, unsent: bool) -> dict | None:
@@ -333,6 +412,7 @@ async def _recover(call, item: dict, started: float, deadline: float, cap_s: flo
         if unsent:
             return {**await _exchange(call, item, deadline, cap_s, {}), "recovered": True}
         resent = False
+        new_until = time.monotonic() + NEW_THREAD_WAIT_S
         while time.monotonic() < deadline:
             try:
                 listed = (await call("free_threads", {"limit": 200}, 30)).get("threads") or []
@@ -343,6 +423,17 @@ async def _recover(call, item: dict, started: float, deadline: float, cap_s: flo
                         resent = True  # the message never reached its thread
                         return {**await _exchange(call, item, deadline, cap_s, {}), "recovered": True}
                     mine = None  # not this message's yet: an older thread of the same name, or the resend on its way
+                if not mine and not chat_id and not resent and time.monotonic() >= new_until:
+                    # No thread under the name after a while: the send was lost, so it goes again under the same name,
+                    # once. A name_conflict says the first send did land; its thread is waited for below.
+                    resent = True
+                    try:
+                        return {**await _exchange(call, item, deadline, cap_s, {}), "recovered": True}
+                    except _CUT as e:
+                        # The daemon refused the resend itself (not a name_conflict): nothing is in flight. A resend cut
+                        # after the daemon took it may still land, so its thread is looked for under the name like the first.
+                        if _answered(e) and "name_conflict" not in str(e):
+                            return None
                 if mine and mine.get("status") == "failed":
                     return None
                 if mine and mine.get("status") == "done":
@@ -366,7 +457,7 @@ async def _recover(call, item: dict, started: float, deadline: float, cap_s: flo
 def _answered(e: BaseException) -> bool:
     """Whether the daemon answered the call with an error of its own (an HTTP status or a tool error, free_route._rpc),
     rather than the call being cut or never arriving."""
-    return type(e) is OSError and (str(e) == "tool error" or str(e).startswith("HTTP "))
+    return type(e) is OSError and (str(e).startswith("tool error") or str(e).startswith("HTTP "))
 
 
 def _refused(e: BaseException) -> bool:

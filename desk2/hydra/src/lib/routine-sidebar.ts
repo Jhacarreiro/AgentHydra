@@ -1,6 +1,6 @@
-// The Routines tab's sidebar rows, as pure functions: every routine in a folder (its group, else 'Other'), the proposals
+// The Tools tab's Routines group, as pure functions: every routine in a folder (its group, else 'Other'), the proposals
 // in an 'Awaiting approval' folder first, a folder that holds a problem wearing its mark, and the search. Desk draws the
-// rows in its one sidebar (useDeskSidebar, shared/hydra-embed.ts); outside Desk RoutinesView draws the same rows as its
+// rows in its one sidebar (useDeskSidebar, shared/hydra-embed.ts); outside Desk ToolsView draws the same rows as its
 // own left column. Keys: 'f:<folder>' for a folder, 'r:<id>' for a routine, 'p:<id>' for a proposal.
 import type { EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type { Routine, RoutineProposal, RoutinesStatus } from '@desk/shared/routines'

@@ -45,6 +45,12 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     # The stored model-watch scan (model_watch.py), one line, offline: how old it is and what it has not routed yet.
     out["model_watch"] = model_watch.summary()
     out["free_model_watch"] = free_models.summary()  # the Free ChatGPT accounts' model list (free_models.py)
+    # A Free provider the daemon has shut, or whose sends mostly fail in the last hour (free_route's health gate): a
+    # silent outage shows here, not only in the ledger.
+    from . import free_route
+
+    if warn := await free_route.provider_warnings():
+        out["free_warning"] = warn
     # Every provider's pool, offline and in one place: which keys are ready, resting, or in the disabled slot.
     # `hswarm keys probe` (or hswarm_keys action="probe") is the one that spends a GET and heals a topped-up key.
     # BOUNDED, like hswarm_keys' default list: the verbose report is one row per key, and with 1,700+ keys

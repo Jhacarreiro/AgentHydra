@@ -138,7 +138,7 @@ function setModes(def: RoutineDefinition, o: Record<string, unknown>, when: stri
   def.modes = { options: options as string[], set: modes.set }
 }
 
-/** A routine's group (the Routines tab's folder), checked: 1 to GROUP_MAX characters on one line. Throws with the reason. */
+/** A routine's group (the Tools tab's Routines folder), checked: 1 to GROUP_MAX characters on one line. Throws with the reason. */
 export function checkGroup(value: unknown): string {
   if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('"group" must be a name on one line')
   const group = value.trim()

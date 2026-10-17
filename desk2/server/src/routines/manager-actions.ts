@@ -177,7 +177,7 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
   return c.json(status(m))
 }
 
-/** `meta`: any caller's group and campaigns for a routine or a proposal (the Routines tab's folder, the campaigns it works for):
+/** `meta`: any caller's group and campaigns for a routine or a proposal (the Tools tab's Routines folder, the campaigns it works for):
  *  a key it names is set, null removes it, an absent one is kept. A central document keeps its approval (both keys are unsigned);
  *  a local file keeps every other key. A value that does not check out is a 400, a missing routine a 404. */
 async function metaRoutine(m: Manager, c: Context, meta: NonNullable<RoutinesRequest['meta']>) {

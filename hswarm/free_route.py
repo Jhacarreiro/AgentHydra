@@ -42,6 +42,20 @@ _ACTIVE = 0  # tasks on a free account right now, across every job of this proce
 _SENT: list[float] = []
 UNSEEN_S = 2.0
 SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, with no prose and no code fence:"
+# A failed Free try moves its task to another account (_movable) for at most MOVES more tries, inside the task's cap.
+MOVES = 2
+ROOM_POLL_S = 5.0  # how often a job task waiting for a Free account with room reads free_status again (consult, wait)
+PROBE_EVERY_S = 600.0  # one task per provider in this long is sent past its health gate (_pick), to learn whether it is back
+SICK_SENT, SICK_SHARE = 10, 0.2  # a provider with this many sends in the last hour, mostly failed, is shut (_sick)
+WEEK_FULL_PCT = 90  # a Claude account this far into its week takes no new thread (mcp-free.ts)
+# A failed turn's error opens with its code (free_chat's shape, AgentHydra mcp-free.ts). MOVE_CODES and MOVE_TEXT are the
+# account's or thread's own failures: the task may go to another Free account. NOT_SENT codes wrote nothing into the chat,
+# so the provider is at fault and the task also skips that provider for the rest of its tries.
+MOVE_CODES = ("rate_limited", "answer_not_confirmed", "generation_error", "operation_interrupted", "browser_preparation_",
+              "stream_interrupted", "login_", "http_rejected")
+MOVE_TEXT = ("free accounts unavailable", "No signed-in Free")
+NOT_SENT = ("browser_preparation_", "browser_pool_unavailable", "browser_busy")
+_PROBED: dict[str, float] = {}  # provider -> when a task was last sent past its health gate (_pick)
 
 
 def eligible(task: Task) -> bool:
@@ -98,7 +112,9 @@ def _rpc(name: str, arguments: dict, timeout: float) -> dict:
         raise OSError(f"HTTP {e.code}") from e
     result = doc.get("result") or {}
     if result.get("isError"):
-        raise OSError("tool error")
+        # The daemon's words are kept: a send refused as name_conflict proves the first send landed (free_client._recover).
+        text = ((result.get("content") or [{}])[0] or {}).get("text") or ""
+        raise OSError(f"tool error: {text[:200]}")
     return json.loads(result["content"][0]["text"])
 
 
@@ -110,14 +126,16 @@ async def _call(name: str, arguments: dict, timeout: float) -> dict:
 _ERRORS = (OSError, ValueError, KeyError, IndexError, TypeError, asyncio.TimeoutError)
 
 
-def _idle(status: dict, provider: str | None = None) -> int:
-    """Signed-in accounts neither busy, resting after a failed send (mcp-free.ts restingFor) nor paced out of
-    new chats for now (mcp-free.ts pacedOut); with a provider, only that provider's accounts with room (_room)."""
+def _idle(status: dict, provider: str | None = None, exclude=()) -> int:
+    """Signed-in accounts neither busy, resting after a failed send (mcp-free.ts restingFor), paced out of new chats for
+    now (mcp-free.ts pacedOut), holding a lease for another thread (leased), past the week's cut or on the task's exclude
+    list; with a provider, only that provider's accounts with room (_room)."""
     if not status.get("ready"):
         return 0
     return sum(1 for a in status.get("accounts") or []
                if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting")
-               and not a.get("paced") and (provider is None or (a.get("provider") == provider and _room(a))))
+               and not a.get("paced") and not a.get("leased") and a.get("num") not in exclude and _week(a)
+               and (provider is None or (a.get("provider") == provider and _room(a))))
 
 
 CLAUDE_FAMILIES = ("haiku", "sonnet")  # the only model names that are Claude's; every other name is ChatGPT's
@@ -125,10 +143,35 @@ CLAUDE_FULL_PCT = 80  # a Claude account this far into its 5-hour window is not 
 
 
 def _room(account: dict) -> bool:
-    """Whether a Claude account's 5-hour window has room for a thread of several messages ("5h 43%, week 19%" in
-    free_status); ChatGPT's everyday text has no window, and a Claude account with no reading yet counts as room."""
-    m = re.search(r"\b5h (\d+)%", str(account.get("usage") or ""))
-    return account.get("provider") != "claude" or not m or int(m.group(1)) < CLAUDE_FULL_PCT
+    """Whether a Claude account's 5-hour window has room for a thread of several messages: free_status's five_hour_pct.
+    null (no reading yet) counts as room, and so does a window whose reset has passed (the daemon reads that as 0).
+    ChatGPT's everyday text has no window."""
+    pct = account.get("five_hour_pct")
+    return account.get("provider") != "claude" or not isinstance(pct, (int, float)) or pct < CLAUDE_FULL_PCT
+
+
+def _week(account: dict) -> bool:
+    """Whether a Claude account's week has room. free_status gives the week only in its usage text ("5h 43%, week 19%")."""
+    m = re.search(r"\bweek (\d+)%", str(account.get("usage") or ""))
+    return account.get("provider") != "claude" or not m or int(m.group(1)) < WEEK_FULL_PCT
+
+
+def _sick(health) -> bool:
+    """Whether a provider's providerHealth (free_status) shuts it for new tasks: the daemon's rest is in force, or most of
+    its sends in the last hour failed (SICK_SENT sends at an ok share under SICK_SHARE)."""
+    if not isinstance(health, dict):
+        return False
+    share = health.get("okShare")
+    return bool(health.get("down")) or (int(health.get("sent") or 0) >= SICK_SENT and share is not None and share < SICK_SHARE)
+
+
+def _probe(provider: str | None) -> bool:
+    """One task per provider per PROBE_EVERY_S goes past its health gate, so a provider that came back is found again."""
+    now = time.monotonic()
+    if provider is None or now - _PROBED.get(provider, -PROBE_EVERY_S) < PROBE_EVERY_S:
+        return False
+    _PROBED[provider] = now
+    return True
 
 
 def _ask(ask: str) -> tuple[str, str | None]:
@@ -139,17 +182,23 @@ def _ask(ask: str) -> tuple[str, str | None]:
     return model, provider or ("chatgpt" if model and model not in CLAUDE_FAMILIES else None)
 
 
-def _pick(task: Task, status: dict, unseen: int) -> tuple[str, str | None] | None:
-    """The (model, provider) a task's Free thread asks for, or None when no account can take it now: a tool task of a
-    profile with asks (config.ROUTE_VIA_FREE_TOOL_ASKS) takes the first whose provider has an idle account with room;
-    any other task asks for its Claude family on whichever account is idle."""
-    asks = config.ROUTE_VIA_FREE_TOOL_ASKS.get(task.profile or "") if task.tools != "none" else None
+def _pick(task: Task, status: dict, unseen: int, skip=(), exclude=()) -> tuple[str, str | None] | None:
+    """The (model, provider) a task's Free thread asks for, or None when no account can take it now. A tool task takes
+    config.ROUTE_VIA_FREE_TOOL_ASKS for its profile, a tool-free one config.ROUTE_VIA_FREE_ASKS: the first ask whose
+    provider has an idle account with room is taken. A provider the health gate shuts (_sick) is passed over unless its
+    probe is due (_probe), and so is one in `skip` (a provider a failed try named). A profile with no asks asks for its
+    Claude family on whichever account is idle."""
+    asks = (config.ROUTE_VIA_FREE_TOOL_ASKS if task.tools != "none" else config.ROUTE_VIA_FREE_ASKS).get(task.profile or "")
     if not asks:
         family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
-        return (family, None) if _idle(status) - unseen > 0 else None
+        return (family, None) if _idle(status, exclude=exclude) - unseen > 0 else None
+    health = status.get("providerHealth") or {}
     for model, provider in map(_ask, asks):
-        if _idle(status, provider) - unseen > 0:
-            return model, provider
+        if provider in skip or _idle(status, provider, exclude) - unseen <= 0:
+            continue
+        if _sick(health.get(provider)) and not _probe(provider):
+            continue
+        return model, provider
     return None
 
 
@@ -247,62 +296,137 @@ _TURN_MISS = {"send": ("free send failed", "error", "unavailable"), "refused": (
               "results": ("free results unavailable", "error", "unavailable")}
 
 
-async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple[Result | None, dict | None]:
+def _fail_text(e: TurnError | None) -> str | None:
+    """The daemon's error for a turn that gave no reply: its code leads (free_chat's shape), else the turn's own words."""
+    if e is None:
+        return None
+    return str(e.one.get("error") or "") or str(e.body)
+
+
+def _movable(error: str | None) -> bool:
+    """Whether a failed Free try's error is the account's or its thread's own, so another Free account may serve the task."""
+    text = (error or "").strip()
+    return text.startswith(MOVE_CODES) or any(t in text for t in MOVE_TEXT)
+
+
+def _provider_wide(error: str | None) -> bool:
+    """Whether a failed Free try sent nothing and so names its provider, not its account (NOT_SENT)."""
+    return (error or "").strip().startswith(NOT_SENT)
+
+
+def _row(status: dict, label) -> dict | None:
+    """The free_status row of the account a Free reply named (its label, as free_status shows it)."""
+    return next((a for a in status.get("accounts") or [] if isinstance(a, dict) and label is not None and a.get("account") == label), None)
+
+
+def _last(failed: list[dict], note: dict | None) -> dict | None:
+    """The note a task ends on when no further Free try can serve it: its last failed try, with the earlier failed tries
+    under `earlier` (jobs books each one as a Free miss row). `note` when nothing failed on an account."""
+    if not failed:
+        return note
+    last = dict(failed[-1])
+    if len(failed) > 1:
+        last["earlier"] = failed[:-1]
+    return last
+
+
+async def _status_read() -> dict | None:
+    """free_status for a task already under way (a move, or a wait for room); None when the daemon cannot say."""
+    try:
+        status = await _call("free_status", {}, STATUS_TIMEOUT_S)
+    except _ERRORS:
+        return None
+    return status if isinstance(status, dict) else None
+
+
+async def _release(chat_id) -> None:
+    """Ends a thread's lease on its Claude account (free_release) when its task is done. A failed release is ignored: the
+    lease lapses four minutes after the thread's last turn."""
+    if not chat_id:
+        return
+    try:
+        await _call("free_release", {"chat_id": str(chat_id)}, STATUS_TIMEOUT_S)
+    except _ERRORS:
+        pass  # floor-ok: best effort; an unreleased lease lapses four minutes after the thread's last turn
+
+
+async def _serve(job_id: str, task: Task, ask: tuple[str, str | None], accounts: list | None, timeout_s: float,
+                 exclude: list[int], moved: int = 0) -> tuple[Result | None, dict | None, str | None]:
+    """A tool-free task in one message on a Free account. (result, None, None) when it was answered; else (None, the miss,
+    the daemon's error when the account or its thread is at fault, which may move the task: _movable). A try after a move
+    (`moved`) names its thread with the suffix ' m<k>', as a tool task's moved thread does (free_client)."""
     started = now_iso("milliseconds")
-    item = {"prompt": shape(task), "name": f"hswarm {job_id} {task.id}"}
-    # Narrow work asks for the lightest Claude model (Haiku 5.5) (owner, 2026-10-07: low-impact Haiku 5.5 through
-    # free instances where possible); research and decision ask for Sonnet by name, since "the account's usual
-    # one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every account (2026-10-10). A
-    # ChatGPT account ignores both.
-    item["model"] = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
-    redone = 0
-    while True:
-        try:
-            one = await turn(_call, item, min(task.timeout_s, WAIT_CAP_S))
-            break
-        except TurnError as e:
-            if redo(e, None, redone):  # ChatGPT failed to answer the new thread: another one (free_client.REDO)
-                redone += 1
-                item = {**item, "name": f"hswarm {job_id} {task.id} g{redone + 1}"}
-                continue
-            fallback, status, kind = _TURN_MISS[e.stage]
-            _say(job_id, f"{fallback} ({e.body}); the task runs on its API route")
-            error = str(e.one.get("error") or "")[:200] if e.stage == "failed" else None
-            return None, _miss(task, fallback, status, kind, e.one or None, accounts, error)
+    model, provider = ask
+    item = {"prompt": shape(task), "name": f"hswarm {job_id} {task.id}" + (f" m{moved}" if moved else "")}
+    # The ask names the model (ROUTE_VIA_FREE_ASKS): narrow work asks for the lightest Claude model (Haiku 5.5) (owner,
+    # 2026-10-07: low-impact Haiku 5.5 through free instances where possible); research and decision ask for Sonnet by
+    # name, since "the account's usual one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every
+    # account (2026-10-10). A ChatGPT ask names no model: its account answers on its own.
+    if model:
+        item["model"] = model
+    if provider:
+        item["provider"] = provider
+    if exclude:
+        item["exclude_accounts"] = list(exclude)
+    redone, last = 0, {}
+    try:
+        while True:
+            try:
+                one = last = await turn(_call, item, timeout_s)
+                break
+            except TurnError as e:
+                last = e.one
+                if redo(e, None, redone):  # ChatGPT failed to answer the new thread: another one (free_client.REDO)
+                    redone += 1
+                    item = {**item, "name": f"hswarm {job_id} {task.id} g{redone + 1}"}
+                    continue
+                fallback, status, kind = _TURN_MISS[e.stage]
+                _say(job_id, f"{fallback} ({e.body}); the task runs on its API route")
+                return None, _miss(task, fallback, status, kind, e.one or None, accounts, e.body[:200]), _fail_text(e)
+    finally:
+        await _release(last.get("chat_id"))
     why = "tool-free task on a signed-in Free account, no API cost"
     res = _result(task, one, why, started, job_id)
-    return (res, None) if res else (None, _miss(task, "the free reply was unusable", "error", "model", one, accounts))
+    if res:
+        return res, None, None
+    return None, _miss(task, "the free reply was unusable", "error", "model", one, accounts), None
 
 
-async def _serve_tools(job_id: str, task: Task, accounts: list | None = None,
-                       ask: tuple[str, str | None] | None = None) -> tuple[Result | None, dict | None]:
+async def _serve_tools(job_id: str, task: Task, accounts: list | None, ask: tuple[str, str | None], exclude: list[int],
+                       timeout_s: float, resume: list[dict] | None, moved: int):
     """A tool task on one Free thread: the API loop itself (agent.run_api_task) with a FreeChatClient for its wire, so the
-    sandbox, receipts, schema check, loop guard and wall are the API route's own. Anything short of an ok result goes to
-    its API route, which starts over; its tools only read, so the Free try left nothing behind."""
+    sandbox, receipts, schema check, loop guard and wall are the API route's own. Returns (result, None, None, messages)
+    when it was answered; else (None, the miss, the daemon's error when the account or its thread is at fault, the
+    messages so far: the next account resumes them). Its tools only read, so a failed thread leaves nothing behind."""
     from .agent import run_api_task
 
-    model, provider = ask or ("haiku" if task.profile in HAIKU_PROFILES else "sonnet", None)
-    client = FreeChatClient(job_id, task, model, call=_call, provider=provider)
-    leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, TOOL_CAP_S))
-    res, _ = await run_api_task(client, leg, user_tag=job_id)
+    model, provider = ask
+    client = FreeChatClient(job_id, task, model, call=_call, provider=provider, exclude=exclude, moved=moved)
+    leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, timeout_s))
+    try:
+        res, msgs = await run_api_task(client, leg, user_tag=job_id, resume_messages=resume)
+    finally:
+        await client.aclose()
     one = {"account": client.account, "model": client.model, "chat_id": client.chat_id}
     if res.status != "ok":
         error = (res.error or res.status)[:200]
         _say(job_id, f"a tool task on a Free account ended {res.status} ({error}); it runs on its API route")
         kind = "timeout" if res.status == "timeout" else "unavailable" if error.startswith("free ") else "model"
-        return None, _miss(task, f"free tool run {res.status}", "timeout" if kind == "timeout" else "error", kind, one, accounts, error)
+        note = _miss(task, f"free tool run {res.status}", "timeout" if kind == "timeout" else "error", kind, one, accounts, error)
+        return None, note, _fail_text(client.failure), msgs
     res.model = miss_model(task, one, accounts)  # the model that answered, as a Free miss would name it
     res.backend, res.cost_usd = task.backend, 0.0
     res.selection = {**(res.selection or {}), "route": {"via": "free", "account": client.account, "chat_id": client.chat_id,
                                                          "why": "tool task on a Free account through the text tool protocol, no API cost",
                                                          **({"recovered": client.recovered} if client.recovered else {})}}
-    return res, None
+    return res, None, None, msgs
 
 
-async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
-    """(a finished Result, None) when a free account served the task; (None, note) when the API route runs and the
-    note says why (a try that failed, or no account free to take it); (None, None) when nobody was asked or nothing is
-    worth noting."""
+async def consult(job_id: str, task: Task, wait: bool = False) -> tuple[Result | None, dict | None]:
+    """(a finished Result, notes) when a free account served the task, the notes being the earlier Free tries that failed
+    (`earlier`: jobs books each one); (None, note) when the API route runs and the note says why (the last try that
+    failed, or no account free to take it); (None, None) when nobody was asked or nothing is worth noting. A job task with
+    `wait` whose Free accounts have no room waits up to config.ROUTE_VIA_FREE_WAIT_S for one (ROOM_POLL_S apart)."""
     global _ACTIVE
     if not eligible(task):
         return None, None
@@ -312,26 +436,89 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     except _ERRORS as e:
         _say(job_id, f"free accounts unavailable ({type(e).__name__}); tasks keep their API route")
         return None, None
+    if not isinstance(status, dict):
+        return None, None
     # _idle already leaves out the accounts this process's running tasks hold (comparing _ACTIVE with it counted each
     # of them twice and stopped a process at 3 of 6 accounts). What it cannot show yet is a task sent moments ago:
     # tasks that read one snapshot at once would all take its one idle account, so those are subtracted here. Unseen is
     # measured from when the snapshot was asked for: measured from its answer, a status read slower than UNSEEN_S (the
     # daemon is allowed STATUS_TIMEOUT_S) aged out a task sent while it waited, and both took the one idle account.
-    unseen = sum(1 for t in _SENT if t > asked - UNSEEN_S)
-    capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
-    if not isinstance(status, dict):
-        return None, None
-    ask = None if capped else _pick(task, status, unseen)
-    if ask is None:
-        return None, _short(status, capped)
-    now = time.monotonic()
-    _SENT.append(now)
-    _ACTIVE += 1  # both taken before any await below
-    try:
-        if task.tools == "none":
-            return await _serve(job_id, task, status.get("accounts"))
-        return await _serve_tools(job_id, task, status.get("accounts"), ask)
-    finally:
-        _ACTIVE -= 1
-        if now in _SENT:  # a finished task's account is free again, however recently it was sent
-            _SENT.remove(now)
+    read_at = asked
+    cap_s = TOOL_CAP_S if task.tools != "none" else min(task.timeout_s, WAIT_CAP_S)
+    deadline = None  # set when the first try starts: a job task's wait for room does not eat its tries' time
+    wait_until = time.monotonic() + config.ROUTE_VIA_FREE_WAIT_S if wait else 0.0
+    failed: list[dict] = []  # the notes of the tries that failed on an account, in order
+    exclude: list[int] = []  # the instance numbers of the accounts those tries ran on (a new thread must not go there)
+    skip: set[str] = set()  # providers a try that sent nothing named (NOT_SENT): not asked again for this task
+    carried = None  # a tool task's messages so far, which the next account resumes
+    while True:
+        capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
+        unseen = sum(1 for t in _SENT if t > read_at - UNSEEN_S)
+        ask = None if capped else _pick(task, status, unseen, skip, exclude)
+        if ask is None:
+            if not capped and not failed and time.monotonic() < wait_until:
+                await asyncio.sleep(min(ROOM_POLL_S, max(0.0, wait_until - time.monotonic())))
+                read_at = time.monotonic()
+                status = await _status_read()
+                if status is None:
+                    return None, None
+                continue
+            return None, _last(failed, None if failed else _short(status, capped))
+        started_at = time.monotonic()
+        if deadline is None:
+            deadline = started_at + cap_s
+        elif started_at >= deadline:  # the status read after a failed try used up the time: no try starts past the cap
+            return None, _last(failed, None)
+        _SENT.append(started_at)
+        _ACTIVE += 1  # both taken before any await below
+        try:
+            left = deadline - started_at
+            if task.tools == "none":
+                res, miss, fail = await _serve(job_id, task, ask, status.get("accounts"), left, exclude, len(failed))
+                msgs = None
+            else:
+                res, miss, fail, msgs = await _serve_tools(job_id, task, status.get("accounts"), ask, exclude, left,
+                                                           carried, len(failed))
+        finally:
+            _ACTIVE -= 1
+            if started_at in _SENT:  # a finished task's account is free again, however recently it was sent
+                _SENT.remove(started_at)
+        if res is not None:
+            return res, ({"earlier": failed} if failed else None)
+        failed.append(miss)
+        if not _movable(fail) or len(failed) > MOVES or time.monotonic() >= deadline:
+            return None, _last(failed, None)
+        row = _row(status, miss.get("account")) or {}
+        if isinstance(row.get("num"), int):
+            exclude.append(row["num"])
+        provider = ask[1] or row.get("provider")
+        if provider and _provider_wide(fail):
+            skip.add(provider)
+        carried = msgs
+        log.info("job %s: a Free try failed (%s); the task moves to another Free account", job_id, fail[:80])
+        status = await _status_read()
+        if status is None:
+            return None, _last(failed, None)
+        read_at = time.monotonic()
+
+
+def provider_problems(health) -> list[str]:
+    """One line per Free provider the health gate shuts (_sick), for the doctor (health.doctor)."""
+    if not isinstance(health, dict):
+        return []
+    lines = []
+    for name, h in sorted(health.items()):
+        if not _sick(h):
+            continue
+        top = h.get("topReason") or "no reason given"
+        if h.get("down"):
+            lines.append(f"Free {name} sends are down (top reason: {top})")
+        else:
+            lines.append(f"Free {name}: {float(h['okShare']):.0%} of {h['sent']} sends ok in the last hour (top reason: {top})")
+    return lines
+
+
+async def provider_warnings() -> list[str]:
+    """provider_problems over the daemon's free_status; none when the daemon cannot be asked."""
+    status = await _status_read()
+    return provider_problems((status or {}).get("providerHealth"))

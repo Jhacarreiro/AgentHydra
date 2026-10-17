@@ -13,6 +13,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
@@ -81,10 +82,18 @@ FOCUS = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[conte
  .find(e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');if(!e)return false;e.focus();return true;})()'''
 SUBMIT = r'''(()=>{const b=[...document.querySelectorAll('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[type="submit"]')]
  .find(b=>b.getClientRects().length&&!b.disabled&&b.getAttribute('aria-disabled')!=='true');if(!b)return false;b.click();return true;})()'''
+TEMPORARY = r'''(()=>{const b=document.querySelector('button[aria-label="Temporary chat"]');if(!b)return 'missing';
+ const pressed=b.getAttribute('aria-pressed');
+ if(pressed==='true'||b.getAttribute('data-state')==='on')return 'on';
+ return 'off';})()'''
+TEMPORARY_CLICK = r'''(()=>{const b=document.querySelector('button[aria-label="Temporary chat"]');if(!b)return false;b.click();return true;})()'''
+COMPOSER_LENGTH = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')]
+ .find(e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');if(!e)return 0;
+ return (e.value??e.textContent??'').replace(/\s/g,'').length;})()'''
 
 
-def validate(payload, prompt, existing, *, temporary=True):
-    """Refuse other prompts, accounts' threads, actions or privacy modes before dispatch."""
+def _check_shape(payload, existing):
+    """The website must have prepared one user message, on the chat and branch asked for."""
     if not isinstance(payload, dict) or payload.get('action') != 'next':
         raise ClaudeError('The website prepared an unexpected action. No message was sent.', code='browser_preparation_invalid')
     messages = payload.get('messages')
@@ -92,18 +101,25 @@ def validate(payload, prompt, existing, *, temporary=True):
         raise ClaudeError('The prepared message did not match. No message was sent.', code='browser_preparation_invalid')
     message = messages[0]
     author = message.get('author') if isinstance(message, dict) else None
-    content = message.get('content') if isinstance(message, dict) else None
-    if not isinstance(author, dict) or not isinstance(content, dict) or author.get('role') != 'user' or content.get('parts') != [prompt]:
-        raise ClaudeError('The prepared text did not match. No message was sent.', code='browser_preparation_invalid')
-    if temporary and payload.get('history_and_training_disabled') is not True:
-        raise ClaudeError('The website did not confirm Temporary Chat. No message was sent.', code='privacy_not_verified')
-    if temporary and not existing and payload.get('temporary_chat_requests_personalization') is True:
-        raise ClaudeError('The prepared chat enabled personalization. No message was sent.', code='privacy_not_verified')
+    if not isinstance(author, dict) or author.get('role') != 'user':
+        raise ClaudeError('The prepared message was not from the user. No message was sent.', code='browser_preparation_invalid')
     if existing:
         if payload.get('conversation_id') != existing.get('conversation_id') or payload.get('parent_message_id') != existing.get('current_node'):
             raise ClaudeError('The website selected a different chat or branch. No message was sent.', code='browser_preparation_invalid')
     elif payload.get('conversation_id'):
         raise ClaudeError('The website selected an existing chat. No message was sent.', code='browser_preparation_invalid')
+
+
+def validate(payload, prompt, existing, *, temporary=True):
+    """Refuse other prompts, accounts' threads, actions or privacy modes before dispatch."""
+    _check_shape(payload, existing)
+    content = payload['messages'][0].get('content')
+    if not isinstance(content, dict) or content.get('parts') != [prompt]:
+        raise ClaudeError('The prepared text did not match. No message was sent.', code='browser_preparation_invalid')
+    if temporary and payload.get('history_and_training_disabled') is not True:
+        raise ClaudeError('The website did not confirm Temporary Chat. No message was sent.', code='privacy_not_verified')
+    if temporary and not existing and payload.get('temporary_chat_requests_personalization') is True:
+        raise ClaudeError('The prepared chat enabled personalization. No message was sent.', code='privacy_not_verified')
 
 
 def request_headers(headers):
@@ -205,62 +221,150 @@ def _readiness_diagnostic(proof):
 
 
 async def _select_temporary_chat(tab, temporary, existing):
-    if temporary and not existing:
-        selected = await tab.evaluate(r'''(()=>{const b=document.querySelector('button[aria-label="Temporary chat"]');if(!b)return false;b.click();return true;})()''')
-        if not selected:
-            raise ClaudeError('Temporary Chat could not be selected. No message was sent.', code='privacy_not_verified')
-        await asyncio.sleep(.4)
+    """Wait until the button shows Temporary Chat on, clicking once only when it is not already on.
+
+    Returns True when the page confirmed it; False when there is no page state to read (a continued chat).
+    """
+    if not temporary or existing:
+        return False
+    deadline = time.monotonic() + 10
+    clicked = False
+    while True:
+        state = await tab.evaluate(TEMPORARY)
+        if state == 'on':
+            return True
+        if not clicked:
+            clicked = bool(await tab.evaluate(TEMPORARY_CLICK))
+        if time.monotonic() >= deadline:
+            raise ClaudeError('Temporary Chat could not be confirmed. No message was sent.', code='privacy_not_verified')
+        await asyncio.sleep(.2)
 
 
-def _prepared_request(event, raw, prompt, model, existing, temporary):
+def _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private=False):
+    """Keep the website's request and its own headers; the prompt text and privacy flag are ours.
+
+    steps records each stage in turn, so a refusal names the one that failed. The flag is forced
+    only after pre-send evidence of a private chat: for a new chat, the page showed Temporary Chat on
+    (page_private) or the website's own body already carried the flag; for a continuation, the
+    website's record of that chat says it is Temporary.
+    """
+    steps.append('parse_post_data')
     payload = json.loads(raw or '{}')
+    steps.append('check_website_request')
+    _check_shape(payload, existing)
+    if temporary and existing and existing.get('is_temporary_chat') is not True:
+        raise ClaudeError('The chat to continue is not a Temporary Chat. No message was sent.', code='privacy_not_verified')
+    steps.append('substitute_text_and_privacy')
+    if temporary and not existing and not page_private and payload.get('history_and_training_disabled') is not True:
+        raise ClaudeError('The website did not confirm Temporary Chat. No message was sent.', code='privacy_not_verified')
     payload['model'] = model
+    payload['messages'][0]['content'] = {'content_type': 'text', 'parts': [prompt]}
+    if temporary:
+        payload['history_and_training_disabled'] = True
     if temporary and not existing:
         payload['temporary_chat_requests_personalization'] = False
+    steps.append('validate')
     validate(payload, prompt, existing, temporary=temporary)
+    steps.append('request_headers')
     headers = request_headers(dict(event.request.headers))
+    steps.append('network_id')
     if not event.network_id:
         raise ValueError('No network request identity')
     return payload, headers
 
 
 async def _request_post_data(tab, zd, event):
-    raw = event.request.post_data
-    if not raw and event.network_id:
-        try:
-            raw = await tab.send(zd.cdp.network.get_request_post_data(event.network_id))
-        except Exception:
-            raw = None
-    return raw
+    """Return the body and where it came from, so a refusal can say which source was empty."""
+    if event.request.post_data:
+        return event.request.post_data, 'post_data'
+    if not event.network_id:
+        return None, 'missing'
+    try:
+        return await tab.send(zd.cdp.network.get_request_post_data(event.network_id)), 'getRequestPostData'
+    except Exception:
+        return None, 'getRequestPostDataFailed'
 
 
-async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, prompt, model, existing, temporary):
+KNOWN_ACTIONS = ('next', 'variant', 'continue')
+
+
+def _normalised(text):
+    """The composer may change line endings, trailing spaces or Unicode form; compare past those."""
+    lines = unicodedata.normalize('NFC', text).replace('\r\n', '\n').split('\n')
+    return '\n'.join(line.rstrip() for line in lines).rstrip()
+
+
+def _flag(value):
+    return 'absent' if value is None else str(value).lower() if isinstance(value, bool) else 'other'
+
+
+def _prepared_diagnostic(raw, source, prompt):
+    """Bounded facts about the website's body. Never its text: only lengths, counts and flags."""
+    facts = [f'post_data={source}']
+    try:
+        payload = json.loads(raw or '{}')
+    except Exception:  # a diagnostic must never replace the refusal it explains (RecursionError included)
+        return ' '.join(facts + ['body=unreadable', f'body_chars={len(raw or "")}'])
+    if not isinstance(payload, dict):
+        return ' '.join(facts + ['body=not_an_object'])
+    messages = payload.get('messages')
+    message = messages[0] if isinstance(messages, list) and messages and isinstance(messages[0], dict) else {}
+    content = message.get('content') if isinstance(message.get('content'), dict) else {}
+    parts = content.get('parts') if isinstance(content.get('parts'), list) else []
+    part = parts[0] if len(parts) == 1 and isinstance(parts[0], str) else None
+    action = payload.get('action')
+    return ' '.join(facts + [
+        f"action={action if action in KNOWN_ACTIONS else 'other'}",
+        f"messages={len(messages) if isinstance(messages, list) else 'missing'}",
+        f"content_type={content.get('content_type') if content.get('content_type') == 'text' else 'other'}",
+        f'parts={len(parts)}',
+        f'text_equal={part == prompt}',
+        f'text_equal_normalised={part is not None and _normalised(part) == _normalised(prompt)}',
+        f'prompt_chars={len(prompt)}',
+        f"part_chars={len(part) if part is not None else 'none'}",
+        f"history_and_training_disabled={_flag(payload.get('history_and_training_disabled'))}",
+        f"conversation_id={'present' if payload.get('conversation_id') else 'absent'}",
+    ])
+
+
+def _preparation_refusal(inner, steps, raw, source, prompt):
+    """Keep the inner code and message; name the failing step when the cause is not a ClaudeError."""
+    diagnostic = _prepared_diagnostic(raw, source, prompt)
+    if isinstance(inner, ClaudeError):
+        return ClaudeError(f'{inner} Diagnostic: {diagnostic}', code=inner.code)
+    step = steps[-1] if steps else 'parse_post_data'
+    return ClaudeError(f'The prepared request could not be verified at {step} ({type(inner).__name__}). '
+        f'No message was sent. Diagnostic: {diagnostic}', code='browser_preparation_invalid')
+
+
+async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, prompt, model, existing, temporary,
+        page_private=False):
     request = event.request
     if urlparse(request.url).path != '/backend-api/f/conversation' or request.method != 'POST':
         await tab.send(zd.cdp.fetch.continue_request(event.request_id))
         return
-    raw = await _request_post_data(tab, zd, event)
+    raw, source = await _request_post_data(tab, zd, event)
     if captured.done() or dispatch['sent']:
         await tab.send(zd.cdp.fetch.fail_request(event.request_id, zd.cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
         return
+    steps = []
     try:
-        payload, headers = _prepared_request(event, raw, prompt, model, existing, temporary)
+        payload, headers = _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private)
         dispatch.update(sent=True, network_id=event.network_id)
         encoded = base64.b64encode(json.dumps(payload).encode()).decode()
         # This IS the requested message, never a probe followed by
         # another send. Block any subsequent website retry.
         await tab.send(zd.cdp.fetch.continue_request(event.request_id, post_data=encoded))
         captured.set_result((payload, headers))
-    except Exception:
+    except Exception as inner:
         if not dispatch['sent']:
             await tab.send(zd.cdp.fetch.fail_request(event.request_id, zd.cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
         captured.set_exception(ClaudeError(
-            'The browser message outcome is not confirmed. No second message was sent.' if dispatch['sent'] else
-            'The prepared request could not be verified. No message was sent.',
-            code='stream_interrupted' if dispatch['sent'] else 'browser_preparation_invalid'))
+            'The browser message outcome is not confirmed. No second message was sent.', code='stream_interrupted')
+            if dispatch['sent'] else _preparation_refusal(inner, steps, raw, source, prompt))
 
 
-async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary):
+async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary, page_private=False):
     async def response(event):
         if event.request_id == dispatch['network_id']:
             dispatch['status'] = int(event.response.status)
@@ -270,20 +374,28 @@ async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, exist
 
     async def pause(event):
         await _answer_conversation_request(tab, zd, event, captured=captured, dispatch=dispatch,
-            prompt=prompt, model=model, existing=existing, temporary=temporary)
+            prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private)
 
     tab.add_handler(zd.cdp.fetch.RequestPaused, pause)
     await tab.send(zd.cdp.fetch.enable(patterns=[zd.cdp.fetch.RequestPattern(
         url_pattern=BASE + '/backend-api/f/conversation*', request_stage=zd.cdp.fetch.RequestStage.REQUEST)]))
 
 
+def _submit_deadline(prompt):
+    """Long prompts take longer to type into the composer: 8 s, plus 1 s per 2,000 characters, at most 40 s."""
+    return min(40, 8 + len(prompt) / 2000)
+
+
 async def _submit_prompt(tab, zd, prompt):
     if not await tab.evaluate(FOCUS):
         raise ClaudeError('The composer is unavailable. No message was sent.', code='browser_preparation_timeout')
     await tab.send(zd.cdp.input_.insert_text(prompt))
-    deadline = time.monotonic() + 8
+    # The page counts UTF-16 units, Python code points.
+    typed = len(re.sub(r'\s', '', prompt).encode('utf-16-le')) // 2
+    deadline = time.monotonic() + _submit_deadline(prompt)
     while time.monotonic() < deadline:
-        if await tab.evaluate(SUBMIT):
+        # Click only once the composer holds the typed text, never a half-typed prompt.
+        if await tab.evaluate(COMPOSER_LENGTH) >= typed and await tab.evaluate(SUBMIT):
             return
         await asyncio.sleep(.2)
     raise ClaudeError('The submit button did not become ready. No message was sent.', code='browser_preparation_timeout')
@@ -376,14 +488,14 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
             browser = await browser_factory() if browser_factory else await zd.start(user_data_dir=profile, headless=True,
                 browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check'])
             await signin.load_cookies(browser, http.saved_state()['cookies'])
-            path = '/c/' + existing['conversation_id'] if existing else '/'
+            path = '/c/' + existing['conversation_id'] if existing else ('/?temporary-chat=true' if temporary else '/')
             tab = await browser.get(BASE + path)
             await _wait_for_composer(http, tab)
             identity_verified = True
-            await _select_temporary_chat(tab, temporary, existing)
+            page_private = await _select_temporary_chat(tab, temporary, existing)
             captured = asyncio.get_running_loop().create_future()
             await _arm_interception(tab, zd, captured=captured, dispatch=dispatch,
-                prompt=prompt, model=model, existing=existing, temporary=temporary)
+                prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private is True)
             await _submit_prompt(tab, zd, prompt)
             payload, headers = await _await_capture(http, captured)
             await _adopt_captured_session(http, browser, headers)

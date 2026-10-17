@@ -29,7 +29,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { openInDesk } from '@/lib/desk-embed'
+import HSwarmJobs from '@/components/hswarm/HSwarmJobs.vue'
+import { hswarmNodeAsk } from '@/lib/app-view'
+import { deskSwarmAsk, deskWorkerAsk, openInDesk } from '@/lib/desk-embed'
+import { useHswarmApi } from '@/lib/hswarm-api'
 import { getRoutineCampaigns, getRoutineDetails } from '@/lib/routines-api'
 import {
   durationText,
@@ -54,6 +57,16 @@ import type {
 import RoutineCampaigns from './RoutineCampaigns.vue'
 import RoutineEditForm from './RoutineEditForm.vue'
 import RoutineHistory from './RoutineHistory.vue'
+
+// The work this routine started (its CliMayte workers and its HSwarm jobs) is HSwarm's to show: a worker or a
+// wave opens on the HSwarm tab's CliMayte node (App.vue switches the tab for either ask).
+const hswarmState = useHswarmApi().state
+function openWork(id: string, wave: boolean) {
+  if (wave) {
+    hswarmNodeAsk.value = 'climayte/waves'
+    deskSwarmAsk.value = {}
+  } else deskWorkerAsk.value = { id }
+}
 
 const props = defineProps<{
   routine: Routine
@@ -384,6 +397,14 @@ function cap(s: string): string {
       :now="now"
       @more="loadMore"
     />
+
+    <!-- Work it started: the CliMayte workers in its group and the HSwarm jobs labelled with its id. -->
+    <section class="flex flex-col gap-2">
+      <h2 class="text-ui font-medium">{{ t('tools.managers.routine.work') }}</h2>
+      <p class="text-ui text-muted-foreground">{{ t('tools.managers.routine.workNote', { id: routine.id }) }}</p>
+      <HSwarmJobs v-if="hswarmState" :state="hswarmState" :routine="routine.id" @open-task="openWork" />
+      <p v-else class="text-ui text-muted-foreground">{{ t('tools.managers.routine.noHswarm') }}</p>
+    </section>
 
     <!-- Details: folded by default; what it runs, where, and who asked. -->
     <section class="flex flex-col gap-2">

@@ -230,16 +230,25 @@ A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `rou
 `decision`, purpose not `evaluation`, at most 100,000 characters) may run on the owner's signed-in Free claude.ai and
 ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
 leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a free account's limit), the others for the account's usual model. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
-failed, slow or unparseable reply keeps the API route. With every account busy a task does not wait for one: a Free
-task took 16 s at the median and 42 s at the 90th percentile against about 3 s on the API (2026-10-08), so waiting
-would make a burst's overflow 5-10x slower to save a fraction of a cent a task, and under steady load the accounts
-are full anyway. A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
+failed, slow or unparseable reply keeps the API route. An ask never waits for an account: a Free task took 16 s at the
+median and 42 s at the 90th percentile against about 3 s on the API (2026-10-08). A job task whose next route would be
+the paid API waits up to `route_via_free_wait_s` (default 90 s) for a Free account with room, polling `free_status`
+every 5 s; under steady load the accounts are full anyway.
+A Free try that fails on its account (a rate limit, a reply not confirmed, a lost login, a sent message the provider
+refused) moves the task to another Free account, up to two more times and inside the task's own time cap: a tool task
+carries its progress to the new thread, which is named with ` m<k>`, and each failed try is one `free_miss` row on the
+ledger. A provider whose sends fail (`free_status` `providerHealth`: shut, or under 20% ok over 10 sends in the last
+hour) is passed over, with one probe task every 10 minutes; `hswarm doctor` names it while it is shut. Tool-free work
+asks ChatGPT first for routine and general, and Sonnet on Claude first for decision and research
+(`route_via_free_asks`). A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
 A live burst of 22 tasks ran 11 on Free accounts at once (job `20261009-000737-6a7e`); the fixed cap of 6 at a time
 before it had turned away about 2,800 eligible tasks in a day. `free_status` cannot show a task sent moments ago, so
 a task subtracts from the idle count every still-running task this process sent from 2 s before it asked for its
 snapshot onward, however long that read took: counted from the answer instead, a slow read (up to 5 s) let two tasks
 take one idle account (2026-10-09). `selection.route` shows the route a task took (`via: free`), the
-ledger line says provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
+ledger line says provider `free`. Order: a read or web tool task asks the free accounts first, then CliMayte, then the paid API (CliMayte cannot take web
+tools); an edit or all tool task, and a tool-free one, asks CliMayte first, then the free accounts, then the paid API
+(docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
 tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in

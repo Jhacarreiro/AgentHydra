@@ -125,15 +125,15 @@ export function useDeskSidebar(
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: InstanceTableKind } | null>(null)
-/** Desk asked for an HSwarm job, a node of its tree, or just the HSwarm tab (App.vue switches to it; HSwarmView
- *  opens the job on its Jobs node, or selects the node, and clears the ask). */
-export const deskSwarmAsk = ref<{ job?: string; node?: string } | null>(null)
+/** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the job on
+ *  its Jobs node and clears the ask). */
+export const deskSwarmAsk = ref<{ job?: string } | null>(null)
 /** Desk asked for a CliMayte task (App.vue shows the CliMayte node of the HSwarm tab; CliMayteView opens
  *  it once its list is in and clears the ask); `pc` names another PC's. */
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
-/** Desk asked for the Routines tab, or for one routine on it (App.vue switches tab; RoutinesView selects the
- *  routine and clears the ask). */
-export const routinesAsk = ref<{ id?: string } | null>(null)
+/** Desk asked for the Tools tab, or for one of its pages (App.vue switches tab; ToolsView selects the key
+ *  and clears the ask). */
+export const toolsAsk = ref<{ key?: string } | null>(null)
 
 /** The row of instance #num of this kind once the tab shows it, or null after `ms`; never one in the tab
  *  fading out (App.vue's view Transition keeps it mounted while the next comes in). */
@@ -232,9 +232,9 @@ if (EMBEDDED) {
     if (!m || typeof m !== 'object' || typeof m.type !== 'string') return
     if (m.type === 'desk:sidebar') sidebarHandlers.get(m.view)?.(m)
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
-    else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job, node: m.node }
+    else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
-    else if (m.type === 'desk:open-routine') routinesAsk.value = { id: m.id }
+    else if (m.type === 'desk:open-tools') toolsAsk.value = { key: m.key }
     else if (m.type === 'desk:settings-changed') void useAppSettings().load()
     else if (m.type === 'desk:visible') {
       setDeskHidden(!m.visible)
