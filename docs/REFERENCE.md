@@ -126,8 +126,10 @@ also paced under the burst at which ChatGPT locks it out (a learned cap of new c
 `free_status` gives each account's `plan`, its last hour (`lastHour`, marked FAILING at 90% failed of 5 or
 more) and its pace (`paced` until a time, or `pace`: new chats of the cap in the last 30 minutes). Free
 threads are private, so unlike probe chats they need no deleting. The call answers within 45 s
-with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
-hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
+with a `batch` for `free_results` while the sending goes on; batches are kept 6 hours (saved, so a daemon
+restart carries them on), the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running; a
+task still queued while it restarts (503 while it stops, then no answer) waits for it within the batch's
+30 minutes, and a send it never answered goes again under its own request id.
 
 History lookups use bounded, opt-in Desk queries: `/api/free/threads?view=recent&limit=30&account=...`
 returns `{total,threads}`; `view=lookup&chat_id=...` accepts up to 32 identifiers and returns each ID's
