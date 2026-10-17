@@ -14,7 +14,7 @@ import { actionError } from '@/lib/action-error'
 import { applyHeadlessAudio } from '@/lib/chat-audio'
 import { SIDEBAR_WIDTH_KEY } from '@/components/sidebar/width'
 
-// '#/parity/<scene>?open=<plus|mode|model|effort>&hover=<css selector | text:Label>&draft=<text>'
+// '#/parity/<scene>?open=<plus|model>&hover=<css selector | text:Label>&draft=<text>'
 // renders one scene of docs/reference/real/scenes.json with the real components on fixtures, then sets
 // window.__parity = { ready, scene, hover: {x,y} | null, error? } for docs/reference/tools/parity.ts
 // (which moves the real mouse to `hover`, since a page cannot fake :hover).
@@ -37,9 +37,7 @@ const draft = query.get('draft') ?? undefined
 
 const TRIGGERS: Record<MenuName, () => HTMLElement | null | undefined> = {
   plus: () => document.querySelector<HTMLElement>('button[aria-label="Add"]'),
-  mode: () => document.querySelector<HTMLElement>('button[aria-label^="Mode:"]'),
-  model: () => document.querySelector<HTMLElement>('button[aria-label^="Model:"]'),
-  effort: () => document.querySelector<HTMLElement>('button[aria-label^="Effort:"]')
+  model: () => document.querySelector<HTMLElement>('button[aria-label^="Model:"]')
 }
 
 function press(el: HTMLElement) {

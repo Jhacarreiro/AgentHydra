@@ -32,7 +32,7 @@ import {
   windowItems
 } from './fixtures'
 
-export type MenuName = 'plus' | 'mode' | 'model' | 'effort'
+export type MenuName = 'plus' | 'model'
 
 export interface ParityScene {
   /** The whole DeskFrame (the composer-alone 'dock' layout went with the composer's agents chip, 2026-10-05). */

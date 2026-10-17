@@ -744,10 +744,12 @@ bottom: the repository strip (`nav` "Repository and pull request controls": 768x
 white 5%; project button, branch button, `+13,658 -4,852` counts button, "Create PR" split button with a "More
 PR options" chevron, "Dismiss" X), 6px gap, the box (background `#20201f`, radius 12px, padding 8px, 1px inset
 ring white 10%, shadow `0 4px 20px #00000009`, textbox 14px/20px, caret `#f0efec`, auto-grows to max-h 384px
-(`max-h-96`), send button 24x24 at its bottom right), then the toolbar row (20px high, 12px `#c3c2b7`, margin-top
-6px, padding 0 10px 0 7px): left `+` (aria "Add"), mic ("Press and hold to record"), "Dictation settings" chevron,
-the permission-mode button; right model ("Model: ..."), effort ("Effort: ..."), "Fast mode", the usage ring
-(aria "Usage: Context ..."). The real placeholder on a new session is "Describe a task or ask a question".
+(`max-h-96`); its bottom row holds `+` (aria "Add", the plus menu) at the left, then the textbox, the send button 24x24,
+and the mic at the right end (aria "Press and hold to record", or "Recording, release to stop" while it records). A
+"Queue" label sits before the send button while a send would queue (`(busy || enterQueues) && hasContent`), then the toolbar row (20px high,
+12px `#c3c2b7`, margin-top 6px, padding 0 10px 0 7px): a spacer, then, right-aligned, the Sus menu ("Sus level: ...
+Change it"), the model chip ("Model: ..."), whose menu holds an Effort submenu and a More models submenu, then the
+account circle (aria "Account: ...") with its context ring. The real placeholder on a new session is "Describe a task or ask a question".
 Menus: 10px radius, `#20201f`, ring white 10%, shadow `0 8px 24px #00000052, 0 2px 6px #0003`, padding 4px, item
 24px (40.5px with a description line), radius 6px, padding 2.5px 8px. Exact labels and orders: DESIGN.md.
 
