@@ -45,6 +45,7 @@ export function poolVictims(
   plan: 'free' | 'go',
   limit: number,
   busy: (id: string) => boolean,
+  replaceFreeWithGo = true,
 ): FreeInstance[] | null {
   const others = rows.filter((i) => i.id !== candidate.id && i.provider === candidate.provider)
   const same = others.some((i) => {
@@ -76,9 +77,9 @@ export function poolVictims(
   const dead = free.find((group) =>
     group.every((i) => !i.loggedIn && i.checkedAt != null && !!i.email),
   )
-  if (!needsSlot || count < limit) return dead ?? []
+  // A second copy of an existing live identity never needs to displace a bystander.
+  if (!needsSlot) return []
   if (limit === 0) return null
-  if (plan !== 'go') return null
   const live = free
     .filter((group) => group.some((i) => i.loggedIn))
     .sort(
@@ -86,6 +87,9 @@ export function poolVictims(
         Math.max(...a.map((i) => i.lastActiveAt ?? 0)) -
           Math.max(...b.map((i) => i.lastActiveAt ?? 0)) || a[0]!.num - b[0]!.num,
     )
-  // Do not bulk shrink a pre-existing oversized Go pool to normalize an old setting.
-  return count === limit ? (live[0] ?? null) : null
+  // Upgrade one identity at a time, including below the cap, without growing or
+  // bulk shrinking an already oversized pool. Renewals are handled separately.
+  if (candidate.provider === 'chatgpt' && plan === 'go' && replaceFreeWithGo && live[0])
+    return live[0]
+  return count < limit ? (dead ?? []) : null
 }

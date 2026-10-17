@@ -265,11 +265,12 @@ export class FreeInstances {
   /** Staging precedes the caller's cookie export. No pending account can generate or sync a login. */
   admitPool(value: unknown): Promise<{ requestId: string; instance: FreeInstance; existing: boolean; pending: true }> {
     const r = record(value)
-    if (Object.keys(r).some(k => !['requestId', 'provider', 'email', 'plan', 'limit', 'instanceId'].includes(k)) ||
+    if (Object.keys(r).some(k => !['requestId', 'provider', 'email', 'plan', 'limit', 'instanceId', 'replaceFreeWithGo'].includes(k)) ||
       !isUuid(r.requestId) || !FREE_PROVIDERS.includes(r.provider as FreeInstance['provider']) ||
       typeof r.email !== 'string' || r.email.length > 254 || !/^[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+$/.test(r.email) ||
       !['free', 'go'].includes(r.plan as string) || (r.plan === 'go' && r.provider !== 'chatgpt') ||
       !Number.isInteger(r.limit) || (r.limit as number) < 0 || (r.limit as number) > 500 ||
+      (r.replaceFreeWithGo !== undefined && typeof r.replaceFreeWithGo !== 'boolean') ||
       (r.instanceId !== undefined && !isUuid(r.instanceId))) throw new FreeError('A request UUID, provider, email, Free/Go plan and limit from 0 to 500 are required.')
     const requestId = r.requestId as string
     const email = r.email.toLowerCase()
@@ -278,7 +279,8 @@ export class FreeInstances {
       const previous = this.store.data.instances.find(i => i.poolAdmission?.requestId === requestId)
       if (previous) {
         const a = previous.poolAdmission!
-        if (previous.provider !== r.provider || a.email !== email || a.plan !== r.plan || a.limit !== r.limit || a.targetId !== r.instanceId)
+        if (previous.provider !== r.provider || a.email !== email || a.plan !== r.plan || a.limit !== r.limit || a.targetId !== r.instanceId ||
+          (a.replaceFreeWithGo ?? true) !== (r.replaceFreeWithGo ?? true))
           throw new FreeError('That admission UUID already identifies another import.', 409, 'pool_changed')
         if (a.state !== 'pending') throw new FreeError('That admission has already ended. Read its commit receipt or use a new request UUID.', 409, 'pool_changed')
         await this.poolSaved()
@@ -308,7 +310,7 @@ export class FreeInstances {
       const existing = !!instance
       const before = instance ? structuredClone(Object.fromEntries(Object.entries(instance).filter(([k]) => k !== 'poolAdmission'))) as Omit<FreeInstance, 'poolAdmission'> : undefined
       const admission: FreePoolAdmission = { requestId, email, plan: r.plan as 'free' | 'go', limit: r.limit as number,
-        existing, state: 'pending', ...(r.instanceId ? { targetId: r.instanceId as string } : {}), ...(before ? { before } : {}) }
+        existing, replaceFreeWithGo: r.replaceFreeWithGo !== false, state: 'pending', ...(r.instanceId ? { targetId: r.instanceId as string } : {}), ...(before ? { before } : {}) }
       if (instance) { instance.poolState = 'pending'; instance.poolAdmission = admission }
       else instance = this.store.create(r.provider as FreeInstance['provider'], email, { poolState: 'pending', poolAdmission: admission })
       this.forgetting.add(instance.id)
@@ -450,7 +452,7 @@ export class FreeInstances {
       // expired or it was retired. The configured cap must never block it or evict a bystander.
       const renewal = a.existing
       const projected = { ...instance, email: a.email, loggedIn: true, plan: a.plan, usage }
-      const victims = renewal ? [] : poolVictims(this.store.data.instances, projected, a.plan, a.limit, id => this.busy(id))
+      const victims = renewal ? [] : poolVictims(this.store.data.instances, projected, a.plan, a.limit, id => this.busy(id), a.replaceFreeWithGo ?? true)
       if (!victims) throw new FreeError('The web pool is full. No idle lower-priority Free account can be replaced.', 409, 'pool_full')
       for (const victim of victims) this.forgetting.add(victim.id)
       const old = { email: instance.email, loggedIn: instance.loggedIn, checkedAt: instance.checkedAt,

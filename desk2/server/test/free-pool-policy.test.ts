@@ -68,7 +68,7 @@ test('Free cannot displace healthy Free, Go or unknown plans and zero never crea
   }
   expect(poolVictims([incoming], incoming, 'free', 0, idle)).toBeNull()
   expect(poolVictims([row(1, { plan: 'go' }), incoming], incoming, 'go', 1, idle)).toBeNull()
-  expect(poolVictims([row(1), row(2), incoming], incoming, 'go', 1, idle)).toBeNull()
+  expect(poolVictims([row(1), row(2), incoming], incoming, 'go', 1, idle)).toEqual([row(1)])
 })
 
 test('an unused slot can replace a known signed-out Free while transient health is irrelevant', () => {

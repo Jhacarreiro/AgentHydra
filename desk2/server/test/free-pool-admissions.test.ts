@@ -128,6 +128,7 @@ function fixture() {
     limit = 40,
     instanceId?: string,
     provider: FreeProvider = 'chatgpt',
+    replaceFreeWithGo?: boolean,
   ) => {
     const body = {
       requestId: randomUUID(),
@@ -135,6 +136,7 @@ function fixture() {
       email,
       plan,
       limit,
+      ...(replaceFreeWithGo === undefined ? {} : { replaceFreeWithGo }),
       ...(instanceId ? { instanceId } : {}),
     }
     const admission = await service.admitPool(body)
@@ -345,6 +347,68 @@ native('parallel verified admissions cannot exceed the limit or retire a Go acco
   expect(results.find((r) => r.status === 'rejected')).toMatchObject({
     reason: { code: 'pool_full' },
   })
+})
+
+native('the saved replacement preference is durable, idempotent and enforced when committing', async () => {
+  const f = fixture()
+  const live = f.account('working@example.test')
+  const disabled = await f.stage('disabled@example.test', 'go', 1, undefined, 'chatgpt', false)
+  expect(disabled.instance.poolAdmission?.replaceFreeWithGo).toBe(false)
+  expect(new FreeStorage(f.home).data.instances.find(i => i.id === disabled.instance.id)?.poolAdmission?.replaceFreeWithGo).toBe(false)
+  expect((await f.service.admitPool(disabled.body)).instance.id).toBe(disabled.instance.id)
+  for (const value of [undefined, true])
+    await expect(f.service.admitPool({ ...disabled.body, replaceFreeWithGo: value })).rejects.toMatchObject({ code: 'pool_changed' })
+  await expect(f.service.commitPool(disabled.requestId)).rejects.toMatchObject({ code: 'pool_full' })
+  expect(live.poolState).toBeUndefined()
+  await f.service.abortPool(disabled.requestId)
+
+  const enabled = await f.stage('enabled@example.test', 'go', 1)
+  expect(enabled.instance.poolAdmission?.replaceFreeWithGo).toBe(true)
+  expect((await f.service.admitPool({ ...enabled.body, replaceFreeWithGo: true })).instance.id).toBe(enabled.instance.id)
+  // Older staged records used the default; they resolve with the same policy.
+  delete enabled.instance.poolAdmission!.replaceFreeWithGo
+  expect((await f.service.admitPool({ ...enabled.body, replaceFreeWithGo: true })).instance.id).toBe(enabled.instance.id)
+  await expect(f.service.admitPool({ ...enabled.body, replaceFreeWithGo: false })).rejects.toMatchObject({ code: 'pool_changed' })
+  expect(await f.service.commitPool(enabled.requestId)).toMatchObject({ replaced: [live.id], count: 1 })
+})
+
+native('new Go admissions replace one Free below and above capacity without changing pool size', async () => {
+  for (const limit of [40, 1]) {
+    const f = fixture()
+    const oldest = f.account('oldest@example.test', 'free', { lastActiveAt: 1 })
+    const recent = f.account('recent@example.test', 'free', { lastActiveAt: 2 })
+    const existingGo = f.account('existing-go@example.test', 'go')
+    const original = readFileSync(f.file(oldest))
+    const incoming = await f.stage('incoming@example.test', 'go', limit)
+    expect(await f.service.commitPool(incoming.requestId)).toMatchObject({ replaced: [oldest.id], count: 3 })
+    expect(oldest.poolState).toBe('retired')
+    expect(recent.poolState).toBeUndefined()
+    expect(existingGo.poolState).toBeUndefined()
+    expect(readFileSync(f.file(oldest))).toEqual(original)
+  }
+})
+
+native('replacement rechecks busy victims and the latest count after browser verification', async () => {
+  const f = fixture()
+  const live = f.account('working@example.test')
+  const incoming = await f.stage('incoming@example.test', 'go', 1)
+  const checking = gate()
+  const reading = gate()
+  f.handle(async r => {
+    if (r.instanceId === incoming.instance.id && r.command === 'usage') await checking.promise
+    if (r.instanceId === live.id && r.command === 'read') await reading.promise
+    return undefined
+  })
+  const committing = f.service.commitPool(incoming.requestId)
+  await until(() => f.commands.some(r => r.id === incoming.instance.id && r.command === 'usage'))
+  const job = f.service.start({ requestId: randomUUID(), instanceId: live.id, provider: 'chatgpt', command: 'read', chatId: CHAT })
+  checking.release()
+  await expect(committing).rejects.toMatchObject({ code: 'pool_full' })
+  expect(live.poolState).toBeUndefined()
+  expect(incoming.instance.poolState).toBe('pending')
+  reading.release()
+  await until(() => job.state === 'done')
+  expect(await f.service.commitPool(incoming.requestId)).toMatchObject({ replaced: [live.id], count: 1 })
 })
 
 for (const [provider, plan] of [['claude', 'free'], ['chatgpt', 'free'], ['chatgpt', 'go']] as const) {
@@ -648,7 +712,7 @@ native(
   'pool routes keep origin validation, strict inputs, versioning and typed capacity errors',
   async () => {
     const f = fixture()
-    expect(await (await f.app.request('/api/free/pool')).json()).toEqual({ version: 1 })
+    expect(await (await f.app.request('/api/free/pool')).json()).toEqual({ version: 1, replaceFreeWithGo: true })
     const body = {
       requestId: randomUUID(),
       provider: 'chatgpt',
@@ -671,6 +735,8 @@ native(
       { email: 'invalid' },
       { requestId: 'bad' },
       { extra: true },
+      { replaceFreeWithGo: 'false' },
+      { replaceFreeWithGo: null },
     ])
       expect((await request({ ...body, ...changed })).status).toBe(400)
     const response = await request(body)
