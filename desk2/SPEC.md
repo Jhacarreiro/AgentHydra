@@ -560,7 +560,18 @@ picks the account and moves the worker when that account hits its limit or its l
   (`resumeSessionAt`, server-internal `forkAt`), so the source's later turns never reach the fork.
 - **Local server guard:** the server answers 403 to any request whose Host or Origin is not loopback
   (`127.0.0.1`, `localhost`, `[::1]`, any port), whose Origin is `null`, or whose `Sec-Fetch-Site` is
-  `cross-site`, on every route and on `/ws`; UNC and device paths are refused (400) wherever a route
+  `cross-site`, on every route and on `/ws`. The opt-in exception is only when `HYDRA_DESK_PUBLIC_ORIGINS` (a sign-in
+  proxy's origins, comma-separated, https only) is set. On a listed Host the Origin must be that host's own listed
+  origin: a loopback Origin, or another listed origin, is refused, and a sibling subdomain's origin is refused there.
+  On a loopback Host the Origin rule is unchanged, listed or not. On a listed host a `same-site` request is refused
+  too. The first page after the proxy's sign-in is the exception: a GET or HEAD with `Sec-Fetch-Mode: navigate` and
+  `Sec-Fetch-Dest: document` to one of five start pages, `/`, `/index.html`, `/ah`, `/ah/` or `/ah/index.html`. Any
+  other path is refused, including a route added later. Another site, a sibling subdomain included, can at most open
+  the start page; its API calls, fetches, frames and socket are refused. Still refused:
+  an Origin of `null`; any other cross-site or same-site request to a listed host (a fetch, a POST, a `/ws` upgrade, a
+  navigation to `/api`); and every cross-site request to a loopback host. A listed host's window pages also send
+  `frame-ancestors 'self'`, `X-Frame-Options: SAMEORIGIN` and `Cross-Origin-Opener-Policy: same-origin`.
+  Unset, nothing changes. UNC and device paths are refused (400) wherever a route
   takes a folder. `GET /api/external/sessions/:id` answers one outside session of any age (the list
   holds the last 24 hours), which is how a search hit for an older session opens with its composer.
 

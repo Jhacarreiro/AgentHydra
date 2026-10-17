@@ -849,6 +849,20 @@ rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe 
 | 4798 | Vite dev server during `bun run dev`, forwarding `/api` and `/ws` to 7798 |
 | 7787 | AgentHydra's daemon, which Hydra Desk talks to (`HYDRA_URL` overrides) |
 
+Every port binds 127.0.0.1, so only this machine reaches the window. To open it from another device, put a proxy that
+signs you in first (Cloudflare Access or similar) in front of 7798, pass the browser's Host and Origin through
+unchanged, and list the proxy's origin in `HYDRA_DESK_PUBLIC_ORIGINS` (comma-separated, such as
+`https://desk.example.test`). On the listed name, only that exact origin passes. Any other site, a sibling subdomain
+included, can still navigate you to the window's start page (that is the sign-in exception below). Its API calls,
+fetches, frames and socket are refused. Set it in the user
+environment, or in the environment the AgentHydra daemon starts with: the launcher forwards it to the server it starts,
+and a restart keeps it. **Desk 2 has no sign-in of its own**, so list only a name whose DNS and certificate you control
+and that is reachable only through the proxy's sign-in: whoever reaches it gets the chats, the shell and the restart
+control of this machine. Serve it over https only: the proxy must not answer plain http, or must redirect it to https
+with HSTS. Account sign-in (`/oauth`, which returns to 127.0.0.1:7787) and dev-server previews (`*.localhost`) still need
+this machine. After the proxy's sign-in, the first page loads directly: the redirect back to the listed name is a
+top-level page load, which passes. The API, websocket and other cross-site or same-site requests stay refused.
+
 ## Where data lives
 
 - `~/.hydra-desk-2/`, the real home (`HYDRA_DESK_HOME` runs a Desk on another folder, as every test, e2e script

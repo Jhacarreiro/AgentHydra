@@ -29,6 +29,8 @@ export interface CreateServerOptions {
   /** Folder of the built window (default web/dist); served only when it exists. */
   webDist?: string
   hostname?: string
+  /** Canonical origins (`parsePublicOrigins`) a sign-in proxy puts in front of the window; default none. */
+  publicOrigins?: readonly string[]
 }
 
 export interface DeskServer {
@@ -39,8 +41,52 @@ export interface DeskServer {
 }
 
 /** The names this server answers to. A browser naming anything else is another site's page, or a DNS name
- *  rebound to this machine; either could otherwise drive every route here. */
+ *  rebound to this machine; either could otherwise drive every route here. The one exception is an origin listed
+ *  in HYDRA_DESK_PUBLIC_ORIGINS (`foreignRequest`'s `trusted`): Desk has no sign-in of its own, so listing a name
+ *  that a sign-in proxy does not guard hands this machine's chats and shell to whoever finds it. */
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+/** A bare origin written `scheme://host[:port]`, with an optional trailing slash and nothing else. */
+const ORIGIN_SHAPE = /^https?:\/\/[^/@?#*]+\/?$/i
+
+/** One HYDRA_DESK_PUBLIC_ORIGINS entry: its canonical origin (`https://desk.example.test`, lower case, no default
+ *  port), or the reason it is refused. Only https is allowed, except for a loopback name. */
+function publicOrigin(entry: string): { origin: string } | { refused: string } {
+  if (!ORIGIN_SHAPE.test(entry)) return { refused: 'not a bare origin' }
+  let url: URL
+  try {
+    url = new URL(entry)
+  } catch {
+    return { refused: 'not a URL' }
+  }
+  if (url.hostname.endsWith('.')) return { refused: 'a trailing dot' }
+  if (url.protocol === 'http:' && !LOCAL_HOSTS.has(url.hostname)) return { refused: 'https only' }
+  return { origin: url.origin }
+}
+
+/** The public origins HYDRA_DESK_PUBLIC_ORIGINS may list, canonical, and the entries it refused as typed, each with
+ *  its reason. Parsed once at startup, so a typo is named in the log instead of dropped. */
+export function parsePublicOrigins(raw: string | undefined): { origins: string[]; ignored: string[] } {
+  const origins: string[] = []
+  const ignored: string[] = []
+  for (const entry of (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const parsed = publicOrigin(entry)
+    if ('refused' in parsed) ignored.push(`${entry} (${parsed.refused})`)
+    else if (!origins.includes(parsed.origin)) origins.push(parsed.origin)
+  }
+  return { origins, ignored }
+}
+
+/** Whether a Host header (any case) names one of the trusted origins. Compares URL.host, which is lower case. */
+function trustedHost(host: string, trusted: readonly string[]): boolean {
+  const name = host.toLowerCase()
+  return trusted.some((origin) => new URL(origin).host === name)
+}
+
+/** A Host that names a listed public origin, not this machine: the case where the sign-in proxy's pages are served. */
+function listedHost(host: string | null, trusted: readonly string[]): boolean {
+  return host !== null && !isLocalHost(host, false) && trustedHost(host, trusted)
+}
 
 /** `value` is a Host header (host[:port]) or, with `isOrigin`, an Origin (scheme://host[:port]); any port passes. */
 function isLocalHost(value: string, isOrigin: boolean): boolean {
@@ -53,21 +99,71 @@ function isLocalHost(value: string, isOrigin: boolean): boolean {
   }
 }
 
-/** Why a request must be refused, or null. Requests without these headers (curl, the SDK, tests) pass. */
-export function foreignRequest(headers: Headers): string | null {
+/** The start pages of the window: the only paths a sign-in proxy's redirect may land on. The window's client routing is
+ *  hash-based, so a start page is all a redirect needs. Every other path, including a route added later, is refused. */
+const LISTED_START_PATHS = new Set(['/', '/index.html', '/ah', '/ah/', '/ah/index.html'])
+
+/** A top-level page load of a start page (`LISTED_START_PATHS`) of a listed host: a GET or HEAD document navigation.
+ *  A sign-in proxy's redirect back to the listed name arrives cross-site (or same-site from a sibling name), so this
+ *  lets the first page through. */
+function listedPageNavigation(headers: Headers, method: string, path: string, trusted: readonly string[]): boolean {
+  if (!listedHost(headers.get('host'), trusted)) return false
+  if (method !== 'GET' && method !== 'HEAD') return false
+  if (headers.get('sec-fetch-mode') !== 'navigate' || headers.get('sec-fetch-dest') !== 'document') return false
+  return LISTED_START_PATHS.has(path)
+}
+
+/** On a listed Host, an Origin passes only when it is the listed origin that names that same Host. */
+function listedOrigin(host: string | null, origin: string, trusted: readonly string[]): boolean {
+  return host !== null && trusted.some((o) => o === origin && new URL(o).host === host.toLowerCase())
+}
+
+/** Why a request must be refused, or null. Requests without these headers (curl, the SDK, tests) pass. `trusted` are
+ *  the public origins (HYDRA_DESK_PUBLIC_ORIGINS). On a listed host the Origin must be that host's own listed origin;
+ *  loopback Origins are refused there, and on a loopback Host the Origin rule is origin/main's, listed or not.
+ *  On a listed host a same-site request is refused too: a sibling name is same-site, so it could be any page on the
+ *  domain. A cross-site fetch, that same-site request and an Origin of `null` are refused whatever is listed, except
+ *  a page navigation to a listed host (`listedPageNavigation`). */
+export function foreignRequest(headers: Headers, trusted: readonly string[] = [], method = 'GET', path = '/'): string | null {
   const host = headers.get('host')
-  if (host !== null && !isLocalHost(host, false)) return `this server only answers to 127.0.0.1 or localhost, not ${host}`
+  const listed = listedHost(host, trusted)
+  if (host !== null && !isLocalHost(host, false) && !listed) {
+    return `this server only answers to 127.0.0.1 or localhost, not ${host}`
+  }
   const origin = headers.get('origin')
-  if (origin !== null && !isLocalHost(origin, true)) return `requests from ${origin} are refused`
-  if (headers.get('sec-fetch-site') === 'cross-site') return 'cross-site requests are refused'
+  const originOk = listed ? listedOrigin(host, origin ?? '', trusted) : isLocalHost(origin ?? '', true)
+  if (origin !== null && !originOk) return `requests from ${origin} are refused`
+  const site = headers.get('sec-fetch-site')
+  const otherSite = site === 'cross-site' || (site === 'same-site' && listed)
+  if (otherSite && !listedPageNavigation(headers, method, path, trusted)) return 'cross-site requests are refused'
   return null
 }
 
 /** Answers 403 to a request from another site or a rebound DNS name, before any route sees it. */
-export const localOnly: MiddlewareHandler = async (c, next) => {
-  const why = foreignRequest(c.req.raw.headers)
-  if (why) return c.json({ error: why }, 403)
-  await next()
+export function localOnly(trusted: readonly string[] = []): MiddlewareHandler {
+  return async (c, next) => {
+    const why = foreignRequest(c.req.raw.headers, trusted, c.req.method, c.req.path)
+    if (why) return c.json({ error: why }, 403)
+    await next()
+  }
+}
+
+/** On a listed host the window's pages (and /ah/) may be framed only by this same site, and no other page gets a
+ *  handle on the window through `window.opener`. Loopback sends none of these. */
+const LISTED_PAGE_HEADERS = {
+  'content-security-policy': "frame-ancestors 'self'",
+  'x-frame-options': 'SAMEORIGIN',
+  'cross-origin-opener-policy': 'same-origin',
+}
+
+function listedPageHeaders(trusted: readonly string[]): MiddlewareHandler {
+  return async (c, next) => {
+    await next()
+    // After the route: a header set before it is not carried onto the response the route returns.
+    if (listedHost(c.req.header('host') ?? null, trusted)) {
+      for (const [name, value] of Object.entries(LISTED_PAGE_HEADERS)) c.res.headers.set(name, value)
+    }
+  }
 }
 
 /** Every *.ts file in dir (not .d.ts / .test.ts), sorted by file name. */
@@ -134,6 +230,11 @@ function serveStatic(app: Hono, dist: string): void {
 export async function createServer(opts: CreateServerOptions): Promise<DeskServer> {
   const home = resolve(opts.home)
   mkdirSync(home, { recursive: true })
+  // The same canonical form as the env parser: a caller's bare host name is not trusted as a scheme-less origin.
+  const publicOrigins = (opts.publicOrigins ?? []).flatMap((entry) => {
+    const parsed = publicOrigin(entry)
+    return 'origin' in parsed ? [parsed.origin] : []
+  })
 
   const hub = createWsHub()
   const settings = createSettingsStore(home)
@@ -184,7 +285,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     return c.json({ error: err.message || String(err) }, 500)
   })
   // First, so it covers every route the plugins add and the built window.
-  app.use('*', localOnly)
+  app.use('*', listedPageHeaders(publicOrigins))
+  app.use('*', localOnly(publicOrigins))
 
   app.get('/api/health', (c) => c.json({ ok: true, version: VERSION, startedAt: STARTED_AT }))
   app.get('/api/settings', (c) => c.json(settings.get()))
@@ -232,7 +334,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
       }
       const route = wsRoutes.get(new URL(req.url).pathname)
       if (route) {
-        const why = foreignRequest(req.headers)
+        const why = foreignRequest(req.headers, publicOrigins, req.method, new URL(req.url).pathname)
         if (why) return Response.json({ error: why }, { status: 403 })
         const accepted = await route.accept(req)
         if (accepted instanceof Response) return accepted
@@ -240,8 +342,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
         return new Response('expected a websocket upgrade', { status: 426 })
       }
       if (new URL(req.url).pathname === '/ws') {
-        // The upgrade does not go through Hono, so it gets the same guard here.
-        const why = foreignRequest(req.headers)
+        // The upgrade does not go through Hono, so it gets the same guard (and the same list) here.
+        const why = foreignRequest(req.headers, publicOrigins, req.method, new URL(req.url).pathname)
         if (why) return Response.json({ error: why }, { status: 403 })
         if (srv.upgrade(req, { data: undefined })) return undefined
         return new Response('expected a websocket upgrade', { status: 426 })
@@ -307,7 +409,10 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
 if (import.meta.main) {
   const port = Number(process.env.HYDRA_DESK_PORT) || 7798
   const home = process.env.HYDRA_DESK_HOME || REAL_HOME
-  const desk = await createServer({ port, home })
+  const publicList = parsePublicOrigins(process.env.HYDRA_DESK_PUBLIC_ORIGINS)
+  const desk = await createServer({ port, home, publicOrigins: publicList.origins })
+  if (publicList.origins.length) console.log(`[desk] trusts ${publicList.origins.join(', ')} like loopback (HYDRA_DESK_PUBLIC_ORIGINS)`)
+  if (publicList.ignored.length) console.warn(`[desk] HYDRA_DESK_PUBLIC_ORIGINS ignored ${publicList.ignored.join(', ')}: only bare origins count, https unless loopback`)
   console.log(`AgentHydra ${VERSION} on ${desk.url} (home ${home})`)
   const shutdown = async () => {
     await desk.stop()

@@ -126,6 +126,24 @@ $AppRoot = Split-Path -Parent $DeskRoot
 $Launcher = Join-Path $AppRoot 'AgentHydra.exe'
 $IsRelease = Test-Path -LiteralPath (Join-Path $AppRoot 'app\release.json')
 
+# A public origin list goes on the command line only when its characters are an origin list's: a value with & % or a
+# quote would be read by cmd, so it is refused and named here, once, at script scope (Say is not called from inside
+# Get-ServerEnv, whose return value is the list of forwarded pairs). The server still reads HYDRA_DESK_PUBLIC_ORIGINS
+# from its own environment, which this launcher does not control.
+$ForwardOrigins = $null
+if ($env:HYDRA_DESK_PUBLIC_ORIGINS) {
+  if ($env:HYDRA_DESK_PUBLIC_ORIGINS -match '^[A-Za-z0-9.:/,\[\] -]+\z') { $ForwardOrigins = $env:HYDRA_DESK_PUBLIC_ORIGINS }
+  else { Say 'HYDRA_DESK_PUBLIC_ORIGINS refused on the command line: it has characters an origin list does not use' }
+}
+
+# The variables a WMI-started server is given on its command line (name=value pairs).
+function Get-ServerEnv {
+  $pairs = @("HYDRA_DESK_PORT=$Port")
+  if ($env:HYDRA_DESK_HOME) { $pairs += "HYDRA_DESK_HOME=$($env:HYDRA_DESK_HOME)" }
+  if ($ForwardOrigins) { $pairs += "HYDRA_DESK_PUBLIC_ORIGINS=$ForwardOrigins" }
+  return $pairs
+}
+
 function Find-Bun {
   if ($IsRelease) {
     # Never in a dry run: --ensure-bun may download.
@@ -171,11 +189,10 @@ function Start-Server {
   # hidden console. WMI (Win32_Process.Create) starts it, so it is born outside this launcher's process tree
   # and job: 2026-10-05, a server a CliMayte worker restarted from its shell sat in the worker's kill-on-close
   # job and died the moment the worker finished, leaving the window on "No messages yet" and "Failed to fetch".
-  # A WMI-started process has the user's own environment, not this script's, so port and home go on the
-  # command line. Start-Process (which stays in the caller's job) only when WMI refuses.
+  # A WMI-started process has the user's own environment, not this script's, so port, home and public origins are
+  # forwarded on the command line. Start-Process (which stays in the caller's job) only when WMI refuses.
   $env:HYDRA_DESK_PORT = "$Port"
-  $envSet = "set `"HYDRA_DESK_PORT=$Port`""
-  if ($env:HYDRA_DESK_HOME) { $envSet += " && set `"HYDRA_DESK_HOME=$($env:HYDRA_DESK_HOME)`"" }
+  $envSet = (@(Get-ServerEnv) | ForEach-Object { "set `"$_`"" }) -join ' && '
   $cmdLine = "/d /c `"$envSet && `"$($bun.Source)`" server\src\index.ts >> `"$ServerLog`" 2>&1`""
   $wrapper = $null
   $wrapperPid = 0
@@ -279,7 +296,8 @@ if ($DryRun) {
   elseif (Get-LauncherServer) { Say "a server this launcher started is still booting (pid file $PidFile): would wait for it, not start another" }
   else {
     $bun = Find-Bun
-    Say "would start hidden through WMI (outside this shell's job): $(if ($bun) { $bun.Source } else { 'bun (NOT ON PATH: would fail)' }) server\src\index.ts (cwd $DeskRoot, HYDRA_DESK_PORT=$Port)"
+    $serverEnv = @(Get-ServerEnv)
+    Say "would start hidden through WMI (outside this shell's job): $(if ($bun) { $bun.Source } else { 'bun (NOT ON PATH: would fail)' }) server\src\index.ts (cwd $DeskRoot, $($serverEnv -join ', '))"
     Say "would append stdout+stderr to $ServerLog and write pids to $PidFile"
     Say "would wait up to $HealthTimeoutSec s for health, else show an error box"
   }
