@@ -62,9 +62,8 @@ app.post('/api/screenshot', async (c) => {
   const result = await captureScreen(typeof body.path === 'string' ? body.path : undefined)
   return c.json(result, result.ok ? 200 : 500)
 })
-// Start a NEW interactive Claude session in a VISIBLE terminal window, pinned to an instance's
-// account. Unlike a headless queue run it is on the user's screen and joins the live
-// registry, so peer messaging can reach it.
+// Refuses every call: launchTerminalSession (session-launch.ts) returns the reason, and this route
+// stays so callers get a reason they can report.
 app.post('/api/sessions/launch-terminal', async (c) => {
   const body = await jsonBody(c)
   if (

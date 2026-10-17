@@ -7,7 +7,8 @@
 // of the tooling every other session on that machine had. It looked healthy and was quietly blind.
 //
 // What the seed must NOT do is the other half of the contract: logins are the user's (an OAuth flow
-// an AI must never perform) and folder trust is `ensureProjectTrusted`'s deliberate per-folder job.
+// an AI must never perform) and folder trust is granted per folder by whoever chooses the folder
+// (orchestrator/scripts/trust_workspace.py), never copied by the seed.
 // So the seeded file carries `mcpServers` and nothing else.
 //
 // `os.homedir()` reads USERPROFILE/HOME at call time, so each test points it at a scratch home and

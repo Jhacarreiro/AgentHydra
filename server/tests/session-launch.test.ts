@@ -1,9 +1,5 @@
-// server/tests/session-launch.test.ts — the visible-terminal launch plan, pinned per platform.
-//
-// The prompt rides in a FILE, never on the command line: handoff prompts are long, multiline
-// and quote-riddled, and the first design (inline quoting through `cmd /c start`) is exactly
-// how arguments get silently mangled. These tests pin that the plan reads the file, keeps the
-// window open on failure, and never interpolates the prompt text itself into argv.
+// server/tests/session-launch.test.ts — the desktop import plan and the guards around it: stamps,
+// the title janitor, the archive flag, and the refusal every terminal launch gets.
 import { afterAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,13 +11,10 @@ import {
   applyDesktopChatTitle,
   archiveDesktopChat,
   buildImportPlan,
-  buildTerminalLaunchPlan,
-  bundledClaudeExe,
   desktopChatArchiveState,
   importSessionToDesktop,
   isSessionSuperseded,
   launchTerminalSession,
-  nearestTrustedAncestor,
   reassertAutomationStamps,
   reassertChatAutomation,
   stampImportedChat,
@@ -37,45 +30,6 @@ function markDone(sessionId: string, done: boolean): void {
     'insert into session_marks (session_id, done, updated_at) values (?, ?, ?) on conflict(session_id) do update set done = ?, updated_at = ?',
   ).run(sessionId, done ? 1 : 0, Date.now(), done ? 1 : 0, Date.now())
 }
-
-test('windows: powershell reads the prompt file raw, window survives exit', () => {
-  const plan = buildTerminalLaunchPlan(
-    'win32',
-    'C:\\Tools\\claude.exe',
-    'C:\\tmp\\prompt-1.txt',
-    'sonnet',
-  )
-  expect(plan.argv.slice(0, 5)).toEqual(['cmd', '/c', 'start', '', 'powershell'])
-  expect(plan.argv).toContain('-NoExit')
-  const ps = plan.argv[plan.argv.length - 1]
-  expect(ps).toContain("Get-Content -Raw 'C:\\tmp\\prompt-1.txt'")
-  expect(ps).toContain('--model sonnet')
-  const withEffort = buildTerminalLaunchPlan(
-    'win32',
-    'C:\\Tools\\claude.exe',
-    'C:\\tmp\\prompt-1.txt',
-    'opus',
-    'max',
-  )
-  expect(withEffort.argv[withEffort.argv.length - 1]).toContain('--model opus --effort max')
-  // A terminal RESUME continues an existing thread with the prompt as its next turn - the
-  // visible replacement for headless queue resumes (owner rule: nothing runs headless).
-  const resume = buildTerminalLaunchPlan(
-    'win32',
-    'C:\\Tools\\claude.exe',
-    'C:\\tmp\\p.txt',
-    null,
-    null,
-    'sess-abc',
-  )
-  expect(resume.argv[resume.argv.length - 1]).toContain('--resume sess-abc')
-})
-
-test('windows: single quotes in paths are doubled for powershell, not left to break it', () => {
-  const plan = buildTerminalLaunchPlan('win32', "C:\\o'brien\\claude.exe", 'C:\\tmp\\p.txt', null)
-  expect(plan.argv[plan.argv.length - 1]).toContain("C:\\o''brien\\claude.exe")
-  expect(plan.argv[plan.argv.length - 1]).not.toContain('--model')
-})
 
 test('the desktop import plan targets one instance via its profile dir', () => {
   const win = buildImportPlan(
@@ -440,18 +394,6 @@ test('archiveDesktopChat flips the metadata flag by filename across profiles', a
   expect(miss.reason).toBe('no-desktop-chat-found')
 })
 
-test('bundledClaudeExe picks the numerically newest version, not the lexicographic one', () => {
-  const dir = mkdtempSync(join(ROOT, 'agenthydra-bundled-'))
-  const exeName = process.platform === 'win32' ? 'claude.exe' : 'claude'
-  // 2.1.9 vs 2.1.237: lexicographic sort would pick 2.1.9. The real store hit exactly this shape.
-  for (const v of ['2.1.9', '2.1.237']) {
-    mkdirSync(join(dir, 'claude-code', v), { recursive: true })
-    writeFileSync(join(dir, 'claude-code', v, exeName), '')
-  }
-  expect(bundledClaudeExe(dir)).toContain('2.1.237')
-  expect(bundledClaudeExe(join(dir, 'no-such'))).toBe(null)
-})
-
 // --- one lineage, one continuation: superseded (done-marked) sessions stay retired ------------
 
 test('isSessionSuperseded reads the done-mark ledger', () => {
@@ -516,33 +458,4 @@ test('every terminal launch is refused - a done-marked lineage no longer even ge
   const plain = await launchTerminalSession({ cwd: 'D:\\Fake', prompt: 'anything' })
   expect(plain.ok).toBe(false)
   expect(plain.reason).toContain('headless')
-})
-
-test('darwin and linux read the file via cat; unknown platforms still return the command text', () => {
-  const mac = buildTerminalLaunchPlan('darwin', '/usr/local/bin/claude', '/tmp/p.txt', null)
-  expect(mac.argv[0]).toBe('osascript')
-  expect(mac.command).toContain("$(cat '/tmp/p.txt')")
-  const linux = buildTerminalLaunchPlan('linux', '/usr/bin/claude', '/tmp/p.txt', 'haiku')
-  expect(linux.argv[0]).toBe('x-terminal-emulator')
-  expect(linux.command).toContain('--model haiku')
-  const other = buildTerminalLaunchPlan('freebsd' as NodeJS.Platform, 'claude', '/tmp/p.txt', null)
-  expect(other.argv).toHaveLength(0)
-  expect(other.command).toContain('claude')
-})
-
-// THE OWNER TRUSTS ROOTS, NOT EVERY PROJECT UNDER THEM. Refusing an untrusted subfolder was
-// correct in principle and useless in practice: measured 2026-08-31, the successor a handed-off
-// chat had written an entire brief for was refused because its own project folder had never been
-// accepted, while its parent had been accepted on every account - so the handoff never ran.
-test('an untrusted folder falls back to its nearest trusted ancestor, never higher', () => {
-  const ROOT = 'D:\\PublicProjects'
-  const SUB = 'D:\\PublicProjects\\Stackspire\\sub'
-  const trusted = new Set([ROOT, SUB])
-  const is = (p: string) => trusted.has(p)
-  expect(nearestTrustedAncestor(`${SUB}\\deep`, null, is)).toBe(SUB)
-  expect(nearestTrustedAncestor('D:\\PublicProjects\\Stackspire', null, is)).toBe(ROOT)
-  // Nothing trusted anywhere above it: refuse rather than guess.
-  expect(nearestTrustedAncestor('E:\\Other\\Thing', null, is)).toBe(null)
-  // Never the bare drive root - starting a session at a drive root is its own hazard.
-  expect(nearestTrustedAncestor(ROOT, null, (p) => p === 'D:')).toBe(null)
 })
