@@ -46,6 +46,8 @@
   /* --- Shared semantic status tokens (badges / pills / toasts) --- */
   --success: oklch(0.55 0.15 152);
   --warning: oklch(0.62 0.16 65);
+  /* A usage limit that resets by itself: Desk's --status-limited pink. Yellow is only what waits on the owner (owner, 2026-10-17). */
+  --limited: oklch(0.6 0.18 0);
   --info: oklch(0.55 0.18 255);
 
   --border: oklch(0.922 0 0);
@@ -92,6 +94,7 @@
 
   --success: oklch(0.7 0.17 152);
   --warning: oklch(0.8 0.15 75);
+  --limited: oklch(0.72 0.15 0);
   --info: oklch(0.7 0.15 255);
 
   --border: oklch(1 0 0 / 10%);
@@ -164,6 +167,7 @@ html.theme-transitioning *::after {
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-limited: var(--limited);
   --color-info: var(--info);
   --color-border: var(--border);
   --color-input: var(--input);

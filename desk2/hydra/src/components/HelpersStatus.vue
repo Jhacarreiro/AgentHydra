@@ -80,7 +80,8 @@ const tone = computed(() => (view.value?.paused || down.value ? 'text-warning' :
 function dot(h: HelperRow): string {
   if (h.state === 'running') return 'bg-success'
   if (h.state === 'stopped') return 'bg-muted-foreground/50'
-  return 'bg-warning'
+  // Starting or waiting to start: work under way, never the yellow that means it waits on the owner (2026-10-17).
+  return 'bg-muted-foreground animate-pulse'
 }
 
 function note(h: HelperRow): string | null {

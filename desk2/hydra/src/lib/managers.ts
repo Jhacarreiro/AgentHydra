@@ -7,13 +7,18 @@ import type { InstanceManagerStatus, RecoveryState } from '@desk/shared/instance
 import type { RoutineOutcome, RoutineState } from '@desk/shared/routines'
 
 /** The dot a node or a row shows, as the tree draws it (HSwarmView's DOT_CLASS). */
-export type ManagerDot = 'ok' | 'warn' | 'off' | 'run' | 'bad'
+export type ManagerDot = 'ok' | 'warn' | 'limit' | 'off' | 'run' | 'bad'
 
-/** A routine's state as its dot: running pulses, due and waiting are amber, paused, off and ended are grey, broken is red. */
+// Yellow ('warn') is only for what waits on the owner: a routine asking for his yes. A wait that ends by itself is
+// not: a usage limit is 'limit' (Desk's usage-limit pink), a recovery under way is 'run', a due routine is 'ok'
+// (owner, 2026-10-17: "Yellow icons should only ever be yellow if they require input from me").
+
+/** A routine's state as its dot: running pulses, waiting for your yes is amber, idle and due are green, paused, off
+ * and ended are grey, broken is red. */
 export function routineDot(state: RoutineState): ManagerDot {
   if (state === 'running') return 'run'
-  if (state === 'due' || state === 'waiting') return 'warn'
-  if (state === 'idle') return 'ok'
+  if (state === 'waiting') return 'warn'
+  if (state === 'idle' || state === 'due') return 'ok'
   if (state === 'paused' || state === 'off' || state === 'ended') return 'off'
   return 'bad'
 }
@@ -25,21 +30,21 @@ export function managerDot(on: boolean | undefined, failed: boolean): ManagerDot
   return on ? 'ok' : 'off'
 }
 
-/** A stopped chat's dot: waiting for its limit to reset is amber, resumed is green, and a continue that was refused,
+/** A stopped chat's dot: waiting for its limit to reset is the usage-limit pink, resumed is green, and a continue that was refused,
  * had no app to take it or was given up on is red, since a person may have to step in. */
 export function babysitterChatDot(state: BabysitterChatState): ManagerDot {
-  if (state === 'waiting') return 'warn'
+  if (state === 'waiting') return 'limit'
   if (state === 'resumed') return 'ok'
   return 'bad'
 }
 
 /** The Babysitter's own dot (owner, 2026-10-16: chats needing its attention read in plain grey): red when its last
- * look failed or a stopped chat needs a person, amber while chats wait on a limit (shared babysitterAttention, which
+ * look failed or a stopped chat needs a person, the usage-limit pink while chats wait on a limit (shared babysitterAttention, which
  * Desk's Settings colours by too), else on or off. */
 export function babysitterDot(s: BabysitterStatus | null | undefined): ManagerDot | undefined {
   const attention = s ? babysitterAttention(s) : null
   if (attention === 'person') return 'bad'
-  if (attention === 'waiting') return 'warn'
+  if (attention === 'waiting') return 'limit'
   return managerDot(s?.enabled, false)
 }
 
@@ -51,13 +56,13 @@ export function babysitterActDot(did: BabysitterAct['did']): ManagerDot {
 /** Recovery states that are still moving: the app is down or coming back, or the chats are being moved and watched. */
 const RECOVERY_UNDER_WAY: RecoveryState[] = ['waiting', 'opening', 'moving', 'watching']
 
-/** The Instance manager's dot: red when its read failed, a recovery failed or a chat in one is stuck; amber while a
+/** The Instance manager's dot: red when its read failed, a recovery failed or a chat in one is stuck; running while a
  * recovery is under way; else on or off. Undefined before the first read. */
 export function instanceManagerDot(status: InstanceManagerStatus | null): ManagerDot | undefined {
   if (!status) return undefined
   const trouble = status.recoveries.some((r) => r.state === 'failed' || r.chats.some((c) => c.state === 'stuck'))
   if (status.error || trouble) return 'bad'
-  if (status.recoveries.some((r) => RECOVERY_UNDER_WAY.includes(r.state))) return 'warn'
+  if (status.recoveries.some((r) => RECOVERY_UNDER_WAY.includes(r.state))) return 'run'
   return managerDot(status.enabled, false)
 }
 
@@ -80,6 +85,7 @@ export function canRunRoutine(state: RoutineState, busy: boolean): boolean {
 export const MANAGER_DOT_CLASS: Record<ManagerDot, string> = {
   ok: 'bg-success',
   warn: 'bg-warning',
+  limit: 'bg-limited',
   off: 'bg-muted-foreground/50',
   run: 'bg-primary animate-pulse',
   bad: 'bg-destructive',
@@ -89,6 +95,7 @@ export const MANAGER_DOT_CLASS: Record<ManagerDot, string> = {
 export const MANAGER_TEXT_CLASS: Record<ManagerDot, string> = {
   ok: 'text-success',
   warn: 'text-warning',
+  limit: 'text-limited',
   off: 'text-muted-foreground',
   run: 'text-primary',
   bad: 'text-destructive',

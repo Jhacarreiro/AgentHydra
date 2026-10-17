@@ -607,7 +607,7 @@ const ariaSort = (tid: string, key: string) => {
           <span>{{ t('hswarm.v.savings.ruleCheck') }}</span>
           <InfoHint :text="t('hswarm.v.savings.ruleCheckHint')" />
           <span class="text-xs font-normal text-muted-foreground tabular-nums">{{ rule.day }}</span>
-          <span v-if="rule.partial" class="rounded-full border border-warning/50 px-1.5 text-2xs font-normal text-warning">{{ t('hswarm.v.savings.stillRunning') }}</span>
+          <span v-if="rule.partial" class="rounded-full border border-border px-1.5 text-2xs font-normal text-muted-foreground">{{ t('hswarm.v.savings.stillRunning') }}</span>
         </div>
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
           <div v-for="r in rule.tiles" :key="r.k" class="min-w-0 rounded-md border px-2 py-1">

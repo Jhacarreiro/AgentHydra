@@ -56,10 +56,11 @@ const { t } = useI18n()
       :title="t('climayte.rowPriorityHint', { n: priority })"
     >{{ t('climayte.rowPriority', { n: priority }) }}</span>
     <!-- Its own hover: who judged it and what they said. A failed check on a task still
-         working is amber and a retry arrow, never the red cross (owner, 2026-10-02). -->
+         working is a retry arrow in the running blue, never the red cross (owner, 2026-10-02), and never the
+         yellow that means it waits on the owner (owner, 2026-10-17). -->
     <span v-if="mark" class="inline-flex shrink-0" :title="mark.hint">
       <Check v-if="mark.kind === 'pass'" class="size-3.5 text-success" :aria-label="mark.label" />
-      <RotateCcw v-else-if="mark.kind === 'retry'" class="size-3.5 text-warning" :aria-label="mark.label" />
+      <RotateCcw v-else-if="mark.kind === 'retry'" class="size-3.5 text-info" :aria-label="mark.label" />
       <X v-else class="size-3.5 text-destructive" :aria-label="mark.label" />
     </span>
     <!-- The account and the model fit the row, not the window: the pane beside HSwarm's tree is ~650px, where

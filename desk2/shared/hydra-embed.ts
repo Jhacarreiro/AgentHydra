@@ -37,7 +37,9 @@ export type EmbedIcon =
   | 'play'
   | 'wrench'
 
-export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'danger' | 'accent'
+// 'warning' is yellow, only for what waits on the owner; 'limited' is a usage limit that resets by itself, drawn in
+// Desk's --status-limited pink (owner, 2026-10-17).
+export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'limited' | 'danger' | 'accent'
 
 export interface SidebarRow {
   /** Unique in the model; what a click sends back. */

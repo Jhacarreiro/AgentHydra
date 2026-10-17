@@ -388,6 +388,7 @@ const DOT: Record<EmbedTone, string> = {
   success: 'bg-success',
   info: 'bg-info',
   warning: 'bg-warning',
+  limited: 'bg-limited',
   danger: 'bg-destructive',
   muted: 'bg-muted-foreground',
   accent: 'bg-primary',

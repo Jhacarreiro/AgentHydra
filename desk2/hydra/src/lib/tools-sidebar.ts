@@ -40,7 +40,7 @@ export interface ToolsSidebarArgs {
 
 type Sections = { key: string; label?: string; count?: number; rows: SidebarRow[] }[]
 
-const TONE: Record<ManagerDot, EmbedTone> = { ok: 'success', warn: 'warning', off: 'muted', run: 'info', bad: 'danger' }
+const TONE: Record<ManagerDot, EmbedTone> = { ok: 'success', warn: 'warning', limit: 'limited', off: 'muted', run: 'info', bad: 'danger' }
 
 /** The match, when the query is on: where it sits in the label. Undefined when it is off; false when it misses. */
 function hitOf(label: string, q: string): [number, number] | undefined | false {

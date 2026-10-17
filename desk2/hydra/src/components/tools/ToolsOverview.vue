@@ -84,6 +84,7 @@ interface Folder {
 const DOT_CLASS: Record<ManagerDot | 'none', string> = {
   ok: 'bg-success',
   warn: 'bg-warning',
+  limit: 'bg-limited',
   off: 'bg-muted-foreground/50',
   run: 'bg-info',
   bad: 'bg-destructive',
@@ -93,6 +94,7 @@ const DOT_CLASS: Record<ManagerDot | 'none', string> = {
 const TEXT_CLASS: Record<ManagerDot | 'none', string> = {
   ok: 'text-success',
   warn: 'text-warning',
+  limit: 'text-limited',
   off: 'text-muted-foreground',
   run: 'text-info',
   bad: 'text-destructive',
@@ -126,6 +128,8 @@ const OUTCOME_ICON: Record<RoutineOutcome, Component> = {
 const stateWord = (dot: ManagerDot | undefined): string => {
   if (dot === 'bad') return t('tools.overview.state.problem')
   if (dot === 'warn') return t('tools.overview.state.attention')
+  if (dot === 'limit') return t('tools.overview.state.limit')
+  if (dot === 'run') return t('tools.overview.state.working')
   if (dot === 'ok') return t('tools.overview.state.on')
   if (dot === 'off') return t('tools.overview.state.off')
   return t('tools.overview.state.notRead')

@@ -84,6 +84,7 @@ const TONE: Record<EmbedTone, string> = {
   accent: 'text-accent-text',
   success: 'text-success-text',
   warning: 'text-warning-text',
+  limited: 'text-[var(--status-limited-text)]',
   danger: 'text-danger-text'
 }
 const DOT: Record<EmbedTone | 'hollow', string> = {
@@ -92,6 +93,7 @@ const DOT: Record<EmbedTone | 'hollow', string> = {
   accent: 'bg-accent',
   success: 'bg-success',
   warning: 'bg-warning',
+  limited: 'bg-[var(--status-limited)]',
   danger: 'bg-danger',
   hollow: 'border border-text-muted'
 }

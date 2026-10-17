@@ -22,7 +22,7 @@ describe('a routine\'s work', () => {
 describe('the dots', () => {
   test('a routine state maps to its dot', () => {
     expect(routineDot('running')).toBe('run')
-    expect(routineDot('due')).toBe('warn')
+    expect(routineDot('due')).toBe('ok')
     expect(routineDot('waiting')).toBe('warn')
     expect(routineDot('idle')).toBe('ok')
     expect(routineDot('paused')).toBe('off')
@@ -68,8 +68,8 @@ describe('the dots', () => {
     expect(babysitterDot(look([]))).toBe('ok')
     expect(babysitterDot(look([], { enabled: false }))).toBe('off')
     expect(babysitterDot(look(['resumed']))).toBe('ok')
-    expect(babysitterDot(look(['waiting', 'resumed']))).toBe('warn')
-    expect(babysitterDot(look(['waiting'], { enabled: false }))).toBe('warn')
+    expect(babysitterDot(look(['waiting', 'resumed']))).toBe('limit')
+    expect(babysitterDot(look(['waiting'], { enabled: false }))).toBe('limit')
     for (const needsPerson of ['failed', 'no-engine', 'gave-up'] as const) {
       expect(babysitterDot(look(['waiting', needsPerson]))).toBe('bad')
     }
@@ -117,7 +117,7 @@ describe('the Instance manager dot', () => {
 
   test('amber while a recovery waits, opens, moves or watches', () => {
     for (const state of ['waiting', 'opening', 'moving', 'watching'] as const) {
-      expect(instanceManagerDot(look([recovery(state)]))).toBe('warn')
+      expect(instanceManagerDot(look([recovery(state)]))).toBe('run')
     }
   })
 

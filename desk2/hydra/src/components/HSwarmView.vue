@@ -80,7 +80,9 @@ const jobsRunning = computed(
 const { activeCount: freeRunning } = useFreeInstances()
 const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
-type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
+// 'rest': every key is resting after a limit, which ends by itself, so the usage-limit pink and not yellow (owner,
+// 2026-10-17: yellow only for what needs him).
+type Dot = 'ok' | 'rest' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
   id: string
   label: string
@@ -118,7 +120,7 @@ interface TreeRow {
 
 const DOT_CLASS: Record<Dot, string> = {
   ok: 'bg-success',
-  warn: 'bg-warning',
+  rest: 'bg-limited',
   nokey: 'border border-muted-foreground',
   off: 'bg-muted-foreground/50',
   run: 'bg-primary animate-pulse',
@@ -174,7 +176,7 @@ function provDot(p: any): [Dot, string] {
   if (!p.enabled) return ['off', t('hswarm.nav.switchedOff')]
   if (!p.keys) return ['nokey', t('hswarm.nav.noKeys')]
   if (p.ready > 0) return ['ok', t('hswarm.nav.ready')]
-  if (p.resting > 0) return ['warn', t('hswarm.nav.restingOnly')]
+  if (p.resting > 0) return ['rest', t('hswarm.nav.restingOnly')]
   return ['bad', t('hswarm.nav.allKeysDisabled')]
 }
 function jobDot(s: string): Dot {
@@ -597,7 +599,7 @@ async function askIcons() {
 // Hydra Desk 2: the tree as Desk's sidebar draws it (shared/hydra-embed.ts).
 const DOT_TONE: Record<Dot, EmbedTone | 'hollow'> = {
   ok: 'success',
-  warn: 'warning',
+  rest: 'limited',
   nokey: 'hollow',
   off: 'muted',
   run: 'info',
@@ -678,7 +680,7 @@ useDeskSidebar(
     legend: running.value
       ? [
           { dot: 'success', label: t('hswarm.nav.ready') },
-          { dot: 'warning', label: t('hswarm.nav.resting') },
+          { dot: 'limited', label: t('hswarm.nav.resting') },
           { dot: 'hollow', label: t('hswarm.nav.noKey') },
           { dot: 'muted', label: t('hswarm.nav.off') },
         ]
@@ -849,7 +851,7 @@ async function handleRefresh() {
         </div>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 pb-1 text-xs text-muted-foreground">
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.ok" />{{ t('hswarm.nav.ready') }}</span>
-          <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.warn" />{{ t('hswarm.nav.resting') }}</span>
+          <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.rest" />{{ t('hswarm.nav.resting') }}</span>
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.nokey" />{{ t('hswarm.nav.noKey') }}</span>
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.off" />{{ t('hswarm.nav.off') }}</span>
           <span v-if="status?.running" class="ms-auto font-mono">{{ t('hswarm.nav.port', { port: status.port }) }}</span>

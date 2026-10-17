@@ -17,6 +17,8 @@ export const overview = {
     on: 'On',
     off: 'Off',
     attention: 'Needs a look',
+    limit: 'Waiting on a limit',
+    working: 'Working',
     problem: 'Problem',
     notRead: 'Not read yet',
     armed: 'Armed',

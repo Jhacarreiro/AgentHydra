@@ -88,7 +88,7 @@ async function devService(action: 'restart' | 'stop') {
 }
 
 const open = (v: ConnectorView) => v.url && window.open(v.url, '_blank', 'noopener')
-const dot = { ok: 'var(--success)', busy: 'var(--warning, var(--text-muted))', bad: 'var(--danger)', idle: 'var(--text-muted)' }
+const dot = { ok: 'var(--success)', busy: 'var(--text-muted)', bad: 'var(--danger)', idle: 'var(--text-muted)' }
 const ICONS: Record<ConnectorId, Component> = { repoyeti: FolderGit2, redesign: Palette, devwebui: Server, connections: Plug, browser: Globe, teardown: ScanSearch }
 const STOP = BUTTON.replace(' text-text ', ' text-danger-text ')
 const COLUMNS = 'grid grid-cols-[minmax(0,1fr)_64px_120px_64px_36px_28px] items-center gap-x-3'
