@@ -81,11 +81,18 @@ function optImages(b: Json): ImageRef[] | undefined {
     if (typeof o.mediaType !== 'string' || !/^image\/(png|jpeg|gif|webp)$/.test(o.mediaType))
       throw new ChatError(400, `images[${i}].mediaType must be image/png, image/jpeg, image/gif or image/webp`)
     if (o.dataBase64 !== undefined && typeof o.dataBase64 !== 'string') throw new ChatError(400, `images[${i}].dataBase64 must be a string`)
-    const ref: ImageRef = { mediaType: o.mediaType }
+    const ref: ImageRef = { mediaType: o.mediaType, ...originalSize(o) }
     if (typeof o.dataBase64 === 'string') ref.dataBase64 = o.dataBase64
     if (typeof o.name === 'string') ref.name = o.name
     return ref
   })
+}
+
+/** The size the window shrank a picture from (ImageRef.originalWidth and originalHeight), when both are whole pixels. */
+export function originalSize(o: Json): Pick<ImageRef, 'originalWidth' | 'originalHeight'> {
+  const w = o.originalWidth
+  const h = o.originalHeight
+  return Number.isInteger(w) && Number.isInteger(h) && (w as number) > 0 && (h as number) > 0 ? { originalWidth: w as number, originalHeight: h as number } : {}
 }
 
 export function parseCreate(body: unknown): CreateChatRequest {

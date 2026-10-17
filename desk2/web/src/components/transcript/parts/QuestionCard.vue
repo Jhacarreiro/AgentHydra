@@ -2,7 +2,8 @@
 import { computed, reactive, ref } from 'vue'
 import { Check, Clock, MessageCircleQuestion, SkipForward, X } from '@lucide/vue'
 import type { ImageRef, TranscriptItem } from '@shared/protocol'
-import { dataUrlToBase64, validateImage } from '@/components/composer/logic'
+import { dataUrlToBase64, IMAGE_TYPES, validateImage } from '@/components/composer/logic'
+import { readDataUrl, shrinkPicture, type ShrunkPicture } from '@/components/composer/shrink'
 import { useDesk } from '@/stores/desk'
 import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { useTranscript } from '../context'
@@ -20,7 +21,7 @@ const picked = reactive<Record<string, string[]>>({})
 const other = reactive<Record<string, string>>({})
 const otherOn = reactive<Record<string, boolean>>({})
 // Pictures pasted or dropped into the "Other" box, by question text; the server saves them and names them in the answer.
-interface Picture { id: string; name: string; mediaType: string; dataBase64: string; url: string }
+interface Picture { id: string; name: string; mediaType: string; dataBase64: string; url: string; originalWidth?: number; originalHeight?: number }
 const pictures = reactive<Record<string, Picture[]>>({})
 const pictureErr = ref<string | null>(null)
 const dragOver = ref(false)
@@ -61,21 +62,23 @@ function next() {
   else if (complete.value) void submit()
 }
 
-function addFiles(question: string, files: File[]) {
+async function addFiles(question: string, files: File[]) {
   pictureErr.value = null
   for (const file of files) {
-    const bad = validateImage(file)
+    // Shrunk to the side Claude takes before the 5 MB check, as the composer's pictures are (shrink.ts).
+    const pic: ShrunkPicture = IMAGE_TYPES.includes(file.type) ? await shrinkPicture(file) : { file }
+    const bad = validateImage(pic.file)
     if (bad) {
       pictureErr.value = bad
       continue
     }
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      ;(pictures[question] ??= []).push({ id: crypto.randomUUID(), name: file.name || 'Pasted image', mediaType: file.type, dataBase64: dataUrlToBase64(url), url })
+    try {
+      const url = await readDataUrl(pic.file)
+      const original = pic.originalWidth && pic.originalHeight ? { originalWidth: pic.originalWidth, originalHeight: pic.originalHeight } : {}
+      ;(pictures[question] ??= []).push({ id: crypto.randomUUID(), name: pic.file.name || 'Pasted image', mediaType: pic.file.type, dataBase64: dataUrlToBase64(url), url, ...original })
+    } catch {
+      pictureErr.value = `Could not read ${file.name || 'the image'}.`
     }
-    reader.onerror = () => (pictureErr.value = `Could not read ${file.name || 'the image'}.`)
-    reader.readAsDataURL(file)
   }
 }
 function onPaste(e: ClipboardEvent, question: string) {
@@ -85,11 +88,11 @@ function onPaste(e: ClipboardEvent, question: string) {
     .filter((f): f is File => !!f)
   if (!files.length) return
   e.preventDefault()
-  addFiles(question, files)
+  void addFiles(question, files)
 }
 function onDrop(e: DragEvent, question: string) {
   dragOver.value = false
-  addFiles(question, Array.from(e.dataTransfer?.files ?? []))
+  void addFiles(question, Array.from(e.dataTransfer?.files ?? []))
 }
 function removePicture(question: string, id: string) {
   pictures[question] = (pictures[question] ?? []).filter((p) => p.id !== id)
@@ -106,7 +109,7 @@ async function submit(skip = false) {
       for (const x of props.item.questions) {
         answers[x.question] = answerFor(x.question)
         const list = picturesOf(x.question)
-        if (list.length) images[x.question] = list.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64, name: p.name }))
+        if (list.length) images[x.question] = list.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64, name: p.name, ...(p.originalWidth ? { originalWidth: p.originalWidth, originalHeight: p.originalHeight } : {}) }))
       }
       await desk.answerQuestion(ctx.chatId.value, props.item.id, Object.keys(images).length ? { answers, images } : { answers })
     }

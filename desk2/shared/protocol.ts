@@ -175,7 +175,17 @@ export interface ImageRef {
   bytes?: number // file size, for the file card ("PNG, live.png, 67.2KB")
   /** The local file this ref was made from (absolute), so the window can offer "Open in Explorer"; absent for a pasted or generated picture. */
   path?: string
+  /** The picture's size in pixels before the window shrank it to MAX_PICTURE_SIDE; absent when it went as it was. */
+  originalWidth?: number
+  originalHeight?: number
 }
+
+/**
+ * The longest side, in pixels, of a picture a Claude chat is sent inline. Claude's API refuses a request holding more
+ * than 20 pictures when any one is bigger, and Claude Code then fails that chat on every later turn: the window shrinks
+ * every picture it attaches to this, and the server sends a bigger one to a Claude chat as its file path only.
+ */
+export const MAX_PICTURE_SIDE = 2000
 
 export interface ToolResult {
   text: string // the result as text (images described as "[image]"), cut to MAX_TOOL_RESULT_CHARS
