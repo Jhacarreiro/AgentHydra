@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import orch  # noqa: E402
 import schedule_jobs  # noqa: E402
 from lib import armlib  # noqa: E402
-from util import isolate_policy, run_cli  # noqa: E402
+from util import run_cli  # noqa: E402
 
 
 class OrchHelpTest(unittest.TestCase):
@@ -45,9 +45,6 @@ class OrchArmTest(unittest.TestCase):
     def setUp(self):
         self._state = tempfile.TemporaryDirectory()
         os.environ["ORCHESTRATOR_STATE_DIR"] = self._state.name
-        # Every lane on: without its own policy the test read the machine's live one, and a PC with
-        # the dashboard lane switched off failed it (2026-10-17).
-        isolate_policy(self, self._state.name)
         self.calls: list[list[str]] = []
         self.killed: list[list[str]] = []
         self.launched: list[list[str]] = []

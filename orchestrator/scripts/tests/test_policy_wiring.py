@@ -26,12 +26,13 @@ import stubdaemon  # noqa: E402
 class _PolicyCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self._real_path, self._real_cache = configlib.CONFIG_PATH, configlib._CACHE
-        configlib.CONFIG_PATH = Path(self._tmp.name) / "config.json"
+        self._env = mock.patch.dict(os.environ, {"ORCH_CONFIG": str(Path(self._tmp.name) / "config.json")})
+        self._env.start()
         configlib._CACHE = None
 
     def tearDown(self):
-        configlib.CONFIG_PATH, configlib._CACHE = self._real_path, self._real_cache
+        self._env.stop()
+        configlib._CACHE = None
         self._tmp.cleanup()
 
     def policy(self, **pairs):

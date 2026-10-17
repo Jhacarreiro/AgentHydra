@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stall_watch  # noqa: E402
 from lib import stalllib  # noqa: E402
 
-from util import isolate_policy, isolate_state_dir, run_cli  # noqa: E402
+from util import isolate_state_dir, run_cli  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -364,9 +364,8 @@ class LaneTest(unittest.TestCase):
     def test_the_unattended_run_with_the_tray_down_asks_nobody_and_records_it(self):
         # No --force: the armlib gate refuses, and the tray-not-armed recovery row is written to the
         # ledger under this isolated state dir. DISARMED is asserted, not only "nobody asked". The
-        # The policy's CONFIG_PATH points at a config.json that does not exist (no overrides), so
-        # the machine's own config.json cannot switch the lane off.
-        isolate_policy(self, os.environ["ORCHESTRATOR_STATE_DIR"])
+        # policy is the isolated state dir's, which has no config.json (no overrides), so the
+        # machine's own config.json cannot switch the lane off.
         payload, _ = self._run("--yes")
         self.assertEqual(self.asked, [])
         self.assertFalse(payload["acting"])

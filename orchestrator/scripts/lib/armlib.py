@@ -221,7 +221,7 @@ def refuse_unless_armed(argv: list[str], what: str) -> str | None:
     bad = configlib.problems()
     if bad:
         return (f"POLICY FILE UNREADABLE - {what}: planned only, nothing acted. "
-                f"{len(bad)} problem(s) in {configlib.CONFIG_PATH}, first: {bad[0]}. Acting on "
+                f"{len(bad)} problem(s) in {configlib.config_path()}, first: {bad[0]}. Acting on "
                 "defaults could undo a switch you turned off. `python orch.py policy --doctor` "
                 "names them all (or --force for this one run by hand).")
     st = status()

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import goal_watch  # noqa: E402
 from lib import goallib  # noqa: E402
 
-from util import isolate_policy, isolate_state_dir, run_cli  # noqa: E402
+from util import isolate_state_dir, run_cli  # noqa: E402
 
 SID = "11111111-2222-3333-4444-555555555555"
 OTHER = "66666666-7777-8888-9999-000000000000"
@@ -255,9 +255,8 @@ class LaneTest(unittest.TestCase):
     def test_the_unattended_run_with_the_tray_down_types_nothing(self):
         # No --force: the armlib gate is the only thing between this run and the chats. DISARMED is
         # asserted, not only "nothing sent", so a policy-off branch cannot satisfy this test. The
-        # The policy's CONFIG_PATH points at a config.json that does not exist (no overrides), so
-        # the machine's own config.json cannot switch the lane off.
-        isolate_policy(self, os.environ["ORCHESTRATOR_STATE_DIR"])
+        # policy is the isolated state dir's, which has no config.json (no overrides), so the
+        # machine's own config.json cannot switch the lane off.
         payload, _ = self._run("--yes")
         self.assertEqual(self.sent, [])
         self.assertFalse(payload["acting"])
