@@ -439,6 +439,10 @@ export interface DesktopMessageResult {
   /** How it got there ('peer': the chat's own input queue over the native peer channel). */
   route: string
   delivered: true
+  /** The app started a turn on it. */
+  started: boolean
+  /** Not sent yet: the chat's app shows work running in it, so AgentHydra holds it and sends it once the chat is idle. */
+  held: boolean
   detail: string
 }
 

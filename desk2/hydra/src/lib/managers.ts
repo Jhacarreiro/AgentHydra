@@ -30,11 +30,13 @@ export function managerDot(on: boolean | undefined, failed: boolean): ManagerDot
   return on ? 'ok' : 'off'
 }
 
-/** A stopped chat's dot: waiting for its limit to reset is the usage-limit pink, resumed is green, and a continue that was refused,
- * had no app to take it or was given up on is red, since a person may have to step in. */
+/** A stopped chat's dot: waiting for its limit to reset is the usage-limit pink, resumed is green, a continue AgentHydra
+ * holds until the chat's app is idle is under way, and a continue that was refused, had no app to take it or was given
+ * up on is red, since a person may have to step in. */
 export function babysitterChatDot(state: BabysitterChatState): ManagerDot {
   if (state === 'waiting') return 'limit'
   if (state === 'resumed') return 'ok'
+  if (state === 'held') return 'run'
   return 'bad'
 }
 
@@ -48,8 +50,9 @@ export function babysitterDot(s: BabysitterStatus | null | undefined): ManagerDo
   return managerDot(s?.enabled, false)
 }
 
-/** What the Babysitter did, as its dot: a delivered continue is green, anything else is red. */
+/** What the Babysitter did, as its dot: a delivered continue is green, a held one is under way, anything else is red. */
 export function babysitterActDot(did: BabysitterAct['did']): ManagerDot {
+  if (did === 'held') return 'run'
   return did === 'resumed' ? 'ok' : 'bad'
 }
 

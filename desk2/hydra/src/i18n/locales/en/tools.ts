@@ -72,12 +72,14 @@ export default {
       chatState: {
         waiting: 'waiting',
         resumed: 'resumed',
+        held: 'held: chat busy',
         'no-engine': 'no app running',
         'gave-up': 'gave up',
         failed: 'failed',
       },
       did: {
         resumed: 'resumed',
+        held: 'held',
         'gave-up': 'gave up',
         failed: 'failed',
         'no-engine': 'no app running',

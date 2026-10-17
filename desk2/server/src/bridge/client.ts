@@ -623,7 +623,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     // passes its own cadence (Desk's orchestrator peeks each running chat every 10 min, foreman.ts PEEK_MS);
     // unset, a held note waits up to the 24 h expiry, as a person's note does.
     sendToDesktopChat: (sessionId: string, text: string, holdSecs?: number) =>
-      request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true, ...(holdSecs ? { hold_secs: holdSecs } : {}) }, DELIVERY_TIMEOUT_MS),
+      request<{ ok: boolean; route?: string; delivered?: boolean; confirmed?: boolean; held?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true, ...(holdSecs ? { hold_secs: holdSecs } : {}) }, DELIVERY_TIMEOUT_MS),
     /** Claude Desktop's own Stop for a working chat (the daemon's native stop); answers { ok, verified } or a BridgeError. */
     stopDesktopChat: (sessionId: string) =>
       request<{ ok: boolean; verified?: boolean; route?: string }>('POST', `/api/sessions/${enc(sessionId)}/stop`, {}, DELIVERY_TIMEOUT_MS),

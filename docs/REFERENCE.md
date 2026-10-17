@@ -138,7 +138,7 @@ that ignore these selectors still work through the MCP's original filtering and 
 
 **`babysitter`** (`server/src/mcp-babysitter.ts`) answers which chats a usage limit stopped right now: each
 one (a Desk chat, a Claude Desktop or CLI session) with its account, when it stopped, when its limit resets,
-its state (`waiting`, `resumed`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
+its state (`waiting`, `resumed`, `held`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
 the last 10 continues the babysitter sent. It reads Desk 2's `GET /api/babysitter`, which answers from the
 babysitter's last look (every 5 minutes and when a known reset passes; no model is asked), so a call costs
 milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off. Each session row's
