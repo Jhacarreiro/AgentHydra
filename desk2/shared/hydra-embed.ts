@@ -136,8 +136,9 @@ export type DeskMessage =
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' | 'free' }
   /** Open this CliMayte task on the CliMayte node of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
-  /** Open the HSwarm tab, on that job of its Jobs node when one is named. */
-  | { type: 'desk:open-hswarm'; job?: string }
+  /** Open the HSwarm tab, on that job of its Jobs node when one is named, or on `node`, a node of its tree such as
+   *  'managers/babysitter' (Settings > Managers' View more). */
+  | { type: 'desk:open-hswarm'; job?: string; node?: string }
   // Desk's Settings > Managers > Routines row: the Routines tab, on one routine when `id` is given.
   | { type: 'desk:open-routine'; id?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its

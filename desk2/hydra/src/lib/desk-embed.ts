@@ -125,9 +125,9 @@ export function useDeskSidebar(
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: InstanceTableKind } | null>(null)
-/** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the
- *  job on its Jobs node and clears the ask). */
-export const deskSwarmAsk = ref<{ job?: string } | null>(null)
+/** Desk asked for an HSwarm job, a node of its tree, or just the HSwarm tab (App.vue switches to it; HSwarmView
+ *  opens the job on its Jobs node, or selects the node, and clears the ask). */
+export const deskSwarmAsk = ref<{ job?: string; node?: string } | null>(null)
 /** Desk asked for a CliMayte task (App.vue shows the CliMayte node of the HSwarm tab; CliMayteView opens
  *  it once its list is in and clears the ask); `pc` names another PC's. */
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
@@ -232,7 +232,7 @@ if (EMBEDDED) {
     if (!m || typeof m !== 'object' || typeof m.type !== 'string') return
     if (m.type === 'desk:sidebar') sidebarHandlers.get(m.view)?.(m)
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
-    else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
+    else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job, node: m.node }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
     else if (m.type === 'desk:open-routine') routinesAsk.value = { id: m.id }
     else if (m.type === 'desk:settings-changed') void useAppSettings().load()

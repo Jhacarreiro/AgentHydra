@@ -2,7 +2,7 @@
 // it is. A routine's work is found by its id: a CliMayte worker whose group begins `routine-<id>-`, an HSwarm
 // job whose label begins `<id>`.
 
-import type { BabysitterAct, BabysitterChatState, BabysitterStatus } from '@desk/shared/babysitter'
+import { babysitterAttention, type BabysitterAct, type BabysitterChatState, type BabysitterStatus } from '@desk/shared/babysitter'
 import type { RoutineOutcome, RoutineState } from '@desk/shared/routines'
 
 /** The dot a node or a row shows, as the tree draws it (HSwarmView's DOT_CLASS). */
@@ -33,12 +33,12 @@ export function babysitterChatDot(state: BabysitterChatState): ManagerDot {
 }
 
 /** The Babysitter's own dot (owner, 2026-10-16: chats needing its attention read in plain grey): red when its last
- * look failed or a stopped chat needs a person, amber while chats wait on a limit, else on or off. */
+ * look failed or a stopped chat needs a person, amber while chats wait on a limit (shared babysitterAttention, which
+ * Desk's Settings colours by too), else on or off. */
 export function babysitterDot(s: BabysitterStatus | null | undefined): ManagerDot | undefined {
-  if (s?.error) return 'bad'
-  const dots = (s?.stopped ?? []).map((c) => babysitterChatDot(c.state))
-  if (dots.includes('bad')) return 'bad'
-  if (dots.includes('warn')) return 'warn'
+  const attention = s ? babysitterAttention(s) : null
+  if (attention === 'person') return 'bad'
+  if (attention === 'waiting') return 'warn'
   return managerDot(s?.enabled, false)
 }
 

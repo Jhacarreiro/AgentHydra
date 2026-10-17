@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { Check, ChevronRight, Hourglass, ListChecks } from '@lucide/vue'
 import { routineCountLine, storeLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
-import type { BabysitterStatus } from '@shared/babysitter'
+import { babysitterAttention, babysitterNeedsPerson, type BabysitterStatus } from '@shared/babysitter'
 import type { InstanceManagerStatus } from '@shared/instance-manager'
 import type { RoutinesStatus } from '@shared/routines'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
@@ -28,7 +28,7 @@ import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SEL
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
-import { ahUpdateDot, openHydra, seeAhUpdateDot, tellHydra } from '@/components/hydra/api'
+import { ahUpdateDot, openHydra, openSwarmNodeInHydra, seeAhUpdateDot, tellHydra } from '@/components/hydra/api'
 
 // The Routines tab of AgentHydra's pane (its row at the top of this section): slides the pane in, then asks its
 // Routines tab for the list, or for the one routine named.
@@ -255,15 +255,27 @@ watch(() => local.value?.orchestratorModel, (m) => {
 }, { immediate: true })
 
 const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-/** Under the Babysitter row: what a usage limit has stopped now, by account, and what it last continued. */
-const babysitterNote = computed(() => {
+/** The Babysitter row's viewer (owner, 2026-10-16: "a simple viewer in the settings ... View more ... takes me to the
+ *  new section"): what a usage limit has stopped now, red when a chat needs you, amber while chats wait on a limit,
+ *  and what it last continued. View more opens its page, HSwarm > Managers > Babysitter in AgentHydra. */
+const babysitterView = computed(() => {
   const s = babysitter.value
   if (!s) return null
-  const stopped = s.accounts.length
-    ? `Stopped by a limit: ${s.accounts.map((a) => `${a.account} ${a.stopped} (${a.resetsAt === null ? 'reset unknown' : `resets ${clock(a.resetsAt)}`})`).join(', ')}.`
-    : 'Nothing is stopped by a limit.'
+  const n = s.stopped.length
+  const needYou = s.stopped.filter((c) => babysitterNeedsPerson(c.state)).length
+  const head = n
+    ? `${n} ${n === 1 ? 'chat' : 'chats'} stopped by a limit${needYou ? ` · ${needYou} ${needYou === 1 ? 'needs' : 'need'} you` : ''}`
+    : 'Nothing is stopped by a limit'
+  const resets = s.accounts.map((a) => `${a.account}: ${a.resetsAt === null ? 'reset unknown' : `resets ${clock(a.resetsAt)}`}`)
   const last = s.acts.find((a) => a.did === 'resumed')
-  return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
+  const attention = babysitterAttention(s)
+  return {
+    head,
+    detail: [...resets, last ? `last continued ${last.title} at ${clock(last.at)}` : null].filter(Boolean).join(' · '),
+    error: s.error,
+    tone: attention === 'person' ? 'text-danger-text' : attention === 'waiting' ? 'text-warning-text' : 'text-text-2',
+    dot: attention === 'person' ? 'var(--danger)' : attention === 'waiting' ? 'var(--warning)' : s.enabled ? 'var(--success)' : 'var(--text-muted)',
+  }
 })
 
 /** Under the Instance manager row: how many apps it watches, and the last one that went down and what came of it. */
@@ -551,7 +563,6 @@ onBeforeUnmount(() => {
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.id === 'collapseMode' ? COLLAPSE_MODE_LABELS[local?.collapseMode ?? 'off'].sentence : r.description }}
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-ui-sm leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
-                <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ babysitterNote }}</div>
                 <div v-if="r.id === 'instanceManager' && instanceManagerNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ instanceManagerNote }}</div>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
@@ -734,6 +745,26 @@ onBeforeUnmount(() => {
                   {{ bridge === null ? 'Checking…' : bridge.up ? 'Connected' : 'Not running' }}
                 </span>
               </template>
+
+              <!-- The Babysitter's viewer wraps onto its own full-width line, as the routine list does: what is stopped now,
+                   coloured, and View more for its page in AgentHydra (HSwarm > Managers > Babysitter). -->
+              <div v-if="r.id === 'babysitter' && babysitterView" class="basis-full">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-3 rounded-md border border-border px-2.5 py-2 text-left text-ui-sm leading-4.5 hover:bg-fill-hover"
+                  @click="openSwarmNodeInHydra('managers/babysitter')"
+                >
+                  <span class="flex min-w-0 items-start gap-2">
+                    <span class="mt-1.25 inline-block size-2 shrink-0 rounded-full" :style="{ background: babysitterView.dot }" aria-hidden="true" />
+                    <span class="min-w-0">
+                      <span class="block font-medium" :class="babysitterView.tone">{{ babysitterView.head }}</span>
+                      <span v-if="babysitterView.detail" class="block wrap-break-word text-text-muted">{{ babysitterView.detail }}</span>
+                      <span v-if="babysitterView.error" class="block wrap-break-word text-danger-text">{{ babysitterView.error }}</span>
+                    </span>
+                  </span>
+                  <span class="flex shrink-0 items-center gap-0.5 text-text-muted">View more<ChevronRight class="size-3.5" aria-hidden="true" /></span>
+                </button>
+              </div>
 
               <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
                    centred down the list. -->

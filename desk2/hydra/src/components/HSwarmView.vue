@@ -786,7 +786,8 @@ watch(
 
 // Desk asked for one job (its sidebar's job rows): selected once the jobs list is in, which shows its detail
 // (HSwarmJobs opens the job it is given). The job is selected even when the list shows only the newest few.
-// An ask without a job wanted only the tab, which App.vue already showed.
+// An ask for a node (Settings > Managers' View more) selects it at once; an ask with neither wanted only the tab,
+// which App.vue already showed.
 watch(
   [deskSwarmAsk, jobs],
   () => {
@@ -794,6 +795,7 @@ watch(
     if (!ask || (ask.job && !jobs.value)) return
     deskSwarmAsk.value = null
     if (ask.job) select(`jobs/${enc(ask.job)}`)
+    else if (ask.node) select(ask.node)
   },
   { immediate: true },
 )

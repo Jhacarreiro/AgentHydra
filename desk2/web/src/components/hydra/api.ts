@@ -171,6 +171,12 @@ export function openSwarmInHydra(job?: string): void {
   openHydra()
 }
 
+/** Slides AgentHydra in on a node of the HSwarm tab's tree, such as 'managers/babysitter' (Settings > Managers' View more). */
+export function openSwarmNodeInHydra(node: string): void {
+  tellHydra({ type: 'desk:open-hswarm', node })
+  openHydra()
+}
+
 /** Slides AgentHydra in on a CliMayte task, open on the CliMayte node of the HSwarm tab; `pc` for another PC's. */
 export function openWorkerInHydra(id: string, pc?: string | null): void {
   tellHydra(pc ? { type: 'desk:open-worker', id, pc } : { type: 'desk:open-worker', id })
