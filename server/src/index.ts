@@ -42,6 +42,7 @@ import {
   DATA_DIR,
   DATA_DIR_NOTICE,
   DB_PATH,
+  deskAtBoot,
   HOST,
   IS_RELEASE,
   LAUNCHER_PATH,
@@ -1852,10 +1853,20 @@ warmSessionMetaIndex()
 // instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
 warmToolIntentInBackground(MCP_TOOLS)
 
+// A double-click opens the window, and openWindow starts Desk 2 itself. The else-if keeps a headless
+// start from taking the in-flight start first: desk2.start() ignores options on a start already running,
+// so the native window would never open.
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`
   if (!openWindow(url))
     console.error(`[agenthydra] Could not open a browser automatically. Open ${url} manually.`)
+} else if (deskAtBoot()) {
+  void desk2
+    .start()
+    .then((r) => {
+      if (!r.ok) console.error(`[agenthydra] Desk 2 did not start at boot: ${r.reason}`)
+    })
+    .catch((e) => console.error('[agenthydra] Desk 2 did not start at boot:', e))
 }
 
 export type App = typeof app

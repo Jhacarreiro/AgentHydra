@@ -658,6 +658,8 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_INSTANCE_PORT` | `PORT + 1` | preferred port for `--instances` quick mode (hops if busy; separate from the full daemon) |
 | `HOST` | `127.0.0.1` | loopback bind host; only `127.0.0.1`, `localhost`, and `::1` are accepted because the local API is intentionally passwordless |
 | `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
+| `AGENTHYDRA_NO_OPEN` | unset | `1` = open no window or browser: neither the one a release start opens nor the `--instances` quick-mode window |
+| `AGENTHYDRA_DESK_AT_BOOT` | unset | `1` = start Desk 2's server (no window) as soon as the daemon listens, instead of on the first page. Use it for a daemon run from source, or a release with `AGENTHYDRA_NO_OPEN=1`, on a headless Linux or macOS box; a release you start by double-clicking it, without AGENTHYDRA_NO_OPEN, already starts it at boot; a release started from the tray does not, unless this is 1. |
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
 | `HYDRA_FAMILY_DIR` | `~/.hydra-family` | folder of the [Hydra family](#the-hydra-family) manifests, one JSON file per member |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
