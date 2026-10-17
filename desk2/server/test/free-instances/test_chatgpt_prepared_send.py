@@ -214,14 +214,32 @@ class TemporaryChatTests(unittest.TestCase):
         self.assertIs(asyncio.run(_select_temporary_chat(tab, True, None)), True)
         self.assertEqual(tab.clicks, 0)
 
-    def test_a_button_that_stays_off_is_never_taken_as_private(self):
+    def test_a_button_that_stays_off_is_clicked_once_and_never_taken_as_private(self):
         clock = count(0, 2.0)
         tab = FakeTab(['off'] * 20)
         with patch.object(br, 'time', SimpleNamespace(monotonic=lambda: next(clock))):
-            with self.assertRaises(ClaudeError) as error:
-                asyncio.run(_select_temporary_chat(tab, True, None))
-        self.assertEqual(error.exception.code, 'privacy_not_verified')
+            self.assertIs(asyncio.run(_select_temporary_chat(tab, True, None)), False)
         self.assertEqual(tab.clicks, 1)
+
+    def test_a_state_the_page_does_not_show_is_never_clicked(self):
+        # 2026-10-17: the page opens with ?temporary-chat=true; a click on a button whose state could not be read
+        # turned Temporary Chat off again, and every ChatGPT send was refused.
+        for state in ('unknown', 'missing'):
+            with self.subTest(state=state):
+                clock = count(0, 1.0)
+                tab = FakeTab([state] * 20)
+                with patch.object(br, 'time', SimpleNamespace(monotonic=lambda: next(clock))):
+                    self.assertIs(asyncio.run(_select_temporary_chat(tab, True, None)), False)
+                self.assertEqual(tab.clicks, 0)
+
+    def test_without_page_or_website_evidence_the_refusal_names_what_the_page_showed(self):
+        note = 'label=Temporary chat pressed=- checked=- state=-'
+        with self.assertRaises(ClaudeError) as error:
+            _prepared_request(event(website_body(PROMPT)), json.dumps(website_body(PROMPT)), PROMPT, TEXT_MODEL, None,
+                True, [], False, note)
+        self.assertEqual(error.exception.code, 'privacy_not_verified')
+        self.assertIn(f'(page: {note})', str(error.exception))
+        self.assertIn('No message was sent.', str(error.exception))
 
     def test_the_composer_gate_counts_utf16_units_like_the_page(self):
         prompt = '\U0001F600' * 3
@@ -246,15 +264,6 @@ class TemporaryChatTests(unittest.TestCase):
         asyncio.run(_select_temporary_chat(tab, True, None))
         self.assertEqual(tab.clicks, 1)
         self.assertEqual(tab.states, [])
-
-    def test_temporary_mode_that_never_shows_fails_before_sending(self):
-        clock = count(0, 2.0)
-        tab = FakeTab(['missing'] * 20)
-        with patch.object(br, 'time', SimpleNamespace(monotonic=lambda: next(clock))):
-            with self.assertRaises(ClaudeError) as error:
-                asyncio.run(_select_temporary_chat(tab, True, None))
-        self.assertEqual(error.exception.code, 'privacy_not_verified')
-        self.assertIn('No message was sent.', str(error.exception))
 
     def test_the_submit_deadline_grows_with_the_prompt_to_at_most_forty_seconds(self):
         self.assertAlmostEqual(_submit_deadline('x'), 8, places=2)

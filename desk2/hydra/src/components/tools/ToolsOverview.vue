@@ -75,7 +75,7 @@ const DOT_CLASS: Record<ManagerDot | 'none', string> = {
   ok: 'bg-success',
   warn: 'bg-warning',
   off: 'bg-muted-foreground/50',
-  run: 'bg-primary',
+  run: 'bg-info',
   bad: 'bg-destructive',
   none: 'bg-muted-foreground/50',
 }
@@ -84,14 +84,14 @@ const TEXT_CLASS: Record<ManagerDot | 'none', string> = {
   ok: 'text-success',
   warn: 'text-warning',
   off: 'text-muted-foreground',
-  run: 'text-primary',
+  run: 'text-info',
   bad: 'text-destructive',
   none: 'text-muted-foreground',
 }
 
 const PILL_CLASS: Record<RoutineTone, string> = {
   success: 'text-success',
-  info: 'text-primary',
+  info: 'text-info',
   warning: 'text-warning',
   danger: 'text-destructive',
   muted: 'text-muted-foreground',
@@ -99,7 +99,7 @@ const PILL_CLASS: Record<RoutineTone, string> = {
 
 const TONE_DOT_CLASS: Record<RoutineTone, string> = {
   success: 'bg-success',
-  info: 'bg-primary',
+  info: 'bg-info',
   warning: 'bg-warning',
   danger: 'bg-destructive',
   muted: 'bg-muted-foreground/50',
@@ -321,7 +321,7 @@ const summary = computed(() => {
 const attentionText = computed(() => {
   const items = managers.value.filter((m) => m.attention).map((m) => t('tools.overview.attentionItem', { name: m.name, state: m.state }))
   const looks = props.routines?.routines.filter(needsLook).length ?? 0
-  if (looks) items.push(t('tools.overview.attentionRoutines', { n: looks }))
+  if (looks) items.push(t('tools.overview.attentionRoutines', { n: looks }, looks))
   if (!items.length) return ''
   const list = new Intl.ListFormat(locale.value, { style: 'long', type: 'conjunction' }).format(items)
   return t('tools.overview.attention', { items: list })
@@ -342,7 +342,7 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
 
     <section aria-labelledby="tools-overview-managers" class="flex flex-col gap-2">
       <h2 id="tools-overview-managers" class="text-ui font-medium">{{ t('tools.overview.managers') }}</h2>
-      <ul role="list" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" :aria-busy="loading ? 'true' : undefined">
+      <ul role="list" class="grid gap-2 sm:grid-cols-2" :aria-busy="loading ? 'true' : undefined">
         <li v-for="tile in managers" :key="tile.key">
           <button
             type="button"
@@ -396,7 +396,7 @@ const attentionTone = computed(() => (managers.value.some((m) => m.dot === 'bad'
               </span>
               <span class="text-2xs" :class="card.pillClass">{{ card.word }}</span>
               <template v-if="!card.waiting">
-                <span class="flex items-center gap-1 text-2xs text-muted-foreground" :title="exactTime(card.lastAt)">
+                <span v-if="card.last !== card.word" class="flex items-center gap-1 text-2xs text-muted-foreground" :title="exactTime(card.lastAt)">
                   <component :is="card.icon" v-if="card.icon" class="size-3.5 shrink-0" aria-hidden="true" />
                   {{ t('tools.overview.routine.lastRun') }}: {{ card.last }}
                 </span>

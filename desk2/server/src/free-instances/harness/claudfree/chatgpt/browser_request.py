@@ -82,11 +82,23 @@ FOCUS = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[conte
  .find(e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');if(!e)return false;e.focus();return true;})()'''
 SUBMIT = r'''(()=>{const b=[...document.querySelectorAll('button[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[type="submit"]')]
  .find(b=>b.getClientRects().length&&!b.disabled&&b.getAttribute('aria-disabled')!=='true');if(!b)return false;b.click();return true;})()'''
-TEMPORARY = r'''(()=>{const b=document.querySelector('button[aria-label="Temporary chat"]');if(!b)return 'missing';
- const pressed=b.getAttribute('aria-pressed');
- if(pressed==='true'||b.getAttribute('data-state')==='on')return 'on';
- return 'off';})()'''
-TEMPORARY_CLICK = r'''(()=>{const b=document.querySelector('button[aria-label="Temporary chat"]');if(!b)return false;b.click();return true;})()'''
+# The Temporary Chat button's state: 'on' or 'off' only when the button says so in so many words (a pressed or
+# checked state, or a "Turn off/on temporary chat" label), else 'unknown' (or 'missing'). The page is opened with
+# ?temporary-chat=true, so an unknown state is never clicked: a click there turned Temporary Chat OFF (2026-10-17).
+TEMPORARY = r'''(()=>{const b=[...document.querySelectorAll('button[aria-label]')]
+ .find(b=>/temporary chat/i.test(b.getAttribute('aria-label')));if(!b)return 'missing';
+ const label=b.getAttribute('aria-label'),pressed=b.getAttribute('aria-pressed'),checked=b.getAttribute('aria-checked'),
+ state=(b.getAttribute('data-state')||'').toLowerCase();
+ if(pressed==='true'||checked==='true'||['on','checked','active'].includes(state)||/turn off temporary/i.test(label))return 'on';
+ if(pressed==='false'||checked==='false'||['off','unchecked','inactive'].includes(state)||/turn on temporary/i.test(label))return 'off';
+ return 'unknown';})()'''
+TEMPORARY_CLICK = r'''(()=>{const b=[...document.querySelectorAll('button[aria-label]')]
+ .find(b=>/temporary chat/i.test(b.getAttribute('aria-label')));if(!b)return false;b.click();return true;})()'''
+# What the button showed, for a refusal: its own attributes (website UI words, never the prompt or chat text).
+TEMPORARY_DESCRIBE = r'''(()=>{const b=[...document.querySelectorAll('button[aria-label]')]
+ .find(b=>/temporary chat/i.test(b.getAttribute('aria-label')));if(!b)return 'button=missing';
+ const a=n=>(b.getAttribute(n)??'-').slice(0,32);
+ return `label=${a('aria-label')} pressed=${a('aria-pressed')} checked=${a('aria-checked')} state=${a('data-state')}`;})()'''
 COMPOSER_LENGTH = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')]
  .find(e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');if(!e)return 0;
  return (e.value??e.textContent??'').replace(/\s/g,'').length;})()'''
@@ -220,27 +232,34 @@ def _readiness_diagnostic(proof):
     return safe
 
 
-async def _select_temporary_chat(tab, temporary, existing):
-    """Wait until the button shows Temporary Chat on, clicking once only when it is not already on.
+def _page_note(raw):
+    """TEMPORARY_DESCRIBE's answer, kept short and printable for a refusal message."""
+    return ''.join(c for c in str(raw or '')[:200] if c.isprintable())
 
-    Returns True when the page confirmed it; False when there is no page state to read (a continued chat).
+
+async def _select_temporary_chat(tab, temporary, existing):
+    """Wait for the button to show Temporary Chat on, clicking it once only when it says it is off.
+
+    Returns True when the page confirmed it; False when it did not (a continued chat, a state the page does not
+    show, or a button still off), which leaves the decision to the website's own private flag (_prepared_request):
+    without one, nothing is sent. An unknown state is never clicked, since the page opened in Temporary Chat.
     """
     if not temporary or existing:
         return False
-    deadline = time.monotonic() + 10
+    started = time.monotonic()
     clicked = False
     while True:
         state = await tab.evaluate(TEMPORARY)
         if state == 'on':
             return True
-        if not clicked:
+        if state == 'off' and not clicked:
             clicked = bool(await tab.evaluate(TEMPORARY_CLICK))
-        if time.monotonic() >= deadline:
-            raise ClaudeError('Temporary Chat could not be confirmed. No message was sent.', code='privacy_not_verified')
+        if time.monotonic() - started >= (10 if clicked else 3):
+            return False
         await asyncio.sleep(.2)
 
 
-def _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private=False):
+def _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private=False, page_note=''):
     """Keep the website's request and its own headers; the prompt text and privacy flag are ours.
 
     steps records each stage in turn, so a refusal names the one that failed. The flag is forced
@@ -256,7 +275,8 @@ def _prepared_request(event, raw, prompt, model, existing, temporary, steps, pag
         raise ClaudeError('The chat to continue is not a Temporary Chat. No message was sent.', code='privacy_not_verified')
     steps.append('substitute_text_and_privacy')
     if temporary and not existing and not page_private and payload.get('history_and_training_disabled') is not True:
-        raise ClaudeError('The website did not confirm Temporary Chat. No message was sent.', code='privacy_not_verified')
+        seen = f' (page: {page_note})' if page_note else ''
+        raise ClaudeError(f'The website did not confirm Temporary Chat{seen}. No message was sent.', code='privacy_not_verified')
     payload['model'] = model
     payload['messages'][0]['content'] = {'content_type': 'text', 'parts': [prompt]}
     if temporary:
@@ -338,7 +358,7 @@ def _preparation_refusal(inner, steps, raw, source, prompt):
 
 
 async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, prompt, model, existing, temporary,
-        page_private=False):
+        page_private=False, page_note=''):
     request = event.request
     if urlparse(request.url).path != '/backend-api/f/conversation' or request.method != 'POST':
         await tab.send(zd.cdp.fetch.continue_request(event.request_id))
@@ -349,7 +369,7 @@ async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, pr
         return
     steps = []
     try:
-        payload, headers = _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private)
+        payload, headers = _prepared_request(event, raw, prompt, model, existing, temporary, steps, page_private, page_note)
         dispatch.update(sent=True, network_id=event.network_id)
         encoded = base64.b64encode(json.dumps(payload).encode()).decode()
         # This IS the requested message, never a probe followed by
@@ -364,7 +384,8 @@ async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, pr
             if dispatch['sent'] else _preparation_refusal(inner, steps, raw, source, prompt))
 
 
-async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary, page_private=False):
+async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary, page_private=False,
+        page_note=''):
     async def response(event):
         if event.request_id == dispatch['network_id']:
             dispatch['status'] = int(event.response.status)
@@ -374,7 +395,8 @@ async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, exist
 
     async def pause(event):
         await _answer_conversation_request(tab, zd, event, captured=captured, dispatch=dispatch,
-            prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private)
+            prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private,
+            page_note=page_note)
 
     tab.add_handler(zd.cdp.fetch.RequestPaused, pause)
     await tab.send(zd.cdp.fetch.enable(patterns=[zd.cdp.fetch.RequestPattern(
@@ -493,9 +515,11 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
             await _wait_for_composer(http, tab)
             identity_verified = True
             page_private = await _select_temporary_chat(tab, temporary, existing)
+            page_note = '' if page_private or existing or not temporary else _page_note(await tab.evaluate(TEMPORARY_DESCRIBE))
             captured = asyncio.get_running_loop().create_future()
             await _arm_interception(tab, zd, captured=captured, dispatch=dispatch,
-                prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private is True)
+                prompt=prompt, model=model, existing=existing, temporary=temporary, page_private=page_private is True,
+                page_note=page_note)
             await _submit_prompt(tab, zd, prompt)
             payload, headers = await _await_capture(http, captured)
             await _adopt_captured_session(http, browser, headers)

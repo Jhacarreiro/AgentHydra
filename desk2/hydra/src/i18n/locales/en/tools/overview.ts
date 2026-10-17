@@ -8,7 +8,7 @@ export const overview = {
   managers: 'Managers',
   routines: 'Routines',
   summary: '{total} routines · {running} running · {look} need a look · {waiting} awaiting approval',
-  attentionRoutines: '{n} routines need a look',
+  attentionRoutines: '{n} routine needs a look | {n} routines need a look',
   attentionItem: '{name}: {state}',
   dueNow: 'Due now',
   noRoutines: 'No routine is set up.',
