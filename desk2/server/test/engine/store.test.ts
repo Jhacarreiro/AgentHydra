@@ -192,6 +192,22 @@ describe('ChatStore items', () => {
     expect(store.loadItems('c6').map((i) => (i as { text: string }).text)).toEqual(['final'])
   })
 
+  test('close() while a line is still being appended: once it resolves, the next server alone writes the file', async () => {
+    const h = home()
+    const closing = new ChatStore(h)
+    closing.appendItem('c7', text('x', 'running'))
+    await new Promise((r) => setImmediate(r)) // its append is under way
+    await closing.close()
+    const file = closing.itemsFile('c7')
+    const closed = readFileSync(file, 'utf8')
+    const next = new ChatStore(h)
+    next.appendItem('c7', text('x', 'final'))
+    await next.settledItems()
+    await closing.settledItems()
+    expect(readFileSync(file, 'utf8')).toBe(closed + JSON.stringify(text('x', 'final')) + '\n')
+    expect(new ChatStore(h).loadItems('c7').map((i) => (i as { text: string }).text)).toEqual(['final'])
+  })
+
   test('a torn last line is skipped, and the next append starts on its own line', async () => {
     const h = home()
     const store = new ChatStore(h)

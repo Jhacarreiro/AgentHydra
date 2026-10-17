@@ -175,6 +175,26 @@ export class ChatStore {
     renameOver(tmp, this.chatsFile)
   }
 
+  /**
+   * Server shutdown: the writes under way land first, then what is left is written now. Once it resolves this store
+   * writes nothing more, so the next server's store has the files to itself. flush() alone wrote a batch still being
+   * appended a second time, and that batch and its reissue then landed after the next server had read the file, where
+   * the last line per id wins (host/restart.test.ts counted 7 lines at the take-over, then 10).
+   */
+  async close(): Promise<void> {
+    for (;;) {
+      if (this.timer) {
+        clearTimeout(this.timer)
+        this.timer = null
+      }
+      const writing = this.writing
+      await writing
+      await this.settledItems()
+      if (!this.timer && writing === this.writing) break
+    }
+    this.flush()
+  }
+
   /** Waits for the timer's writes so far (tests). */
   settled(): Promise<void> {
     return this.writing
