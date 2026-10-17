@@ -63,6 +63,7 @@ export interface RunState {
   msg: string
   steps: string[]
   walt?: 'ok'
+  need?: string
   tier?: string
   team?: string
   lead?: string | null
@@ -226,7 +227,7 @@ export function scope(dir: string, chat: string, now = new Date()) {
   let waltNote: Record<string, unknown> = {}
   if (hold) {
     rmSync(files.walt, { force: true })
-    if (WALT_YES.test(state.msg)) {
+    if (wantsIt(state.msg)) {
       state.walt = 'ok'
       waltNote = {
         walt: 'The owner wants the held idea built: the work may go ahead. Build it so it breaks nothing.',
@@ -256,6 +257,12 @@ export function scope(dir: string, chat: string, now = new Date()) {
 const WALT = 'person:walt-on-task'
 const WALT_YES =
   /\b(i want to (do|build) it|build it|let'?s build|go ahead and build|i want it built)\b/i
+const WALT_NO = /\b(don'?t|do not|not|never|no)\b[^.,;!?]{0,25}\b(build|do it|want)/i
+
+/** True when the message clearly says to build the held idea; a negated phrase does not count. */
+function wantsIt(msg: string): boolean {
+  return WALT_YES.test(msg) && !WALT_NO.test(msg)
+}
 
 /** The held idea's verdict from the owner's next message: any clear 'I want to do it' lets the work go ahead. */
 function readHold(files: Files): { idea: string } | null {
@@ -434,13 +441,24 @@ function firstQ1(ctx: Ctx, state: RunState, p: Parsed): Reply {
     return next(ctx, state, null)
   }
   state.tier = String(p.n)
-  if (p.n >= 2 && hasLeads(ctx)) {
-    state.groups = [leadGroup(p.text ?? state.msg)]
+  state.need = p.text ?? state.msg
+  if (p.n >= 2 && state.walt !== 'ok' && ctx.cat.has(WALT)) {
+    state.step = 'q2b'
+    return next(ctx, state, null)
+  }
+  return firstAfterGate(ctx, state)
+}
+
+/** A first message's route once the difficulty is known: a lead pick for tier 2 or more, else q3. */
+function firstAfterGate(ctx: Ctx, state: RunState): Reply {
+  const need = state.need ?? state.msg
+  if (Number(state.tier) >= 2 && hasLeads(ctx)) {
+    state.groups = [leadGroup(need)]
     fill(ctx, state.groups[0])
     state.step = 'q6pick'
     return next(ctx, state, null)
   }
-  state.groups = [group('need', p.text ?? state.msg)]
+  state.groups = [group('need', need)]
   fill(ctx, state.groups[0])
   state.step = 'q3'
   return next(ctx, state, null)
@@ -481,6 +499,7 @@ function routeQ2(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Re
 /** A big new idea is held for Walt's speed bump; the owner's answer decides it on the next scope run. */
 function routeQ2b(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
   if (p.kw === 'no') {
+    if (!doc) return firstAfterGate(ctx, state)
     state.step = 'q3'
     return next(ctx, state, doc)
   }

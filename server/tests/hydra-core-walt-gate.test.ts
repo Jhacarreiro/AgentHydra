@@ -90,3 +90,45 @@ test('a message that does not want it tells the chat to save the idea and stop',
   const next: Record<string, unknown> = scope(dir, chat, now)
   expect(String(next.walt)).toContain('idea-list')
 })
+
+test('a first message of difficulty 2 or more asks the big-idea question before the lead', () => {
+  addGatekeeper()
+  startChat(dir, chat, 'Invent a brand new tide planner')
+  scope(dir, chat, now)
+  const q = answer(dir, chat, { answer: 'yes 3: a planner' }, now)
+  expect(q).toMatchObject({ step: 'q2b' })
+  expect(answer(dir, chat, { answer: 'no' }, now)).toMatchObject({ step: 'q6pick' })
+})
+
+test('a first message held by yes stops with a hold and no lead pick', () => {
+  addGatekeeper()
+  startChat(dir, chat, 'Invent a brand new tide planner')
+  scope(dir, chat, now)
+  answer(dir, chat, { answer: 'yes 3: a planner' }, now)
+  expect(answer(dir, chat, { answer: 'yes' }, now)).toMatchObject({
+    verdict: 'hold',
+    walt: 'person:walt-on-task',
+  })
+  expect(existsSync(chatPaths(dir, chat).walt)).toBe(true)
+})
+
+test('a first message of difficulty 1 skips the big-idea question', () => {
+  addGatekeeper()
+  startChat(dir, chat, 'Fix a typo')
+  scope(dir, chat, now)
+  expect(answer(dir, chat, { answer: 'no 1' }, now)).toMatchObject({ verdict: 'go' })
+})
+
+test('a negated phrase does not let the held idea go ahead', () => {
+  for (const msg of ["don't build it", 'do not build it', "I don't want to do it"]) {
+    addGatekeeper()
+    withDoc('Invent a brand new tide planner')
+    scope(dir, chat, now)
+    answer(dir, chat, { answer: 'yes: a planner' }, now)
+    answer(dir, chat, { answer: 'new' }, now)
+    answer(dir, chat, { answer: 'yes' }, now)
+    startChat(dir, chat, msg)
+    const next: Record<string, unknown> = scope(dir, chat, now)
+    expect(String(next.walt)).toContain('idea-list')
+  }
+})
