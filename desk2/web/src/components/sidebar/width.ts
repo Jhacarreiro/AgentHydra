@@ -22,3 +22,12 @@ export function savedSidebarWidth(raw: string | null | undefined): number {
 
 /** How far the chrome bar reaches past an open sidebar this wide: 0 once the sidebar holds it. */
 export const chromeOverhang = (sidebarWidth: number): number => Math.max(0, CHROME_OPEN - sidebarWidth)
+
+// Under COMPACT_WIDTH (Material 3's compact window class; it also fits the default sidebar beside the chat's least 300px)
+// the sidebar is a drawer over the chat, as M3's modal navigation drawer is (DeskFrame `narrow`), and leaves at least
+// DRAWER_GAP of the chat beside it to tap it shut.
+export const COMPACT_WIDTH = 600
+export const DRAWER_GAP = 56
+
+/** The drawer's width in a window this wide: the sidebar's, less whatever would leave under DRAWER_GAP beside it. */
+export const drawerWidth = (sidebarWidth: number, windowWidth: number): number => Math.max(0, Math.min(sidebarWidth, windowWidth - DRAWER_GAP))

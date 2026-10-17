@@ -34,7 +34,7 @@ import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
-import { CHROME_COLLAPSED, SIDEBAR_WIDTH_KEY, chromeOverhang, savedSidebarWidth } from '@/components/sidebar/width'
+import { CHROME_COLLAPSED, COMPACT_WIDTH, SIDEBAR_WIDTH_KEY, chromeOverhang, drawerWidth, savedSidebarWidth } from '@/components/sidebar/width'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
@@ -59,7 +59,7 @@ import { CHAT_DEFAULT, CHAT_MIN, NavHistory, RAIL_INSET, RAIL_MAX, RAIL_MIN, arc
 const SessionRail = lazyPanel(() => import('@/components/rail/SessionRail.vue'))
 import { railOpen, railWidth, saveRailWidth } from '@/components/rail/state'
 import { headerPeek } from '@/components/session-header/state'
-import { useElementSize } from '@vueuse/core'
+import { useElementSize, useWindowSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
 import { externalIndexBySession } from '@/components/external/paging'
@@ -220,6 +220,21 @@ const sidebarWidth = ref(savedSidebarWidth(storage?.getItem(SIDEBAR_WIDTH_KEY)))
 // Open or hidden (header toggle, Ctrl+B), remembered; it slides 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
+// Under COMPACT_WIDTH (a phone's 375px) there is no room for the sidebar beside the chat, so it is a drawer over the chat
+// (sidebar/width.ts): shut until its toggle opens it, shut again once anything is picked, the scrim beside it is tapped or Esc is
+// pressed, and never saved, so the docked sidebar a wide window remembers is untouched. The session rail lies over the chat
+// there too, shut until its button asks for it (railNarrow). Both start shut each time the window turns narrow.
+const { width: windowWidth } = useWindowSize()
+const narrow = computed(() => !collapsed.value && windowWidth.value < COMPACT_WIDTH)
+const drawer = ref(false)
+const railNarrow = ref(false)
+watch(narrow, () => {
+  drawer.value = false
+  railNarrow.value = false
+})
+/** The sidebar holds its column: open, on a window wide enough for it and the chat. */
+const docked = computed(() => sidebarOpen.value && !narrow.value)
+const shownWidth = computed(() => (narrow.value ? drawerWidth(sidebarWidth.value, windowWidth.value) : sidebarWidth.value))
 // The slide moves layers, never a width (owner, 2026-10-08: "the sidebar does not animate open/closed"): animating
 // the column's width laid the whole chat out again on every frame, which a real transcript cannot do in 16ms, so it
 // jumped. While it slides the sidebar lies over the stage and both move by transform, the stage at the window's
@@ -228,7 +243,14 @@ const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY)
 const slide = ref<{ open: boolean; pin: boolean; at: 'from' | 'to' } | null>(null)
 const sliding = computed(() => slide.value !== null)
 let slideTimer: ReturnType<typeof setTimeout> | null = null
-function toggleSidebar(open = !sidebarOpen.value) {
+function toggleSidebar(want?: boolean) {
+  if (narrow.value) {
+    peek.close()
+    peekLive.value = true
+    drawer.value = want ?? !drawer.value
+    return
+  }
+  const open = want ?? !sidebarOpen.value
   if (open === sidebarOpen.value) return
   const pin = open && peekOpen.value
   peek.close()
@@ -266,7 +288,7 @@ const sidebar = ref<InstanceType<typeof Sidebar> | null>(null)
 // show-sidebar toggle, a 6px strip at the window's left edge or the flyout itself. Zones are marked
 // data-peek-zone: 'open' opens it, 'keep' (the chrome bar over its top) only keeps it open. A menu
 // opened from the flyout lives in a portal and counts as part of it.
-const flyout = computed(() => !collapsed.value && !sidebarOpen.value && !sliding.value)
+const flyout = computed(() => !collapsed.value && !docked.value && !sliding.value)
 const peekOpen = ref(false)
 // The flyout animates only once the pointer has used it, so collapsing does not slide it past again.
 const peekLive = ref(false)
@@ -294,7 +316,11 @@ const onPeekFocusIn = (e: FocusEvent) => peek.focused(e.target instanceof Elemen
 const onPeekFocusOut = () => peek.focused(false)
 watch(
   () => src.selected.value,
-  () => peek.close()
+  () => {
+    peek.close()
+    drawer.value = false
+    railNarrow.value = false
+  }
 )
 // A drag reports every pointer move: the width follows once per frame, and is saved once the drag rests.
 let widthFrame = 0
@@ -385,7 +411,7 @@ function toggleHydra(open = !hydraOpen.value) {
     closeDashboard()
     cloudForHydra = !cloud.on.value
     cloud.on.value = true
-    toggleSidebar(true)
+    sidebarBesidePage()
   } else if (cloudForHydra) {
     cloudForHydra = false
     cloud.on.value = false
@@ -394,6 +420,11 @@ function toggleHydra(open = !hydraOpen.value) {
 }
 function keepHydra() {
   if (!props.demo) rememberScreen({ hydra: hydraOpen.value ? { cloud: cloudForHydra } : undefined })
+}
+/** A page slid into the chat's place (AgentHydra, the Dev servers page): the sidebar opens beside it, or as a drawer shuts off it. */
+function sidebarBesidePage() {
+  if (narrow.value) drawer.value = false
+  else toggleSidebar(true)
 }
 // A reload with AgentHydra open opens it again, on the tab it showed (the pane keeps its own tab).
 if (kept.hydra) {
@@ -491,7 +522,7 @@ function toggleDev() {
   cloudForHydra = false
   toggleHydra(false)
   keepHydra()
-  toggleSidebar(true)
+  sidebarBesidePage()
 }
 if (kept.dev && !kept.hydra && devServers.on.value) devServers.openPage()
 function toggleTasks() {
@@ -726,30 +757,36 @@ watch(pane, (p) => {
 // bar's Session details button), and always while Background tasks is on it. A session opened from a search peeks it for a
 // moment (session-header/state.ts), lying over the chat. It takes from the chat only the room the centred text column needs
 // (railReserve), so on a wide window it lies over the empty margin and the column stays where it was.
-const railFloats = computed(() => !railOpen.value && !tasks.value && !!outsideId.value && headerPeek.value)
+// Narrow, it lies over the chat, takes no room and is asked for in that window alone (railNarrow), never by the saved railOpen.
+const railWanted = computed(() => (narrow.value ? railNarrow.value : railOpen.value))
+const setRail = (open: boolean) => {
+  if (narrow.value) railNarrow.value = open
+  else railOpen.value = open
+}
+const railFloats = computed(() => !railWanted.value && !tasks.value && !!outsideId.value && headerPeek.value)
 const railShown = computed(
-  () => (!!chat.value || !!outsideId.value) && !isNew.value && !asideOpen.value && !tasks.value?.expanded && (railOpen.value || !!tasks.value || railFloats.value)
+  () => (!!chat.value || !!outsideId.value) && !isNew.value && !asideOpen.value && !tasks.value?.expanded && (railWanted.value || !!tasks.value || railFloats.value)
 )
 const railAt = computed(() => railWidthIn(railWidth.value, stageWidth.value))
-const railRoom = computed(() => (railFloats.value ? 0 : railReserve(railAt.value, stageWidth.value)))
+const railRoom = computed(() => (railFloats.value || narrow.value ? 0 : railReserve(railAt.value, stageWidth.value)))
 // How far the open rail lies over the chat (its width past the room it takes), as --rail-over on the chat: the transcript's step
 // arrows and peek keep that far in from its right edge (owner, 2026-10-14: the rail "hides the peek and previous message buttons").
-// Not while it only peeks for a moment: the arrows would jump out and back.
-const railOver = computed(() => (railShown.value && !railFloats.value ? Math.max(0, railAt.value + RAIL_INSET - railRoom.value) : 0))
+// Not while it only peeks for a moment (the arrows would jump out and back), nor narrow, where it lies over most of the chat.
+const railOver = computed(() => (railShown.value && !railFloats.value && !narrow.value ? Math.max(0, railAt.value + RAIL_INSET - railRoom.value) : 0))
 function toggleRail() {
   if (railShown.value && !railFloats.value) {
     tasks.value = null
-    railOpen.value = false
+    setRail(false)
     return
   }
   pane.value = null
   if (tasks.value?.expanded) tasks.value = null
-  railOpen.value = true
+  setRail(true)
 }
 /** Background tasks leaves the rail: back to its cards, or (its Close) the rail shut with it. */
 function closeRailTasks(shut: boolean) {
   tasks.value = null
-  railOpen.value = !shut
+  setRail(!shut)
 }
 // It slides in from the right and back out (owner, 2026-10-08, of the panel before it: "still snaps open, ZERO nice
 // animations") on transforms alone, as the sidebar does. The chat takes its new width the moment the rail is asked for or
@@ -886,10 +923,11 @@ function rename(title: string) {
 
 // Keyboard
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape' && peekOpen.value && !e.defaultPrevented && !overlayOpen()) {
+  if (e.key === 'Escape' && (peekOpen.value || drawer.value) && !e.defaultPrevented && !overlayOpen()) {
     // Taken: a docked permission card must not read this Esc as a No.
     e.preventDefault()
     peek.close()
+    drawer.value = false
     return
   }
   const s = matchShortcut(e)
@@ -988,9 +1026,9 @@ function collapseNow() {
 // With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 286: the bar's
 // CHROME_COLLAPSED 290 less its 4px padding); open, after the sidebar, or after the bar where it reaches past a sidebar narrower
 // than its buttons (sidebar/width.ts).
-const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarWidth.value) : CHROME_COLLAPSED))
+const titlePad = computed(() => (docked.value ? 9 + chromeOverhang(sidebarWidth.value) : CHROME_COLLAPSED))
 // On the right the chrome bar sits inside the window's caption buttons, so the title bar ends before it.
-const titlePadEnd = computed(() => (sidebarOpen.value ? CAPTION_W + 9 + chromeOverhang(sidebarWidth.value) : CAPTION_W + CHROME_COLLAPSED))
+const titlePadEnd = computed(() => (docked.value ? CAPTION_W + 9 + chromeOverhang(sidebarWidth.value) : CAPTION_W + CHROME_COLLAPSED))
 const titleStart = computed(() => (sidebarSide.value === 'left' ? titlePad.value : 9))
 /** Dragged to the other half of the window, the sidebar moves there; the drop preview lies over that edge until it lands. */
 const sideDrop = ref<SidebarSide | null>(null)
@@ -1008,10 +1046,10 @@ function moveSidebar(side: SidebarSide) {
   >
     <ChromeBar
       v-show="!collapsed"
-      :sidebar-open="sidebarOpen"
-      :width="sidebarWidth"
+      :sidebar-open="docked || drawer"
+      :width="shownWidth"
       :side="sidebarSide"
-      :sliding="sliding"
+      :sliding="sliding || narrow"
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
       :tasks-on="showTasks"
@@ -1037,30 +1075,31 @@ function moveSidebar(side: SidebarSide) {
     <div
       class="h-full overflow-hidden"
       :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? ['absolute top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
-      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)`, [sidebarSide === 'right' ? 'right' : 'left']: '0px' } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
-      :inert="!collapsed && !sidebarOpen && !peekOpen"
+      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)`, [sidebarSide === 'right' ? 'right' : 'left']: '0px' } : { width: docked ? `${sidebarWidth}px` : '0px' }"
+      :inert="!collapsed && !docked && !peekOpen && !drawer"
       data-testid="sidebar-slot"
     >
-      <!-- Collapsed, this is the hover flyout: positioned on the window (not the 0-wide slot), under the chrome bar (z-21), below dialogs. -->
+      <!-- Collapsed, this is the hover flyout: positioned on the window (not the 0-wide slot), under the chrome bar (z-21), below dialogs.
+           Narrow, it is also the drawer, over its scrim. -->
       <div
         class="h-full"
         :class="
           flyout && [
             'absolute top-0 z-20 shadow-(--shadow-popover)',
             sidebarSide === 'right' ? 'right-0' : 'left-0',
-            !peekOpen && (sidebarSide === 'right' ? 'invisible translate-x-full' : 'invisible -translate-x-full'),
+            !peekOpen && !drawer && (sidebarSide === 'right' ? 'invisible translate-x-full' : 'invisible -translate-x-full'),
             peekLive && 'transition-[translate,visibility] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none'
           ]
         "
         :data-peek-zone="flyout ? 'open' : undefined"
         :data-testid="flyout ? 'sidebar-flyout' : undefined"
-        @transitionend.self="!peekOpen && (peekLive = false)"
+        @transitionend.self="!peekOpen && !drawer && (peekLive = false)"
         @focusin="onPeekFocusIn"
         @focusout="onPeekFocusOut"
       >
         <Sidebar
           ref="sidebar"
-          :width="sidebarWidth"
+          :width="shownWidth"
           :side="sidebarSide"
           :accounts-open="props.accountsOpen"
           :collapsible="collapseMode !== 'off' && canCollapse()"
@@ -1074,6 +1113,8 @@ function moveSidebar(side: SidebarSide) {
       </div>
     </div>
     <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute top-0 z-19 h-full w-1.5" :class="sidebarSide === 'right' ? 'right-0' : 'left-0'" />
+    <!-- The drawer's scrim, over the chat beside it: a tap shuts the drawer. -->
+    <div v-if="drawer" aria-hidden="true" class="absolute inset-0 z-19 bg-black/50 duration-(--dur-slow) motion-safe:animate-in motion-safe:fade-in-0" data-testid="sidebar-scrim" @click="toggleSidebar(false)" />
 
     <!-- Hydra Desk 2: the chat side and the page side (AgentHydra or the Dev servers page) on one track; their buttons
          slide it (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
@@ -1126,7 +1167,7 @@ function moveSidebar(side: SidebarSide) {
               @account="pickAccount"
               :rail-open="railShown && !railFloats"
               :tasks-running="tasksRunningCount"
-              :alert="actionError && (!sidebarOpen || cloud.on.value) ? actionError : ''"
+              :alert="actionError && (!docked || cloud.on.value) ? actionError : ''"
               @toggle-rail="toggleRail"
               @update:show-thinking="setShowThinking"
             />

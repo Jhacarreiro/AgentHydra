@@ -82,6 +82,12 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   the 294px its buttons need: over a narrower sidebar it reaches past the edge, as it does while the sidebar is hidden,
   and the chat's title bar starts after it; the drag handle then starts below the bar. In the footer, the account's
   name stays whole before its "· 41 accounts" does (`web/src/components/sidebar/width.ts`).
+- **On a phone-wide window the sidebar is a drawer over the chat** (2026-10-17). Under 600px (Material 3's compact
+  width) the chat takes the whole window and the sidebar opens over it from its toggle, beside a scrim, as M3's modal
+  navigation drawer does; picking anything, tapping the scrim or Esc shuts it, and it starts shut every time the window
+  turns narrow. The session rail lies over the chat there too, shut until its button asks for it and again once a chat is
+  picked. Neither touches the open or shut state a wide window remembers (`COMPACT_WIDTH` in `sidebar/width.ts`, `narrow`
+  in `shell/DeskFrame.vue`).
 - **A compact sidebar, and project icons in the cloud list** (owner, 2026-10-10). The chrome bar's Compact sidebar
   button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
   headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its
