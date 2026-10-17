@@ -1515,6 +1515,9 @@ export interface CliInstance {
   /** Claude sessions running on this account now (its live registry, CliMayte workers included). Set by
    *  GET /api/cli-instances only; absent elsewhere. */
   liveSessions?: number
+  /** Those sessions' pids, which the Instances tab's exit watch probes (GET /api/instances/alive). Set by GET
+   *  /api/cli-instances only. */
+  livePids?: number[]
   /** When this login was last used on this PC (ms): its newest prompt or keepalive nudge. Set by GET
    *  /api/cli-instances only; null when neither is known. */
   lastActiveAt?: number | null

@@ -2,7 +2,10 @@
 // DeepSeek Harness instances as rows of the combined Instances table: one DSH_HOME per row.
 //
 // Rows only: the table, its header, its empty state and the provider filter belong to
-// InstancesView, and every row here is the shared InstanceRow drawing that table's columns. A
+// InstancesView, and every row here is the shared InstanceRow drawing that table's columns. The tab's
+// filter acts on these rows as on every other kind (useInstanceSource): a home's plan is its API key, it
+// is open while its server runs, and it has no quota window (owner, 2026-10-16: with only the 20x plans
+// shown, "Deep Sea Harness" still showed; it was never run through the filter at all). A
 // DeepSeek account IS a home (credentials, settings, plugin profiles and every conversation live
 // under one root), so most of the ten are facts it does not have: no signed-in account, no process
 // this row owns, and no quota, because the harness bills a pay-as-you-go API key with no 5-hour or
@@ -22,6 +25,7 @@ import InstanceRow from '@/components/InstanceRow.vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useDshInstances } from '@/composables/useDshInstances'
+import { useInstanceSource } from '@/composables/useInstanceSource'
 import { useMergedOrderSource } from '@/composables/useMergedOrder'
 import { pii } from '@/composables/usePrivacy'
 import {
@@ -33,6 +37,7 @@ import {
   renameDshInstance,
 } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
+import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -124,6 +129,29 @@ function menuActionsFor(inst: DshInstance): MenuIconAction[] {
   ]
 }
 
+/** The plan label a home shows and the filter matches: a pay-as-you-go API key, never a subscription. */
+const planLabel = computed(() => t('dshInstances.planApiKey'))
+
+/**
+ * What one home is, as far as the tab's filter is concerned. Every fact is one a home really has: its plan
+ * is its API key (so a plan selection that leaves "API key" out sets it aside), it is open while a server
+ * answers for it, and it has no quota reading (pay-as-you-go has no window to be over), which the quota
+ * facet reads as unknown and leaves alone. No account signs in to a home, so signed-in is unknown too.
+ */
+const filterFacts = (inst: DshInstance): InstanceFacts => ({
+  open: inst.running,
+  plan: planLabel.value,
+  search: searchText(inst.num, inst.name, planLabel.value, 'deepseek'),
+})
+
+// Not sorted on its own (its rows keep the list's order: no sort column), but filtered like every kind.
+const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+  rows: () => instances.value,
+  rowKey: (inst: DshInstance) => inst.id,
+  facts: filterFacts,
+  columns: [],
+})
+
 /** What the shared row draws for one DeepSeek home. Most of the columns are facts a home does not
  *  have, so they are left out of the model and the row says so with a dash: a home is signed in with
  *  an API key, not an account; the list reports whether a server answers for it, not which process
@@ -134,6 +162,7 @@ function rowModel(inst: DshInstance): InstanceRowModel {
     num: inst.num,
     kind: 'desktop',
     provider: 'deepseek',
+    dimmed: isDimmed(inst),
     status: { on: inst.running, title: statusTitle(inst) },
     glyph: { dir: inst.home, running: inst.running },
     // The home and its chat count are the hover, the same place the Claude rows keep their profile
@@ -152,7 +181,7 @@ function rowModel(inst: DshInstance): InstanceRowModel {
       : undefined,
     account: {},
     noQuota: t('dshInstances.noQuota'),
-    plan: { label: t('dshInstances.planApiKey'), plain: true, title: t('dshInstances.noQuota') },
+    plan: { label: planLabel.value, plain: true, title: t('dshInstances.noQuota') },
     // "Now" while its server runs; the list keeps no record of when it last did.
     lastRunning: inst.running ? { label: t('instances.lastRunningNow'), running: true } : null,
     menu: { name: inst.name, actions: menuActionsFor(inst) },
@@ -165,7 +194,7 @@ const rowModels = computed(() => new Map(instances.value.map((inst) => [inst.id,
 // This table is not sorted on its own (its rows keep the list's order), but the All tab ranks them with
 // the other kinds by the facts a home does have: running, its name, and running as its last activity.
 const { orderStyle } = useMergedOrderSource('dsh', {
-  rows: () => instances.value,
+  rows: () => visibleRows.value,
   rowKey: (inst: DshInstance) => inst.id,
   values: (inst) => ({
     status: inst.running,
@@ -235,12 +264,13 @@ async function copyHome(inst: DshInstance): Promise<void> {
 
 onMounted(startPolling)
 
-defineExpose({ openCreate, refresh })
+// hiddenByFilter: the combined header says how many rows the filter took out, these included.
+defineExpose({ openCreate, refresh, hiddenByFilter })
 </script>
 
 <template>
   <InstanceRow
-    v-for="inst in instances"
+    v-for="inst in visibleRows"
     :key="inst.id"
     :columns="columns"
     :row="rowModels.get(inst.id)!"

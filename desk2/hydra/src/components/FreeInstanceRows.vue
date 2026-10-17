@@ -52,7 +52,7 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import type { UsageSnapshot } from '@/lib/api'
 import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
-import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
+import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freePlanLabel, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import { searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
@@ -143,15 +143,18 @@ function tokensOf(i: FreeInstance): TokenParts {
 // persisted key the host sorts every kind by), under the same column keys (owner, 2026-10-07).
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
-// A Free login is never open or closed and has no plan the filter offers, so only its sign-in and
-// usage can set it aside (as on the CLI tab).
+// Every row type obeys every facet (owner, 2026-10-16: with only 20x plans shown, another kind's row still
+// showed). A Free login's plan is the one its site reports (freePlanLabel, "Free" on the Free plan), and it
+// counts as open while a chat or check of it is in flight, closed otherwise: it has no window of its own.
 const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (i: FreeInstance) => i.id,
   facts: (i: FreeInstance) => ({
     usage: usageFor(i),
     signedIn: i.loggedIn,
-    search: searchText(i.num, i.name, i.email, i.provider, 'free'),
+    plan: freePlanLabel(i),
+    open: busy(i.id),
+    search: searchText(i.num, i.name, i.email, i.provider, 'free', freePlanLabel(i)),
   }),
   persisted: { key: desktopSortKey, direction: desktopSortDirection },
   columns: [
