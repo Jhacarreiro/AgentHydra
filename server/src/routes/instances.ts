@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { tryNativeNew } from '../claude-native-new'
 import { resolveAccount } from '../core/accounts'
 import { noteLoggedOutHere, removeLoginEverywhere } from '../core/cli-login-sync'
+import { invalidateCodexProcessCache } from '../core/codex-desktop'
 import { detectDesktopInstall } from '../core/desktop-install'
 import {
   createDshInstance,
@@ -32,6 +33,7 @@ import {
 } from '../core/instances'
 import { createInstance, freeInstanceName, removeInstance } from '../core/lifecycle'
 import { readLoginHistory } from '../core/login-history'
+import { invalidateClaudeProcessCache, isPidAlive } from '../core/process'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
 import { app } from '../http-app'
@@ -64,6 +66,23 @@ app.get('/api/instances', async (c) => {
 // so a profile signed into another account shows that account at once (2026-10-14: a row kept the old account's
 // name and plan for two minutes, until the next list poll). Registered before the `:dir` routes.
 app.get('/api/instances/logins', (c) => c.json(listInstanceLogins()))
+// The Instances tab's exit watch (2026-10-16, owner: a closed Codex app read open until a manual Refresh): which of
+// the app pids its rows show as running still run. A signal-0 probe costs a few ms where a process scan costs a
+// PowerShell spawn, so the tab asks every few seconds while an app is open and re-lists only when one is gone; a gone
+// pid drops both scan caches first, so that re-list reads the processes fresh instead of the cached snapshot.
+const ALIVE_MAX_PIDS = 256
+app.get('/api/instances/alive', (c) => {
+  const pids = [...new Set((c.req.query('pids') ?? '').split(',').map(Number))]
+    .filter((p) => Number.isInteger(p) && p > 0)
+    .slice(0, ALIVE_MAX_PIDS)
+  const alive: Record<string, boolean> = {}
+  for (const pid of pids) alive[pid] = isPidAlive(pid)
+  if (pids.some((pid) => !alive[pid])) {
+    invalidateClaudeProcessCache()
+    invalidateCodexProcessCache()
+  }
+  return c.json({ alive })
+})
 
 // --- instance numbers -------------------------------------------------------
 // The whole fleet under ONE numbering, flattened across desktop / CLI / Codex. This is what makes

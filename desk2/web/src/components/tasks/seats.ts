@@ -75,7 +75,8 @@ export function seatsOf(parent: Pick<ChatSummary, 'id' | 'archived'>, chats: rea
   const started = kids.map((c) => ({ c, ws: chatWorkers([...workers], c.sessionId, c.workerIds).filter((w) => w.active && w.id !== c.workerId) }))
   const live = started.flatMap((s) => s.ws)
   // The worker each seat runs as: its own estimate for the message it is on.
-  const own = workers.filter((w) => kids.some((c) => c.workerId === w.id))
+  const seatWorkers = new Set(kids.map((c) => c.workerId))
+  const own = workers.filter((w) => seatWorkers.has(w.id))
   const working = started.filter((s) => stateOf(s.c) === 'working')
   return {
     total: kids.length,

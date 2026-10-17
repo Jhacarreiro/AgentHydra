@@ -13,7 +13,7 @@ const colors: Array<[string, string]> = [
   ['--git-merged', '#b796ff']
 ]
 const status: Array<[string, string]> = [
-  ['--status-needs-you', 'needs you / finished unread (warning)'], ['--status-error', 'error (danger)'],
+  ['--status-needs-you', 'needs you (warning)'], ['--status-error', 'error (danger)'],
   ['--status-limited', 'limited (pink ring)'], ['--status-working', 'working (blinks)'],
   ['--status-idle', 'idle (1px ring)']
 ]

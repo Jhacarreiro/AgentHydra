@@ -47,8 +47,9 @@ export const CLIMAYTE_STATUS: Record<CliMayteStatus, CliMayteStatusMeta> = {
     label: 'climayte.statusRunning',
     hint: 'climayte.statusRunningHint',
   },
+  // Waiting for an account with room: the usage-limit pink; yellow is only what waits on the owner (owner, 2026-10-17).
   waiting: {
-    variant: 'warning',
+    variant: 'limited',
     icon: Hourglass,
     spin: false,
     label: 'climayte.statusWaiting',
@@ -108,7 +109,7 @@ const OUTCOME_TABLE: Record<
 > = {
   running: { variant: 'info', label: 'climayte.outcomeRunning' },
   done: { variant: 'success', label: 'climayte.outcomeDone' },
-  quota: { variant: 'warning', label: 'climayte.outcomeQuota' },
+  quota: { variant: 'limited', label: 'climayte.outcomeQuota' },
   ceiling: { variant: 'info', label: 'climayte.outcomeCeiling' },
   transient: { variant: 'muted', label: 'climayte.outcomeTransient' },
   auth: { variant: 'warning', label: 'climayte.outcomeAuth' },

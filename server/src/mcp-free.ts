@@ -3,20 +3,22 @@
 // them the way climayte_run sends it into the CLI accounts (owner, 2026-10-06: "orchestrate threads into
 // free accounts"). They live in Desk 2's server, not this daemon, so every tool calls Desk 2's
 // /api/free (desk2/README.md, "Free instances"); this file keeps no account state of its own beyond the
-// batches it is sending, the rests after failed sends and each ChatGPT account's learned pace (free-pace.json).
+// batches it is sending (each saved in free-batches/, so the next daemon carries it on), the rests after
+// failed sends and each ChatGPT account's learned pace (free-pace.json).
 // Each Free account runs one operation at a time, so a batch waits for an idle account rather than ever being
 // refused for a busy one.
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
-import { writeJsonStoreAtomic } from './core/json-store'
+import { writeJsonStoreAtomic, writeJsonTextAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
+import { isPidAlive } from './core/process'
 import { desk2Present, desk2Url } from './desk2'
-import { freeBatchLifecycle } from './free-batch-lifecycle'
+import { freeBatchHandover } from './free-batch-handover'
 import { FreeBatchRetention } from './free-batch-retention'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
-import type { McpEngineTool } from './mcp-stdio.mjs'
 
 type Provider = 'claude' | 'chatgpt'
 interface FreeWindow {
@@ -43,6 +45,7 @@ export interface FreeInstance {
   provider: Provider
   name: string
   loggedIn: boolean
+  poolState?: 'pending' | 'retired'
   usage: FreeUsage | null
   lastActiveAt?: number | null
 }
@@ -141,17 +144,22 @@ function readStatus(): Promise<FreeStatus> {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-const windowOf = (i: FreeInstance, id: string) =>
-  i.usage?.windows.find((w) => w.id === id)?.used_percent ?? null
+/** A window's used percent now: 0 once its reset has passed (the reading is from before the reset, and the next
+ *  send re-reads it), null with no reading. */
+function windowOf(i: FreeInstance, id: string, now = Date.now()): number | null {
+  const w = i.usage?.windows.find((x) => x.id === id)
+  if (!w || w.used_percent == null) return null
+  return w.resets_at && Date.parse(w.resets_at) <= now ? 0 : w.used_percent
+}
 
 /** Room in the 5-hour window, in bands so a few points never decide (a test chat, 2026-10-06: ChatGPT's
  *  unlimited text took every task while three idle Claude accounts at 2% got none). ChatGPT's
- *  unlimited everyday text and a window under half used are plenty (0); no reading (Claude reports
- *  usage only once an account has chatted) is 1; half used is 2, four fifths 3. */
+ *  unlimited everyday text, a window under half used, and no reading (Claude reports usage only once an
+ *  account has chatted: a full window) are all 0; half used is 2, four fifths 3. */
 function roomBand(i: FreeInstance): number {
   if (i.usage?.unlimited_text) return 0
   const used = windowOf(i, 'five_hour')
-  return used == null ? 1 : used < 50 ? 0 : used < 80 ? 2 : 3
+  return used == null || used < 50 ? 0 : used < 80 ? 2 : 3
 }
 
 export function accountLabel(i: Pick<FreeInstance, 'num' | 'provider' | 'name'>): string {
@@ -185,6 +193,15 @@ const ACCOUNT_CODES = new Set([
   'harness_failed',
   'setup_failed',
 ])
+/** Failures that sent nothing: the browser step refused before the provider saw the message (browser_request.py
+ *  raises each only before dispatch). The fault is the harness's, not the account's, so they rest nothing; a new
+ *  thread retries once elsewhere, and they count toward the provider breaker (PROVIDER_CODES). */
+const NOT_SENT_CODES = new Set([
+  'browser_preparation_invalid',
+  'browser_preparation_timeout',
+  'browser_pool_unavailable',
+  'browser_busy',
+])
 
 /** When a nearly spent 5-hour window resets (Claude's reading), else null: ChatGPT reports no window. */
 export function windowResetAt(i: FreeInstance | undefined, now = Date.now()): number | null {
@@ -204,6 +221,7 @@ export function noteFreeOutcome(
 ): void {
   if (code == null) {
     rests.delete(instanceId)
+    saveFreeHealth()
     return
   }
   if (!ACCOUNT_CODES.has(code)) return
@@ -214,6 +232,7 @@ export function noteFreeOutcome(
   if (code === 'rate_limited' && resetAt != null && resetAt > until)
     until = Math.min(resetAt, now + 5 * 60 * 60_000)
   rests.set(instanceId, { until, code, strikes })
+  saveFreeHealth()
 }
 
 export function restingFor(instanceId: string, now = Date.now()): Rest | null {
@@ -240,25 +259,54 @@ const PROVIDER_REST_MS = 10 * 60_000
 const PROVIDER_MAX_REST_MS = 2 * 60 * 60_000
 const PROBE_STALE_MS = 10 * 60_000
 
+/** Failures of the whole provider or of the harness that drives it, not of one account or one task: only these feed
+ *  the breaker. An account's own refusal (rate_limited, login_*) rests that account instead (2026-10-16: 90
+ *  rate_limited Claude sends rested every Claude account for 10 minutes). */
+const PROVIDER_CODES = new Set(['not_found', ...NOT_SENT_CODES])
+
+/** Every send's outcome on a provider, whatever its code: providerHealth (free_status) counts them for an hour, and
+ *  the breaker reads the same notes. Persisted with the rests. */
+interface Outcome {
+  provider: Provider
+  at: number
+  code: string | null
+}
+let outcomes: Outcome[] = []
+const HEALTH_WINDOW_MS = 60 * 60_000
+
+/** A Claude account a new thread was placed on: held for new threads until LEASE_MS after that chat's last turn,
+ *  or until free_release ends it. `chatId` is unknown until the new thread answers. */
+interface Lease {
+  chatId?: string
+  until: number
+}
+const leases = new Map<string, Lease>()
+const LEASE_MS = 4 * 60_000
+
 export function noteProviderOutcome(
   provider: Provider | undefined,
   code: string | null,
   now = Date.now(),
 ): void {
   if (!provider) return
+  outcomes = [...outcomes.filter((o) => now - o.at < HEALTH_WINDOW_MS), { provider, at: now, code }]
   if (code == null) {
     providerRests.delete(provider)
+    saveFreeHealth()
     return
   }
-  const r = providerRests.get(provider) ?? { streak: 0, until: 0, strikes: 0 }
-  r.streak++
-  r.code = code
-  delete r.probing
-  if (r.streak >= PROVIDER_STREAK) {
-    r.strikes++
-    r.until = now + Math.min(PROVIDER_REST_MS * 2 ** (r.strikes - 1), PROVIDER_MAX_REST_MS)
+  if (PROVIDER_CODES.has(code)) {
+    const r = providerRests.get(provider) ?? { streak: 0, until: 0, strikes: 0 }
+    r.streak++
+    r.code = code
+    delete r.probing
+    if (r.streak >= PROVIDER_STREAK) {
+      r.strikes++
+      r.until = now + Math.min(PROVIDER_REST_MS * 2 ** (r.strikes - 1), PROVIDER_MAX_REST_MS)
+    }
+    providerRests.set(provider, r)
   }
-  providerRests.set(provider, r)
+  saveFreeHealth()
 }
 
 /** The provider's rest while it is down, or while its one probe is out; null when it may take new threads. */
@@ -267,6 +315,76 @@ export function providerDown(provider: Provider, now = Date.now()): ProviderRest
   if (!r || r.streak < PROVIDER_STREAK) return null
   if (r.until > now) return r
   return r.probing != null && now - r.probing < PROBE_STALE_MS ? r : null
+}
+
+export interface ProviderHealth {
+  sent: number
+  failed: number
+  okShare: number | null
+  down: boolean
+  downUntil: string | null
+  topReason: string | null
+}
+/** A provider's sends over the last hour, from the same outcome notes the breaker reads (free_status providerHealth). */
+export function providerHealthOf(provider: Provider, now = Date.now()): ProviderHealth {
+  const recent = outcomes.filter((o) => o.provider === provider && now - o.at < HEALTH_WINDOW_MS)
+  const failed = recent.flatMap((o) => (o.code == null ? [] : [o.code]))
+  const reasons = new Map<string, number>()
+  for (const code of failed) reasons.set(code, (reasons.get(code) ?? 0) + 1)
+  const topReason = [...reasons].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  const down = providerDown(provider, now)
+  return {
+    sent: recent.length,
+    failed: failed.length,
+    okShare: recent.length
+      ? Math.round(((recent.length - failed.length) / recent.length) * 100) / 100
+      : null,
+    down: down != null,
+    downUntil: down && down.until > now ? new Date(down.until).toISOString() : null,
+    topReason,
+  }
+}
+
+/** The live lease on a Claude account, or null. */
+export function leaseOf(instanceId: string, now = Date.now()): Lease | null {
+  const lease = leases.get(instanceId)
+  return lease && lease.until > now ? lease : null
+}
+/** A new thread went to the account: it holds the account until LEASE_MS after the chat's first turn. */
+function takeLease(instanceId: string, now: number): void {
+  leases.set(instanceId, { until: now + LEASE_MS })
+  saveFreeHealth()
+}
+/** A turn on the leased chat renews its lease; a turn on another chat leaves the lease as it is. */
+function refreshLease(instanceId: string, chatId: string | undefined, now: number): void {
+  const lease = leases.get(instanceId)
+  if (!lease || (lease.chatId ?? chatId) !== chatId) return
+  leases.set(instanceId, { chatId, until: now + LEASE_MS })
+  saveFreeHealth()
+}
+/** free_release: ends the live lease of the chat, true if there was one. */
+export function releaseLease(chatId: string, now = Date.now()): boolean {
+  for (const [id, lease] of leases)
+    if (lease.chatId === chatId && lease.until > now) {
+      leases.delete(id)
+      saveFreeHealth()
+      return true
+    }
+  return false
+}
+/** A new thread on the account answered with its chat: the chat-less lease is that chat's from now on. */
+function bindNewLease(instanceId: string, chatId: string): void {
+  const lease = leases.get(instanceId)
+  if (!lease || lease.chatId) return
+  leases.set(instanceId, { chatId, until: lease.until })
+  saveFreeHealth()
+}
+/** A new thread on the account ended with no chat: nothing can ever release that lease, so it goes now. */
+function dropNewLease(instanceId: string): void {
+  const lease = leases.get(instanceId)
+  if (!lease || lease.chatId) return
+  leases.delete(instanceId)
+  saveFreeHealth()
 }
 
 /** A pick of a down provider's account after its rest is the probe: no other goes until it ends. */
@@ -382,10 +500,110 @@ export function resetFreeHealth(): void {
   rests.clear()
   providerRests.clear()
   lastPicked.clear()
+  leases.clear()
+  outcomes = []
   sends.clear()
   paces = {}
   seeded = false
+  saveFreeHealth()
 }
+
+/** The state a relaunch must not forget (2026-10-16: about 90 daemon relaunches a day, each one wiping the rests
+ *  and leases a live pull had just set). Paces stay in free-pace.json. */
+interface SavedHealth {
+  rests: Record<string, Rest>
+  providerRests: Partial<Record<Provider, ProviderRest>>
+  lastPicked: Record<string, number>
+  leases: Record<string, Lease>
+  outcomes: Outcome[]
+}
+const freeHealthFile = () => join(DATA_DIR, 'free-health.json')
+// Every note (a send's three of them) would rewrite the whole file: the write waits up to a second instead, and
+// the timer is unref'd so it never holds the daemon open. A process exit flushes what is still pending.
+const SAVE_DEBOUNCE_MS = 1000
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+function writeFreeHealthNow(): void {
+  const saved: SavedHealth = {
+    rests: Object.fromEntries(rests),
+    providerRests: Object.fromEntries(providerRests),
+    lastPicked: Object.fromEntries(lastPicked),
+    leases: Object.fromEntries(leases),
+    outcomes,
+  }
+  try {
+    writeJsonStoreAtomic(freeHealthFile(), saved)
+  } catch {
+    /* a lost write costs the state since the last one, which the next send relearns */
+  }
+}
+function saveFreeHealth(): void {
+  if (saveTimer) return
+  saveTimer = setTimeout(() => {
+    saveTimer = undefined
+    writeFreeHealthNow()
+  }, SAVE_DEBOUNCE_MS)
+  saveTimer.unref?.()
+}
+/** Writes a pending save now: at exit, and before a reload reads the file back. */
+function flushFreeHealth(): void {
+  if (!saveTimer) return
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  writeFreeHealthNow()
+}
+process.once('exit', flushFreeHealth)
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const entriesOf = (v: unknown): [string, unknown][] => (isRecord(v) ? Object.entries(v) : [])
+function readSavedHealth(): Record<string, unknown> | null {
+  try {
+    const saved = JSON.parse(readFileSync(freeHealthFile(), 'utf8')) as unknown
+    return isRecord(saved) ? saved : null
+  } catch {
+    return null
+  }
+}
+/** Reads free-health.json: at boot, and when a test reloads. Expired rests, leases and outcomes are dropped, and
+ *  an entry of the wrong shape (a hand-edited or half-written file) is skipped rather than failing the boot. */
+export function loadFreeHealth(now = Date.now()): void {
+  flushFreeHealth()
+  rests.clear()
+  providerRests.clear()
+  lastPicked.clear()
+  leases.clear()
+  outcomes = []
+  const saved = readSavedHealth()
+  for (const [id, rest] of entriesOf(saved?.rests))
+    if (isRecord(rest) && isNum(rest.until) && isNum(rest.strikes) && rest.until > now)
+      rests.set(id, rest as unknown as Rest)
+  for (const [provider, r] of entriesOf(saved?.providerRests))
+    if (
+      isRecord(r) &&
+      isNum(r.streak) &&
+      isNum(r.until) &&
+      isNum(r.strikes) &&
+      (r.streak < PROVIDER_STREAK ||
+        r.until > now ||
+        (isNum(r.probing) && now - r.probing < PROBE_STALE_MS))
+    )
+      providerRests.set(provider as Provider, r as unknown as ProviderRest)
+  for (const [id, at] of entriesOf(saved?.lastPicked)) if (isNum(at)) lastPicked.set(id, at)
+  for (const [id, lease] of entriesOf(saved?.leases))
+    if (isRecord(lease) && isNum(lease.until) && lease.until > now)
+      leases.set(id, lease as unknown as Lease)
+  const log = Array.isArray(saved?.outcomes) ? saved.outcomes : []
+  outcomes = log.filter(
+    (o): o is Outcome =>
+      isRecord(o) &&
+      typeof o.provider === 'string' &&
+      isNum(o.at) &&
+      (o.code === null || typeof o.code === 'string') &&
+      now - o.at < HEALTH_WINDOW_MS,
+  )
+}
+loadFreeHealth()
 
 const lastUse = (i: FreeInstance) => Math.max(i.lastActiveAt ?? 0, lastPicked.get(i.id) ?? 0)
 
@@ -393,11 +611,14 @@ const lastUse = (i: FreeInstance) => Math.max(i.lastActiveAt ?? 0, lastPicked.ge
  *  one was named, under 90% of its week and not resting after a failure. */
 export function eligibleAccounts(
   instances: FreeInstance[],
-  want: { account?: number; provider?: Provider },
+  want: { account?: number; provider?: Provider; exclude_accounts?: readonly number[] },
 ): FreeInstance[] {
+  const excluded = new Set(want.exclude_accounts ?? [])
   return instances.filter(
     (i) =>
       i.loggedIn &&
+      !i.poolState &&
+      !excluded.has(i.num) &&
       (!want.provider || i.provider === want.provider) &&
       (want.account == null
         ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id) && !providerDown(i.provider)
@@ -412,6 +633,9 @@ const isThinkingModel = (m?: string) => !!m && (/thinking$/.test(m) || /^gpt-.*-
 // on 2026-10-13 all 10 such failures of 30 Luna Thinking threads came from two of the 3 Free-plan accounts, none
 // from the 13 Go accounts, which carried the same load.
 const freePlan = (i: FreeInstance) => (i.provider === 'chatgpt' && i.usage?.plan === 'free' ? 1 : 0)
+const isClaudeModel = (m?: string) => m === 'haiku' || m === 'sonnet' || m === 'opus'
+/** 0 for a Claude account with room (band 0), else 1: ChatGPT ranks after the Claude accounts that have room. */
+const claudeRoomRank = (i: FreeInstance) => (i.provider === 'claude' && roomBand(i) === 0 ? 0 : 1)
 
 /** The idle account with the most room (roomBand), the one used (or tried) longest ago first so work
  *  spreads over every account and both providers, then Claude before ChatGPT, then the lowest number;
@@ -419,16 +643,25 @@ const freePlan = (i: FreeInstance) => (i.provider === 'chatgpt' && i.usage?.plan
 export function pickFreeAccount(
   instances: FreeInstance[],
   busy: ReadonlySet<string>,
-  want: { account?: number; provider?: Provider; model?: string },
+  want: {
+    account?: number
+    provider?: Provider
+    model?: string
+    exclude_accounts?: readonly number[]
+  },
 ): FreeInstance | null {
   const thinking = isThinkingModel(want.model)
   // A paced account is busy until its next send, not ineligible: the task waits for that send, never fails for it.
+  // A Claude account on a live lease is busy for new threads too; its own chat's continuations never come here.
   const free = eligibleAccounts(instances, want).filter(
-    (i) => !busy.has(i.id) && (want.account != null || !pacedOut(i)),
+    (i) => !busy.has(i.id) && !leaseOf(i.id) && (want.account != null || !pacedOut(i)),
   )
+  // A Claude-family model with no provider named: Claude accounts with room go before ChatGPT (2026-10-17).
+  const claudeFirst = isClaudeModel(want.model) && want.provider == null
   free.sort(
     (a, b) =>
       (thinking ? freePlan(a) - freePlan(b) : 0) ||
+      (claudeFirst ? claudeRoomRank(a) - claudeRoomRank(b) : 0) ||
       roomBand(a) - roomBand(b) ||
       lastUse(a) - lastUse(b) ||
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
@@ -446,6 +679,8 @@ export interface FreeTask {
   provider?: Provider
   web_search?: boolean
   model?: FreeModel
+  /** Account numbers a new thread must not go to (a retry's failed account, or the caller's own list). */
+  exclude_accounts?: number[]
 }
 /** A new chat's model: a Claude family, or a ChatGPT model the account may offer (desk2 shared/free-instances.ts). */
 export type FreeModel = 'haiku' | 'sonnet' | string
@@ -479,9 +714,15 @@ interface TaskState {
 interface Item {
   task: FreeTask
   s: TaskState
+  /** Set by a retry after a send that never reached the provider: the other provider, when none was named. */
+  preferProvider?: Provider
   instanceId?: string
   requestId?: string
   startedAt?: number
+  /** Set, with requestId and instanceId, just before the send is posted, and saved first: a daemon that
+   *  died before Desk 2 answered left an operation that may exist, so the next one resends it under the
+   *  same request id, which Desk 2 answers with the operation it already has (service.ts start). */
+  sendingAt?: number
 }
 interface Batch {
   id: string
@@ -489,6 +730,9 @@ interface Batch {
   createdAt: number
   settled: boolean
   done: Promise<void>
+  /** The text last saved, and the save chain that keeps this batch's writes in order. */
+  saved?: string
+  saving?: Promise<void>
 }
 
 const batches = new Map<string, Batch>()
@@ -497,7 +741,155 @@ const QUEUE_LIMIT_MS = 30 * 60_000
 /** How often a running batch looks at Desk 2 again. */
 const TICK_MS = 1500
 const KEEP_BATCH_MS = 6 * 60 * 60_000
-const batchRetention = new FreeBatchRetention(batches, KEEP_BATCH_MS)
+/** A send left half-way is resent only inside this window: Desk 2 keeps a finished operation 15 minutes,
+ *  so a resend later than that could start a second one. Past it, the outcome is reported unknown. */
+const RESEND_WINDOW_MS = 10 * 60_000
+/** How long a restart lets a tick or an admission under way finish before it hands over anyway. */
+const PARK_TIMEOUT_MS = 20_000
+const batchDir = () => join(DATA_DIR, 'free-batches')
+const batchFile = (id: string) => join(batchDir(), `${id}.json`)
+const batchRetention = new FreeBatchRetention(batches, KEEP_BATCH_MS, undefined, (id) => {
+  try {
+    rmSync(batchFile(id), { force: true })
+  } catch {
+    // Held a moment (Defender, the indexer): a later adoption drops it as expired.
+  }
+})
+
+/** What survives the process. `owner` and `handedOff` say whether a live daemon still runs it. */
+interface SavedBatch {
+  v: 1
+  id: string
+  createdAt: number
+  settled: boolean
+  owner: number
+  handedOff: boolean
+  items: Item[]
+}
+
+/** Saves the batch when it changed. Writes of one batch go out in order, so the last state wins. */
+function saveBatch(b: Batch): Promise<void> {
+  const record: SavedBatch = {
+    v: 1,
+    id: b.id,
+    createdAt: b.createdAt,
+    settled: b.settled,
+    owner: process.pid,
+    handedOff: freeBatchHandover.isParked(),
+    items: b.items,
+  }
+  const text = JSON.stringify(record)
+  if (text === b.saved) return b.saving ?? Promise.resolve()
+  b.saved = text
+  b.saving = (b.saving ?? Promise.resolve())
+    .then(() => writeJsonTextAtomic(batchFile(b.id), text))
+    .catch((e) =>
+      console.error(
+        `[agenthydra] free batch ${b.id}: could not save it, a restart would lose it`,
+        e,
+      ),
+    )
+  return b.saving
+}
+
+/** Parks every batch for a restart and saves them; the successor adopts them. Bounded by PARK_TIMEOUT_MS. */
+export async function parkFreeBatches(timeoutMs = PARK_TIMEOUT_MS): Promise<void> {
+  await freeBatchHandover.park(timeoutMs)
+  await saveFreeBatches()
+}
+
+/** The handoff failed: this daemon keeps its batches and goes on sending them. */
+export function resumeFreeBatches(): void {
+  freeBatchHandover.resume()
+  void saveFreeBatches()
+}
+
+/** Every batch on disk as it is now (an exit). */
+export async function saveFreeBatches(): Promise<void> {
+  await Promise.all([...batches.values()].map((b) => saveBatch(b)))
+}
+
+function readSavedBatch(text: string): SavedBatch | null {
+  try {
+    const r = JSON.parse(text) as Partial<SavedBatch>
+    if (r?.v !== 1 || typeof r.id !== 'string' || !Array.isArray(r.items)) return null
+    if (!isNum(r.createdAt) || !isNum(r.owner)) return null
+    if (!r.items.every((it) => isRecord(it) && isRecord(it.task) && isRecord(it.s))) return null
+    return r as SavedBatch
+  } catch {
+    return null
+  }
+}
+
+let adopting: Promise<number> | null = null
+/** Takes on the batches an earlier daemon saved (its relaunch, a quit or a crash): finished ones answer
+ *  free_results again, the rest go on sending. One a live daemon still runs, never handed off, is left to it.
+ *  free_results waits for it, so a poll that lands as the new daemon boots still finds its batch. */
+export function adoptFreeBatches(now = Date.now()): Promise<number> {
+  adopting = adoptSaved(now).catch((e) => {
+    console.error('[agenthydra] free batches: could not read the saved ones', e)
+    return 0
+  })
+  return adopting
+}
+
+async function adoptSaved(now: number): Promise<number> {
+  let names: string[]
+  try {
+    names = (await readdir(batchDir())).filter((n) => n.endsWith('.json'))
+  } catch {
+    return 0
+  }
+  const files = await mapPool(names, 8, async (name) => {
+    const file = join(batchDir(), name)
+    return { file, text: await readFile(file, 'utf8').catch(() => null) }
+  })
+  let adopted = 0
+  for (const { file, text } of files) {
+    if (text === null) continue
+    const saved = readSavedBatch(text)
+    if (!saved || now - saved.createdAt > KEEP_BATCH_MS) {
+      await rm(file, { force: true }).catch(() => undefined)
+      continue
+    }
+    if (batches.has(saved.id)) continue
+    if (saved.owner !== process.pid && !saved.handedOff && isPidAlive(saved.owner)) {
+      console.warn(
+        `[agenthydra] free batch ${saved.id}: pid ${saved.owner} still runs it, so this daemon leaves it alone`,
+      )
+      continue
+    }
+    const b: Batch = {
+      id: saved.id,
+      items: saved.items,
+      createdAt: saved.createdAt,
+      settled: saved.settled,
+      done: Promise.resolve(),
+    }
+    batches.set(b.id, b)
+    if (!b.settled) launch(b)
+    adopted++
+  }
+  batchRetention.prune()
+  if (adopted) console.log(`[agenthydra] free batches: carried on ${adopted} from the last daemon`)
+  return adopted
+}
+
+/** Runs a batch until every task is settled, then keeps it (and its file) for free_results. */
+function launch(b: Batch): void {
+  b.done = runBatch(b)
+    .catch((e) => {
+      for (const it of b.items)
+        if (it.s.state === 'queued' || it.s.state === 'running')
+          Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+      releaseFreeBatchInputs(b.items)
+    })
+    .finally(() => {
+      b.settled = true
+      void saveBatch(b)
+      batchRetention.prune()
+    })
+}
 
 function finish(it: Item, result: FreeResult | undefined, account: FreeInstance | undefined) {
   it.s.seconds = it.startedAt ? Math.round((Date.now() - it.startedAt) / 1000) : undefined
@@ -510,22 +902,27 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
       response: result.response ?? '',
     })
     if (result.warnings?.length) it.s.warnings = [...(it.s.warnings ?? []), ...result.warnings]
-    return
+  } else {
+    it.s.state = 'failed'
+    it.s.chat_id = result?.error?.chat_id ?? result?.chat_id ?? it.s.chat_id
+    it.s.error = result?.error
+      ? `${result.error.code}: ${result.error.message}`
+      : 'The operation ended without a result.'
+    if (account && it.s.chat_id) it.s.error += ` Read it with free_read before sending again.`
   }
-  it.s.state = 'failed'
-  it.s.chat_id = result?.error?.chat_id ?? result?.chat_id ?? it.s.chat_id
-  it.s.error = result?.error
-    ? `${result.error.code}: ${result.error.message}`
-    : 'The operation ended without a result.'
-  if (account && it.s.chat_id) it.s.error += ` Read it with free_read before sending again.`
+  // A new thread's lease waits for its chat: bound to it once it exists, dropped when the thread ended without one.
+  if (!it.task.chat_id && it.instanceId) {
+    if (it.s.chat_id) bindNewLease(it.instanceId, it.s.chat_id)
+    else dropNewLease(it.instanceId)
+  }
 }
 
 const pending = (b: Batch) =>
   b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')
 
-/** Restart guards protect queued work as well as a provider operation already running. */
+/** Batches this daemon is still sending (health's freeBatchesPending). A restart no longer waits for them. */
 export function freeBatchPendingCount(): number {
-  return freeBatchLifecycle.activeCount()
+  return [...batches.values()].filter(pending).length
 }
 
 /** Polling ended without a final acknowledgement; this says nothing about provider success or failure. */
@@ -558,11 +955,24 @@ function readTick(b: Batch, status: { instances: FreeInstance[]; jobs: FreeJob[]
   return { instances: status.instances, byId, busy }
 }
 
-/** A new thread whose account failed for an account-wide reason before any chat existed goes back to the
- *  queue once, for another account; nothing reached the provider, so nothing is sent twice. */
-function retryElsewhere(it: Item, code: string | undefined): boolean {
+/** A new thread whose account failed before any chat existed goes back to the queue once, for another account:
+ *  an account-wide failure, or one that sent nothing (NOT_SENT_CODES), where nothing reached the provider, so
+ *  nothing is sent twice. A retry leaves the failing account out, and a send that never reached the provider
+ *  prefers the other provider when the task named none. */
+function retryElsewhere(
+  it: Item,
+  code: string | undefined,
+  failed: FreeInstance | undefined,
+): boolean {
   if (it.s.retried || it.task.chat_id || it.task.account != null || it.s.chat_id) return false
-  if (!code || !ACCOUNT_CODES.has(code)) return false
+  if (!code || !(ACCOUNT_CODES.has(code) || NOT_SENT_CODES.has(code))) return false
+  if (failed) it.task.exclude_accounts = [...(it.task.exclude_accounts ?? []), failed.num]
+  // A Claude-family model is sent only to Claude (jobBody drops it on ChatGPT), so its retry names Claude and
+  // waits for another Claude account rather than moving the model to ChatGPT.
+  if (failed && isClaudeModel(it.task.model)) {
+    if (!it.task.provider) it.task.provider = 'claude'
+  } else if (failed && NOT_SENT_CODES.has(code))
+    it.preferProvider = failed.provider === 'claude' ? 'chatgpt' : 'claude'
   Object.assign(it.s, { state: 'queued', retried: `${it.s.account}: ${it.s.error}` })
   for (const k of ['account', 'error', 'seconds', 'thread', 'model'] as const) delete it.s[k]
   for (const k of ['instanceId', 'requestId', 'startedAt'] as const) delete it[k]
@@ -578,7 +988,9 @@ function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unkno
       const code = job.result?.ok ? null : (job.result?.error?.code ?? 'unknown')
       if (it.instanceId) noteFreeOutcome(it.instanceId, code, Date.now(), windowResetAt(inst))
       noteProviderOutcome(inst?.provider, code)
-      if (code) retryElsewhere(it, code)
+      if (inst?.provider === 'claude' && it.instanceId)
+        refreshLease(it.instanceId, it.s.chat_id ?? it.task.chat_id, Date.now())
+      if (code) retryElsewhere(it, code, inst)
     }
   } else {
     if ((reply.error as DeskError)?.status === 404)
@@ -650,14 +1062,33 @@ async function readJobs(items: Item[], cache: BatchReads): Promise<JobReply[]> {
   })
 }
 
-function noAccountError(task: FreeTask): string {
+/** Why no account can take a new thread. A provider resting provider-wide says so, with its rest; otherwise the
+ *  skips are named, and the 90%-of-week rule only where Claude accounts are in play (ChatGPT reports no week). */
+function noAccountError(task: FreeTask, instances: FreeInstance[], now = Date.now()): string {
   const asked =
     task.account != null
       ? `account #${task.account}`
       : task.provider
         ? `a ${task.provider} account`
         : 'an account'
-  return `No signed-in Free ${asked} can take it${task.account == null ? ' (accounts at 90% of their week, or resting after a failed send, are skipped)' : ''}. free_status shows them.`
+  const named: Provider[] = task.provider ? [task.provider] : ['claude', 'chatgpt']
+  const live = new Set(instances.filter((i) => i.loggedIn && !i.poolState).map((i) => i.provider))
+  const sides = named.filter((p) => live.has(p))
+  if (task.account == null) {
+    const resting = sides.flatMap((p) => {
+      const rest = providerDown(p, now)
+      return rest
+        ? [
+            `${p} is resting until ${new Date(rest.until).toISOString()} after ${rest.streak} provider-wide failures (${rest.code ?? 'unknown'})`,
+          ]
+        : []
+    })
+    if (resting.length && resting.length === sides.length) return resting.join('; ')
+  }
+  const skipped = sides.includes('claude')
+    ? 'accounts at 90% of their week, or resting after a failed send, are skipped'
+    : 'accounts resting after a failed send are skipped'
+  return `No signed-in Free ${asked} can take it${task.account == null ? ` (${skipped})` : ''}. free_status shows them.`
 }
 
 /** The account a queued task starts on this tick; undefined while that account is busy or after the
@@ -692,10 +1123,37 @@ async function accountFor(
       })
       return undefined
     }
+    if (account.poolState === 'pending') return undefined
+    if (account.poolState === 'retired') {
+      Object.assign(it.s, {
+        state: 'failed',
+        error:
+          'This chat’s Free account was retired from the active pool. Renew it before continuing.',
+      })
+      return undefined
+    }
+    // Rate-limited, the account refuses the turn: the task fails now, unsent, so HSwarm moves it elsewhere.
+    const rest = restingFor(account.id)
+    if (rest?.code === 'rate_limited') {
+      Object.assign(it.s, {
+        state: 'failed',
+        chat_id: it.task.chat_id,
+        error: `rate_limited: account resting until ${new Date(rest.until).toISOString()}`,
+      })
+      return undefined
+    }
     return tick.busy.has(account.id) ? undefined : account
   }
+  // A retry after a send that never reached the provider prefers the other provider, and waits for one of its
+  // accounts if one is free soon, rather than sending back to the provider that just refused it.
+  if (it.preferProvider && !it.task.provider) {
+    const other = { ...it.task, provider: it.preferProvider }
+    const account = pickFreeAccount(tick.instances, tick.busy, other)
+    if (account) return account
+    if (eligibleAccounts(tick.instances, other).length) return undefined
+  }
   if (!eligibleAccounts(tick.instances, it.task).length) {
-    Object.assign(it.s, { state: 'failed', error: noAccountError(it.task) })
+    Object.assign(it.s, { state: 'failed', error: noAccountError(it.task, tick.instances) })
     return undefined
   }
   return pickFreeAccount(tick.instances, tick.busy, it.task) ?? undefined
@@ -720,9 +1178,12 @@ function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
   }
 }
 
-async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
-  const requestId = randomUUID()
+async function startTask(b: Batch, it: Item, account: FreeInstance, busy: Set<string>) {
+  // A send an earlier daemon left half-way goes out under its own request id again (Item.sendingAt).
+  const requestId = it.sendingAt && it.requestId ? it.requestId : randomUUID()
   const body = jobBody(it.task, account, requestId)
+  Object.assign(it, { requestId, instanceId: account.id, sendingAt: it.sendingAt ?? Date.now() })
+  await saveBatch(b)
   try {
     try {
       await desk('POST', '/jobs', body)
@@ -748,7 +1209,13 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
     }
     lastPicked.set(account.id, Date.now())
     if (!it.task.chat_id) noteFreeSend(account.id)
+    if (account.provider === 'claude') {
+      if (it.task.chat_id) refreshLease(account.id, it.task.chat_id, Date.now())
+      else takeLease(account.id, Date.now())
+    }
+    saveFreeHealth()
     Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
+    delete it.sendingAt
     Object.assign(it.s, {
       state: 'running',
       account: accountLabel(account),
@@ -757,54 +1224,94 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
     })
     busy.add(account.id)
   } catch (e) {
+    // Desk 2 answered, so it started nothing: the task is free to go anywhere next tick.
+    if ((e as DeskError).status)
+      for (const k of ['requestId', 'instanceId', 'sendingAt'] as const) delete it[k]
     // Busy since the status was read (another chat, a keepalive nudge): the next tick tries again.
     if ((e as DeskError).status === 409) busy.add(account.id)
     else Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
   }
 }
 
+/** A send an earlier daemon left half-way: resent to its own account under its own request id (Desk 2
+ *  answers with the operation if it has it, so nothing is sent twice), or reported unknown once Desk 2
+ *  may have forgotten it. */
+async function resumeSend(b: Batch, it: Item, tick: Tick): Promise<void> {
+  const account = tick.byId.get(it.instanceId ?? '')
+  if (account && Date.now() - (it.sendingAt ?? 0) <= RESEND_WINDOW_MS)
+    return startTask(b, it, account, tick.busy)
+  Object.assign(it.s, {
+    state: 'failed',
+    error:
+      'operation_unconfirmed: AgentHydra restarted while this send was being made, and it can no longer be checked. The provider operation may have happened: check free_threads and free_read before sending again. No automatic resend was made.',
+  })
+  delete it.sendingAt
+}
+
 /** Sends a batch: each queued task starts on an idle account (a continuation on its thread's own),
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
-  const until = Date.now() + QUEUE_LIMIT_MS
+  // From the batch's own start, so a restart does not give its queue a fresh 30 minutes.
+  const until = b.createdAt + QUEUE_LIMIT_MS
   const cache: BatchReads = {
     threads: null,
     chatIds: b.items.flatMap((it) => (it.task.chat_id ? [it.task.chat_id] : [])),
   }
   await seedOnce()
+  let away: Error | null = null
   while (pending(b)) {
-    let status: FreeStatus
+    // Parked for a restart, the batch waits here; the next daemon carries it on from its file.
+    const leave = await freeBatchHandover.tick()
+    let pause = TICK_MS
     try {
-      status = await readStatus()
-    } catch (e) {
-      // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
-      if (Date.now() > until || (e as DeskError).status !== 0)
-        failQueued(b, String((e as Error).message))
-      releaseFreeBatchInputs(b.items, cache)
-      await sleep(TICK_MS * 2)
-      if (Date.now() > until) {
-        failQueued(b, String((e as Error).message))
+      if (away && Date.now() > until) {
+        failQueued(b, away.message)
         markUnconfirmedFreeOperations(b.items)
         releaseFreeBatchInputs(b.items, cache)
         break
       }
+      away = await tickBatch(b, cache, until)
+      if (away) pause = TICK_MS * 2
+    } finally {
+      leave()
+      await saveBatch(b)
+    }
+    if (pending(b)) await sleep(pause)
+  }
+}
+
+/** One look at Desk 2: reads the running tasks, starts queued ones. Returns Desk 2's error when it is away. */
+async function tickBatch(b: Batch, cache: BatchReads, until: number): Promise<Error | null> {
+  let status: FreeStatus
+  try {
+    status = await readStatus()
+  } catch (e) {
+    // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
+    if (Date.now() > until || (e as DeskError).status !== 0)
+      failQueued(b, String((e as Error).message))
+    releaseFreeBatchInputs(b.items, cache)
+    return e as Error
+  }
+  const tick = readTick(b, status)
+  const running = b.items.filter((x) => x.s.state === 'running')
+  // These reads are independent. Keep health, retries and provider probe accounting in the same
+  // task order as before, even when Desk answers them in a different order.
+  const replies = await readJobs(running, cache)
+  for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
+  for (const it of b.items.filter((x) => x.s.state === 'queued')) {
+    // A restart began: nothing new is sent here; the next daemon starts it.
+    if (freeBatchHandover.isParked()) break
+    if (it.sendingAt) {
+      await resumeSend(b, it, tick)
       continue
     }
-    const tick = readTick(b, status)
-    const running = b.items.filter((x) => x.s.state === 'running')
-    // These reads are independent. Keep health, retries and provider probe accounting in the same
-    // task order as before, even when Desk answers them in a different order.
-    const replies = await readJobs(running, cache)
-    for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
-    for (const it of b.items.filter((x) => x.s.state === 'queued')) {
-      const account = await accountFor(it, tick, cache)
-      if (account) await startTask(it, account, tick.busy)
-    }
-    if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
-    // Retry decisions and queued starts are settled before any input is released.
-    releaseFreeBatchInputs(b.items, cache)
-    if (pending(b)) await sleep(TICK_MS)
+    const account = await accountFor(it, tick, cache)
+    if (account) await startTask(b, it, account, tick.busy)
   }
+  if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+  // Retry decisions and queued starts are settled before any input is released.
+  releaseFreeBatchInputs(b.items, cache)
+  return null
 }
 
 function snapshot(b: Batch) {
@@ -821,9 +1328,20 @@ function snapshot(b: Batch) {
       ? {}
       : {
           poll: `free_results { batch: "${b.id}" }`,
-          note: 'Still sending: the batch goes on after this call. Poll it; nothing is lost by waiting.',
+          note: freeBatchHandover.isParked()
+            ? 'AgentHydra is restarting onto new code: this batch is saved, and the next daemon sends the rest in a few seconds. Poll it; nothing is lost.'
+            : 'Still sending: the batch goes on after this call. Poll it; nothing is lost by waiting.',
         }),
   }
+}
+
+/** Waits for the batch, at most `ms`. A restart cuts the wait short, so the caller has its answer and the
+ *  batch id before this daemon exits; while one is under way a wait is a second at most. */
+async function waitFor(b: Batch, ms: number): Promise<void> {
+  const cut = freeBatchHandover.isParked()
+    ? sleep(Math.min(ms, 1000))
+    : Promise.race([sleep(ms), freeBatchHandover.nextPark()])
+  await Promise.race([b.done, cut])
 }
 
 function waitMs(a: Record<string, unknown>): number {
@@ -857,6 +1375,9 @@ function readTask(raw: unknown, index: number): FreeTask {
     ...(provider ? { provider } : {}),
     ...(t.web_search === true ? { web_search: true } : {}),
     ...(model ? { model: model as FreeModel } : {}),
+    ...(t.chat_id == null && Array.isArray(t.exclude_accounts)
+      ? { exclude_accounts: t.exclude_accounts.map(Number).filter(Number.isInteger) }
+      : {}),
   }
 }
 
@@ -923,6 +1444,9 @@ async function freeStatus() {
           : i.usage.unlimited_text
             ? 'unlimited everyday text'
             : `5h ${windowOf(i, 'five_hour') ?? '?'}%, week ${windowOf(i, 'seven_day') ?? '?'}%`,
+        // The Claude 5-hour used percent HSwarm ranks and fits by (free_route.py _room): 0 once its reset has passed.
+        five_hour_pct: i.provider === 'claude' ? windowOf(i, 'five_hour', now) : null,
+        leased: i.provider === 'claude' && leaseOf(i.id, now) != null,
         threads: status.threadCounts?.[i.id] ?? 0,
         // Desk's count of how its messages ended (desk2 free-instances/health.ts); "failing" at 90% of 5 or more.
         ...(status.health?.[i.id]
@@ -933,6 +1457,10 @@ async function freeStatus() {
       }
     }),
     running: status.jobs.filter((j) => j.state === 'running').length,
+    providerHealth: {
+      chatgpt: providerHealthOf('chatgpt', now),
+      claude: providerHealthOf('claude', now),
+    },
   }
 }
 
@@ -967,6 +1495,12 @@ export const FREE_TOOLS: HydraTool[] = [
                 description: "A new thread's name, shown in free_threads and AgentHydra.",
               },
               account: { type: 'number', description: 'Only this account number (free_status).' },
+              exclude_accounts: {
+                type: 'array',
+                items: { type: 'number' },
+                description:
+                  'A new thread must not go to these account numbers (free_status). Ignored for a continuation.',
+              },
               provider: {
                 type: 'string',
                 enum: ['claude', 'chatgpt'],
@@ -998,44 +1532,42 @@ export const FREE_TOOLS: HydraTool[] = [
         task: readTask(t, i),
         s: { task: i, state: 'queued' },
       }))
-      const release = freeBatchLifecycle.acquire()
-      let transferred = false
+      // Never refused for a restart: a restart lets this preflight finish, and a batch admitted while it
+      // is under way is saved for the next daemon to send.
+      const leave = freeBatchHandover.track()
+      let b: Batch
       try {
         // Fail before anything is queued when Desk 2 cannot be reached at all.
         await readStatus()
-        const b: Batch = {
+        b = {
           id: randomUUID().slice(0, 8),
           items,
           createdAt: Date.now(),
           settled: false,
           done: Promise.resolve(),
         }
-        b.done = runBatch(b)
-          .catch((e) => {
-            for (const it of b.items)
-              if (it.s.state === 'queued' || it.s.state === 'running')
-                Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-            releaseFreeBatchInputs(b.items)
-          })
-          .finally(() => {
-            release()
-            b.settled = true
-            batchRetention.prune()
-          })
-        transferred = true
         batches.set(b.id, b)
+        await saveBatch(b)
+        launch(b)
         batchRetention.prune()
-        await Promise.race([b.done, sleep(waitMs(a))])
-        return snapshot(b)
       } finally {
-        if (!transferred) release()
+        leave()
       }
+      await waitFor(b, waitMs(a))
+      return snapshot(b)
     },
+  },
+  {
+    name: 'free_release',
+    description:
+      "Ends a Free thread's lease on its Claude account, so the account takes new threads at once rather than when its 4-minute lease runs out. HSwarm calls it when its task ends. `released` is true when a live lease ended; a second call, or a chat holding no lease, answers false.",
+    inputSchema: S({ chat_id: { type: 'string' } }, ['chat_id']),
+    run: async (a) => ({ released: releaseLease(str(a.chat_id)) }),
   },
   {
     name: 'free_results',
     description:
-      "A free_chat batch: each task's state (queued, running, done, failed), account, chat_id and reply. Waits up to `wait_s` (at most 45, the default) for the batch to finish. Batches are kept 6 hours in this AgentHydra's memory; a restart loses them, never the threads (free_threads, free_read).",
+      "A free_chat batch: each task's state (queued, running, done, failed), account, chat_id and reply. Waits up to `wait_s` (at most 45, the default) for the batch to finish. Batches are kept 6 hours and outlive an AgentHydra restart: the next daemon carries each one on and answers for it here.",
     inputSchema: S(
       {
         batch: { type: 'string' },
@@ -1048,12 +1580,13 @@ export const FREE_TOOLS: HydraTool[] = [
     ),
     run: async (a) => {
       batchRetention.prune()
+      if (!batches.has(str(a.batch))) await adopting
       const b = batches.get(str(a.batch))
       if (!b)
         throw new Error(
-          `no batch ${str(a.batch)} here (kept 6 hours, lost on a restart): free_threads lists the threads, free_read reads one`,
+          `no batch ${str(a.batch)} here (kept 6 hours): free_threads lists the threads, free_read reads one`,
         )
-      await Promise.race([b.done, sleep(waitMs(a))])
+      await waitFor(b, waitMs(a))
       return snapshot(b)
     },
   },

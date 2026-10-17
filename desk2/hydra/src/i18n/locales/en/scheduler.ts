@@ -1,6 +1,6 @@
 export default {
-  off: 'Scheduler off',
-  idle: 'Scheduler idle',
+  off: 'Off',
+  idle: 'Idle',
   running: '{n} running',
   dispatching: 'Dispatching {n}',
   nextIn: 'Next in {time}',
@@ -40,6 +40,6 @@ export default {
   scheduleClear: 'Clear',
   scheduleNotSet: 'Run as soon as it can',
   // AH-20: distinct from `off` — the daemon could not even be asked.
-  unavailable: 'Scheduler unavailable',
+  unavailable: 'Unavailable',
   unavailableHint: 'Could not read scheduler status: {reason}.',
 }

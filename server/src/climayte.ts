@@ -221,6 +221,7 @@ import {
 } from './climayte-wave-ops'
 import { type CliAuthCheckResult, createCliAuthChecker } from './core/cli-auth-check'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
+import { setDesktopCliAuthChecker } from './core/desktop-cli-feed'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { loadCatalog } from './hydra-core/catalog'
@@ -310,6 +311,13 @@ const verifyCliAuth = createCliAuthChecker({
   verified: (instance, token) => {
     if (instance.name) clearVerifiedUsageAuthFailure(instance.name, token)
   },
+  rejected: (instance) => {
+    walls[instance.id] = {
+      reason: 'signed out',
+      until: Date.now(),
+      cred: credStamp(instance.configDir),
+    }
+  },
 })
 
 /** Authenticate the current grant without sending a message or refreshing it. Only a verified,
@@ -320,7 +328,7 @@ export async function climayteCheckCliAuth(
 ): Promise<CliAuthCheckResult> {
   load()
   const result = await verifyCliAuth(id, expectedEmail)
-  if (result.wallCleared) {
+  if (result.wallCleared || result.wallSet) {
     trySaveWalls()
     schedule(0)
   }
@@ -361,6 +369,7 @@ function recheckSignedOut(accounts: CliMayteAccount[]): void {
 }
 
 setCliLoginVeto(climayteSignedOutReason)
+setDesktopCliAuthChecker(climayteCheckCliAuth)
 
 function startCheck(w: CliMayteWorker, relaunches = 0): void {
   if (!w.check) return

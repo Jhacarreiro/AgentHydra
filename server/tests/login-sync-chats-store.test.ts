@@ -1,7 +1,7 @@
 // server/tests/login-sync-chats-store.test.ts — the chat and chunk routes of the real login sync Worker.
 
 import { expect, test } from 'bun:test'
-import { base, cron, env, store, storeDb } from './login-sync-store'
+import { base, cron, env, forgetPcs, store, storeDb, token } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const chunk = (id: string, seq: number, blob: string, by = 'pc-a') =>
@@ -144,4 +144,71 @@ test('the daily cron frees a day-old session’s chunks that no row names and gi
   expect((await store('GET', `/v1/chats/${orphan}/chunks`)).json.chunks).toEqual([])
   expect((await store('GET', `/v1/chats/${young}/chunks`)).json.chunks).toHaveLength(1)
   expect((await store('GET', `/v1/chats/${named}/chunks`)).json.chunks).toHaveLength(1)
+})
+
+// The relay: a chat row naming its session, the PC it started on and its stream (no `k: 'r'`, so a chat
+// sync PC in another test file never takes it for a record).
+const relayChat = async (writer: string, stream: string) => {
+  const id = newId()
+  const session = newId()
+  await store('PUT', `/v1/chats/${id}`, {
+    version: 0,
+    blob: 'r',
+    meta: { s: session, pc: writer, o: stream },
+  })
+  return { id, session }
+}
+const ack = (id: string, pc: string, next: number, o: string) =>
+  store('POST', `/v1/chats/${id}/ack`, { pc, next, o })
+const poll = (pc: string) =>
+  fetch(`${base}/v1/changes?since=0`, {
+    headers: { authorization: `Bearer ${token}`, 'x-agenthydra-pc': pc },
+  }).then((r) => r.text())
+
+test('a reader’s ack frees the chunks every reader holds and their room; below that floor a read is 410 and a write is taken', async () => {
+  forgetPcs()
+  const writer = newId()
+  const reader = newId()
+  const { id, session } = await relayChat(writer, 'o1')
+  for (const [seq, blob] of ['aaaa', 'bbbb', 'cccc'].entries())
+    expect((await chunk(session, seq, blob, writer)).status).toBe(200)
+  try {
+    env.CHAT_STORE_MB = '0.000001'
+    const used = (await chunk(newId(), 0, 'a')).json.used
+    env.CHAT_STORE_MB = String((used + 5.5) / 1048576)
+    expect((await chunk(newId(), 0, 'z'.repeat(8))).status).toBe(507)
+
+    expect((await ack(id, reader, 2, 'o1')).json).toEqual({ ok: true, floor: 2 })
+    expect((await chunk(newId(), 0, 'z'.repeat(8))).status).toBe(200)
+  } finally {
+    delete env.CHAT_STORE_MB
+  }
+  const rest = (await store('GET', `/v1/chats/${session}/chunks?from=2`)).json
+  expect(rest.chunks.map((c: { seq: number }) => c.seq)).toEqual([2])
+  const gone = await store('GET', `/v1/chats/${session}/chunks?from=0`)
+  expect(gone).toEqual({ status: 410, json: { error: 'gone', floor: 2 } })
+  expect(await chunk(session, 0, 'aaaa', writer)).toEqual({
+    status: 409,
+    json: { error: 'taken', next: 3 },
+  })
+  expect((await chunk(session, 3, 'dddd', writer)).status).toBe(200)
+})
+
+test('a chat’s readers: a PC seen that never acks holds the chunks, the PC it started on is none, and an ack of another stream frees nothing', async () => {
+  forgetPcs()
+  const writer = newId()
+  const acking = newId()
+  const older = newId() // polls the store but has no relay: an older build, or chats off
+  await poll(writer)
+  await poll(older)
+  const { id, session } = await relayChat(writer, 'o1')
+  await chunk(session, 0, 'aaaa', writer)
+  const held = async () => (await store('GET', `/v1/chats/${session}/chunks`)).json.chunks?.length
+
+  expect((await ack(id, acking, 1, 'o1')).json).toEqual({ ok: true, floor: 0 })
+  expect(await held()).toBe(1)
+  expect(await ack(id, older, 1, 'o2')).toEqual({ status: 409, json: { error: 'stream changed' } })
+  expect(await held()).toBe(1)
+  expect((await ack(id, older, 1, 'o1')).json).toEqual({ ok: true, floor: 1 })
+  expect((await store('GET', `/v1/chats/${session}/chunks`)).status).toBe(410)
 })

@@ -9,6 +9,7 @@
 
 import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
+import { branchOf } from '../git/branch'
 import { copyFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
@@ -310,6 +311,7 @@ export class ChatManager {
 
   listItems(id: string): TranscriptItem[] {
     const e = this.entry(id)
+    this.refreshBranch(e)
     // A CliMayte chat: its worker's transcript, with the lines Hydra Desk wrote (a move, a failure) in time order.
     if (e.chat.workerId !== undefined) return this.withWaiting(e, this.deskItems(e))
     const live = e.runtime?.running === true
@@ -430,7 +432,7 @@ export class ChatManager {
   /** ChatGPT runs on the signed-in Free ChatGPT accounts. */
   private chatgptService(): ChatServiceInfo {
     const free = this.free()
-    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn).length : 0
+    const accounts = free ? free.allInstances().filter((i) => i.provider === 'chatgpt' && i.loggedIn && !i.poolState).length : 0
     const why = !free ? 'ChatGPT needs Free instances, which are not running in this Desk.' : accounts ? null : 'No ChatGPT account is signed in. Sign one in on the Free page.'
     return { kind: 'chatgpt', label: SERVICE_LABEL.chatgpt, ready: !why, accounts, ...(why ? { why } : {}) }
   }
@@ -2232,6 +2234,17 @@ export class ChatManager {
     if (e) this.turnEnded(e)
   }
 
+  /** Reads the chat folder's branch in the background (kept per folder, git/branch.ts) and sends the chat when it changed. */
+  private refreshBranch(e: Entry): void {
+    const cwd = e.chat.cwd
+    if (!cwd) return
+    void branchOf(cwd).then((branch) => {
+      if ((e.chat.gitBranch ?? null) === branch && e.chat.gitBranch !== undefined) return
+      e.chat.gitBranch = branch
+      this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
+    })
+  }
+
   /** A chat that was live and no longer is ends its turn once: AgentHydra tells the chats waiting on it (completions.ts). */
   private turnEnded(e: Entry): void {
     if (LIVE.has(e.chat.status)) {
@@ -2240,6 +2253,7 @@ export class ChatManager {
     }
     if (!e.turnLive) return
     e.turnLive = false
+    this.refreshBranch(e)
     const outcome = e.chat.status === 'error' ? 'failed' : e.chat.status === 'stopped' ? 'cancelled' : 'done'
     this.bridge.completionFinished(`desk-chat:${e.chat.id}`, outcome).catch(() => {})
   }

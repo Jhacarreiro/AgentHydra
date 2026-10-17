@@ -748,21 +748,42 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** A whole outside session's history, kept by file size and mtime (a file that grew is read again). */
   const wholeKept = new Map<string, { key: string; items: TranscriptItem[]; index: TranscriptIndex }>()
   const WHOLE_KEPT = 3
+  /** Only the index and context numbers of the newest INDEX_KEPT sessions: the rail's reads and the poller's warm-up come
+   *  from here, so opening a chat does not read its whole transcript again. */
+  const indexKept = new Map<string, { key: string; index: TranscriptIndex }>()
+  const INDEX_KEPT = 50
+  const INDEX_WARM = 20
+  /** The size|mtime key of the session's file: its Claude Code .jsonl, else its Codex rollout (a Codex chat's items come from
+   *  the daemon's tail, which grows with the rollout); '' when neither is known or the file is gone. Before the rollout counted,
+   *  a Codex chat had no key, so its index was never kept and the warm-up rebuilt the same one at every poll. */
+  async function fileKey(sessionId: string): Promise<string> {
+    const file = foundAt.get(sessionId) ?? (await codexRollout(sessionId).catch(() => null))
+    if (!file) return ''
+    try {
+      const st = await stat(file)
+      return `${st.size}|${st.mtimeMs}`
+    } catch {
+      return ''
+    }
+  }
+  function keepIndex(sessionId: string, key: string, index: TranscriptIndex): void {
+    indexKept.delete(sessionId)
+    indexKept.set(sessionId, { key, index })
+    while (indexKept.size > INDEX_KEPT) indexKept.delete(indexKept.keys().next().value!)
+  }
   async function externalWhole(sessionId: string, cwd: string | null): Promise<{ items: TranscriptItem[]; index: TranscriptIndex }> {
+    // The file's key is checked before the transcript is read: an unchanged file costs one stat.
+    const before = await fileKey(sessionId)
+    const hit = wholeKept.get(sessionId)
+    if (before && hit && hit.key === before) return hit
     const items = await externalHistory(sessionId, cwd)
     const file = foundAt.get(sessionId)
-    let key = ''
-    try {
-      const st = file ? await stat(file) : null
-      if (st) key = `${st.size}|${st.mtimeMs}`
-    } catch {
-      // gone: not kept
-    }
+    const key = await fileKey(sessionId)
     const kept = wholeKept.get(sessionId)
     if (key && kept && kept.key === key) return kept
     // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
     // for a chat with none, a Codex rollout's last token_count (with its window).
-    let context: { tokens: number; window: number | null } | null = null
+    let context: { tokens: number; window: number | null; total?: number | null } | null = null
     try {
       if (key && file) {
         const tokens = lastContextTokens(file)
@@ -774,17 +795,45 @@ export function createBridge(opts: BridgeOptions = {}) {
     } catch {
       // gone since it was found: no context, the rest of the index stands
     }
-    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null } }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null, sessionTokens: context?.total ?? null } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)
       while (wholeKept.size > WHOLE_KEPT) wholeKept.delete(wholeKept.keys().next().value!)
+      keepIndex(sessionId, key, built.index)
     }
     return built
   }
 
   async function externalIndex(sessionId: string, cwd: string | null = null): Promise<TranscriptIndex> {
+    const key = await fileKey(sessionId)
+    const hit = indexKept.get(sessionId)
+    if (key && hit && hit.key === key) return hit.index
     return (await externalWhole(sessionId, cwd)).index
+  }
+
+  /** Builds the index of the one most recently active idle session (of the INDEX_WARM newest) whose file changed since it
+   *  was last built, so opening it finds it ready. One build per call, none while a build runs; true when it built one. */
+  let warming = false
+  async function warmIndexes(sessions: readonly Pick<ExternalSession, 'id' | 'cwd' | 'status' | 'lastActivityAt'>[]): Promise<boolean> {
+    if (warming) return false
+    warming = true
+    try {
+      const newest = [...sessions].sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)).slice(0, INDEX_WARM)
+      for (const s of newest) {
+        if (s.status === 'working') continue // its file changes every step: warmed when it rests
+        const key = await fileKey(s.id)
+        const hit = indexKept.get(s.id)
+        if (key && hit && hit.key === key) continue
+        await externalWhole(s.id, s.cwd)
+        return true
+      }
+      return false
+    } catch {
+      return false // a session that cannot be read now is tried again at the next poll
+    } finally {
+      warming = false
+    }
   }
 
   async function externalSearch(sessionId: string, query: string, cwd: string | null = null): Promise<SearchResult> {
@@ -1111,6 +1160,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalOlder,
     externalOlderPage,
     externalHistory,
+    warmIndexes,
     externalIndex,
     externalSearch,
     externalItem,

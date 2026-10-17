@@ -302,6 +302,7 @@ export class FreeSync {
   }
 
   private async reconcileOne(c: StoreCreds, instance: FreeInstance, row: Row | undefined): Promise<void> {
+    if (!this.available(instance)) return
     if (!row?.meta?.deleted) return this.one(c, instance, row)
     await this.host.remove(instance.id)
     delete this.agreed[instance.id]
@@ -319,6 +320,7 @@ export class FreeSync {
 
   /** One instance of this PC against its row (none when it was never shared). */
   private async one(c: StoreCreds, instance: FreeInstance, row: Row | undefined): Promise<void> {
+    if (!this.available(instance)) return
     const file = this.host.sessionFile(instance)
     const local = readLogin(file, instance.provider)
     // A file that is there but does not open (mid-write, damaged, signed out by the site) says nothing:
@@ -360,6 +362,7 @@ export class FreeSync {
 
   /** The row is a signed-out marker: this PC logs out of that same login, or sends up the one it signed in since. */
   private async signedOutThere(c: StoreCreds, instance: FreeInstance, local: FreeLogin | null, shared: { value: Shared; version: number }): Promise<void> {
+    if (!this.available(instance)) return
     if (local && local.auth === shared.value.auth) await this.host.forget(instance.id)
     else if (local) return this.upload(c, instance, local, shared.version)
     this.agreed[instance.id] = { version: shared.version, auth: null }
@@ -367,6 +370,8 @@ export class FreeSync {
 
   /** Of the store's login and this PC's, the newer wins: written here, or sent up. */
   private async landNewer(c: StoreCreds, instance: FreeInstance, file: string, local: FreeLogin | null, shared: { value: Shared; version: number }): Promise<void> {
+    // The remote read yielded: staging/retirement may have reserved this row since the pass's first busy check.
+    if (!this.available(instance)) return
     const theirs = describe(instance.provider, shared.value.cookies ?? [])
     if (!theirs) throw new Error('the store holds a login without its sign-in')
     const differs = !local || theirs.auth !== local.auth || theirs.refresh !== local.refresh || theirs.exp !== local.exp
@@ -383,6 +388,7 @@ export class FreeSync {
   private async adopt(c: StoreCreds, row: Row): Promise<void> {
     const shared = await this.read(c, row.id)
     if (!shared || shared.value.signedOut) return
+    if (this.host.list().some(i => i.id === row.id)) return
     const theirs = describe(shared.value.provider, shared.value.cookies ?? [])
     if (!theirs) return
     const { id, num, provider, name } = shared.value
@@ -402,23 +408,32 @@ export class FreeSync {
   }
 
   private async upload(c: StoreCreds, instance: FreeInstance, login: FreeLogin, version: number): Promise<void> {
+    if (!this.available(instance)) return
     const { id, num, provider, name } = instance
     const blob = seal(c.key, { id, num, provider, name, auth: login.auth, cookies: login.cookies })
     await this.put(c, id, version, blob, {}, { auth: login.auth, exp: login.exp, refresh: login.refresh })
   }
 
   private async signOut(c: StoreCreds, instance: FreeInstance, auth: string, version: number): Promise<void> {
+    if (!this.available(instance)) return
     const { id, num, provider, name } = instance
     await this.put(c, id, version, seal(c.key, { id, num, provider, name, auth, signedOut: true }), { signedOut: true }, { auth: null, exp: null })
   }
 
   private async put(c: StoreCreds, id: string, version: number, blob: string, meta: Row['meta'], held: Omit<Agreed, 'version'>): Promise<boolean> {
+    if (!meta?.deleted) {
+      const instance = this.host.list().find(i => i.id === id)
+      if (!instance || !this.available(instance)) return false
+    }
     const r = await this.call(c, 'PUT', `/v1/free/${id}`, { version, blob, meta })
     // 409: another PC wrote it meanwhile; the next pass reads theirs and decides.
     if (r.status === 409) return false
     if (r.status !== 200 || !Number.isInteger(r.json?.version)) throw new Error(`the store answered ${r.status} to a write`)
     this.agreed[id] = { version: r.json.version, ...held }
     return true
+  }
+  private available(instance: FreeInstance): boolean {
+    return !instance.poolState && !this.host.busy(instance.id) && this.host.list().some(i => i === instance)
   }
 
   private save(): void {

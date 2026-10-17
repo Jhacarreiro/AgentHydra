@@ -87,7 +87,6 @@ import {
 } from './dispatch'
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
-import { freeBatchLifecycle } from './free-batch-lifecycle'
 import {
   cleanupStaleUpdateArtifacts,
   ensureBunBeforeRelaunch,
@@ -137,6 +136,13 @@ import {
   withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
 import { DESK_CHAT_HEADER, withDeskChat } from './mcp-find'
+import {
+  adoptFreeBatches,
+  freeBatchPendingCount,
+  parkFreeBatches,
+  resumeFreeBatches,
+  saveFreeBatches,
+} from './mcp-free'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { reassertSharedMcp, sharedMcpServer } from './mcp-hub'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -361,7 +367,7 @@ app.get('/api/health', (c) =>
     // Whether this daemon is serving older code than its checkout (a source install that was
     // committed to or pulled without a restart). The app header offers the restart when it is.
     runningCode: runningCode.status(),
-    freeBatchesPending: freeBatchLifecycle.activeCount(),
+    freeBatchesPending: freeBatchPendingCount(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
       // `skipped`: this daemon is a side-run and left the machine-wide config alone on purpose.
@@ -559,8 +565,6 @@ app.get('/api/update/available', (c) => {
 // request covers minutes of real work and used to report nothing until it finished.
 app.get('/api/update/progress', (c) => c.json(updateProgress()))
 app.post('/api/update/apply', async (c) => {
-  const free = freeBatchRestartRefusal()
-  if (free) return c.json({ ok: false, error: free }, 409)
   const result = await applyUpdate()
   if (!result.ok || !result.restartRequired) return c.json(result)
   // A compiled apply swapped the binary on disk; the running process is still the OLD one, so it
@@ -580,13 +584,6 @@ app.post('/api/update/apply', async (c) => {
   // far more time than a loopback response needs to flush. The client also recovers on its own now
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
-  if (freeBatchRestartRefusal()) {
-    void relaunchAfterUpdate(IS_RELEASE ? undefined : () => restartRefusal(false) === null)
-    return c.json({
-      ...result,
-      message: 'AgentHydra was updated. Restart waits for current Free batches to finish.',
-    })
-  }
   const refusal = IS_RELEASE ? null : restartRefusal(false)
   if (refusal)
     return c.json({ ...result, message: `${result.message} It was not restarted: ${refusal}` })
@@ -606,21 +603,13 @@ app.post('/api/update/apply', async (c) => {
 
 /** Why restarting now would lose work, or null: a CliMayte worker this daemon spawned itself (before runners,
  *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
- *  (orchestrator.ts). `force` restarts past both. */
+ *  (orchestrator.ts). `force` restarts past both. Free batches never hold it (2026-10-17, owner: "each thing can be
+ *  restarted individually"): they are saved and the next daemon carries them on (mcp-free.ts adoptFreeBatches). */
 function restartRefusal(force: boolean): string | null {
-  const free = freeBatchRestartRefusal()
-  if (free) return free
   const climayte = climayteRunningCount()
   if (climayte > 0 && !force)
     return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
   return moveRestartRefusal(force)
-}
-
-function freeBatchRestartRefusal(): string | null {
-  const count = freeBatchLifecycle.activeCount()
-  return count
-    ? `${count} Free batch(es) are still preparing, queued or running in this daemon. Restart waits for them to finish.`
-    : null
 }
 
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
@@ -1005,7 +994,7 @@ async function flushConnectionsBeforeExit(): Promise<void> {
 
 /** Every graceful exit waits for the settings sync and for CliMayte's queued store writes. */
 async function flushBeforeExit(): Promise<void> {
-  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore()])
+  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore(), saveFreeBatches()])
 }
 
 app.post('/api/shutdown', (c) => {
@@ -1449,8 +1438,10 @@ initConnections()
 let relaunchInFlight: Promise<boolean> | null = null
 function relaunchDaemon(): Promise<boolean> {
   if (relaunchInFlight) return relaunchInFlight
-  if (!freeBatchLifecycle.beginRestart()) return Promise.resolve(false)
   relaunchInFlight ??= (async () => {
+    // Free batches stop sending and are saved, so the successor carries them on; a tick under way
+    // is let finish first (bounded). Nothing waits for a batch to END.
+    await parkFreeBatches()
     // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
     // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
     if (IS_RELEASE) {
@@ -1478,13 +1469,13 @@ function relaunchDaemon(): Promise<boolean> {
     (handedOver) => {
       if (!handedOver) {
         relaunchInFlight = null
-        freeBatchLifecycle.abortRestart()
+        resumeFreeBatches()
       }
       return handedOver
     },
     (error) => {
       relaunchInFlight = null
-      freeBatchLifecycle.abortRestart()
+      resumeFreeBatches()
       throw error
     },
   )
@@ -1548,10 +1539,10 @@ setAutoUpdateHooks({
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
   // Work a restart would LOSE holds the update for as long as it runs, as restartRefusal does for a
-  // person's restart: a Free batch, and a chat move, which a restart leaves half-done (orchestrator.ts
-  // moveRestartRefusal). Until 2026-10-16 only the Free batch held it, so an unattended update could
-  // relaunch straight through a migrate_batch.
-  hasUnsafeWork: () => freeBatchLifecycle.activeCount() > 0 || moveRestartRefusal(false) !== null,
+  // person's restart: a chat move, which a restart leaves half-done (orchestrator.ts moveRestartRefusal).
+  // A Free batch held it until 2026-10-17; batches now outlive the daemon (mcp-free.ts adoptFreeBatches),
+  // and with new ones arriving from other chats every few seconds the update almost never found a gap.
+  hasUnsafeWork: () => moveRestartRefusal(false) !== null,
   relaunch: () => relaunchDaemon(),
 })
 
@@ -1790,6 +1781,9 @@ const server = Bun.serve({
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
 desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
+// The Free batches the last daemon left are carried on from here: once this daemon holds the port, its
+// predecessor has exited, so no two daemons ever send the same batch.
+void adoptFreeBatches()
 void startDeclaredBackends()
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,

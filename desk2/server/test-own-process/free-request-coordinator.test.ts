@@ -569,7 +569,8 @@ test('runner keeps the first three admissions legacy, coordinates excess waiters
       if (held > 0) { held--; await poolGate }
       return 'synthetic-pool'
     } }))
-    mock.module(${moduleUrl('free-instances/request-coordinator.ts')}, () => ({ runCoordinatedFree: async (_config, request, pool) => { calls.push('coordinator:' + request.command); assert.equal(pool, 'synthetic-pool'); if (failure) throw failure; return answer } }))
+    // coordinatorEndpoint serves an operation run under its own runner (jobs.ts), which these in-process calls never are.
+    mock.module(${moduleUrl('free-instances/request-coordinator.ts')}, () => ({ runCoordinatedFree: async (_config, request, pool) => { calls.push('coordinator:' + request.command); assert.equal(pool, 'synthetic-pool'); if (failure) throw failure; return answer }, coordinatorEndpoint: async () => { throw new Error('Synthetic: no runner here') } }))
     class SpawnLaunchError extends Error {}
     mock.module(${moduleUrl('lib/spawn-off.ts')}, () => ({ SpawnLaunchError, spawnOff: async (options) => { calls.push('legacy'); spawns.push(options); return { code: 3, stdout: Buffer.from('Synthetic legacy'), aborted: false, capped: false, timedOut: false } } }))
     const { runFree, commandArgs } = await import(${moduleUrl('free-instances/runner.ts')})

@@ -29,7 +29,7 @@ import {
   type StoreConfig,
   type TrustedKey,
 } from './central'
-import { ROUTINE_ID, type CentralMark, type Entry } from './manifest'
+import { applyMeta, ROUTINE_ID, type CentralMark, type Entry, type MetaValues } from './manifest'
 import { message } from './proc'
 import type { RunEvent } from './runs'
 import { crainiumRunBoard, crainiumStore, RUNS_TOOL, StoreError, type RoutineStore, type RunBoard } from './store-crainium'
@@ -254,10 +254,12 @@ export function centralEntries(c: Central, localIds: Set<string>, moving: Set<st
       continue
     }
     const zone = typeof doc.front.timeZone === 'string' ? { timeZone: doc.front.timeZone } : {}
-    const central: CentralMark = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, ...placementOf(doc.runsOn, c.runner), ...zone }
+    const central: CentralMark = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, ...placementOf(doc.runsOn, c.runner, doc.eachRunner), ...zone }
     try {
       if (central.placement === 'shared' && doc.front.schedule === undefined)
-        throw new Error(`it runs on any runner labelled ${doc.runsOn.join(', ')}, and only a schedule routine is shared between runners: name the runner it runs on in its runsOn`)
+        throw new Error(
+          `it runs on any runner labelled ${doc.runsOn.join(', ')}, and only a schedule routine is shared between runners: name the runner it runs on in its runsOn, or set eachRunner so every such runner runs its own`,
+        )
       entries.push({ id, def: central.placement === 'elsewhere' ? definitionOf(doc) : definitionOn(doc, c.runner), broken: null, central })
     } catch (err) {
       entries.push({ id, def: null, broken: message(err), name: doc.name, central })
@@ -419,4 +421,21 @@ export async function editCentral(c: Central, id: string, set: Record<string, un
     return { status: 409, error: `"${id}" was not saved: ${message(err)}` }
   }
   return write(c, id, found.cached.path, approvedText(next, c.key, c.config.approverName, nowIso(now)), found.cached.docSha)
+}
+
+/** POST meta on a central routine or proposal (any caller): its group and campaigns set, removed or kept, the rest of the
+ *  document as it was. Its approval is kept exactly as it is and not signed again: both keys are unsigned (central.ts UNSIGNED),
+ *  so an approved routine stays approved and runs. The store's copy is this computer's; a changed store answers 409. */
+export async function metaCentral(c: Central, id: string, values: MetaValues): Promise<Refusal | null> {
+  const found = docFor(c, id, `no routine "${id}" is registered here or in the store`)
+  if ('status' in found) return found
+  const front = { ...found.doc.front }
+  applyMeta(front, values)
+  let next: RoutineDoc
+  try {
+    next = parseDoc(id, renderDoc(front, found.doc.body))
+  } catch (err) {
+    return { status: 409, error: `"${id}" was not saved: ${message(err)}` }
+  }
+  return write(c, id, found.cached.path, renderDoc(next.front, next.body), found.cached.docSha)
 }

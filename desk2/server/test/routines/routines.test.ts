@@ -608,7 +608,7 @@ describe('the plugin', () => {
     for (const body of [{ resume: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
-      expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
+      expect(((await res.json()) as { error: string }).error).toBe("only the owner can do that, in AgentHydra's Tools tab")
     }
     expect(d.settings.routines).toBe(true)
 
@@ -903,5 +903,39 @@ describe('GET /api/routines/:id/details', () => {
     expect(rest.runs).toHaveLength(1)
     expect(rest.nextBefore).toBeNull()
     expect((await again.app.request('/api/routines/nope/details')).status).toBe(404)
+  })
+})
+
+describe("a routine's group and campaigns (routines/manifest.ts, POST meta)", () => {
+  test('a local file with group and campaigns lists them on its Routine; a bad campaign id and a 41-character group are refused with the reason', async () => {
+    const d = desk()
+    d.routine('example-folder', { name: 'Example folder', askedBy, schedule: '* * * * *', run: d.argv('tick'), group: 'Example Company', campaigns: ['example-spring', 'example-summer'] })
+    d.routine('example-bad-campaign', { name: 'Example bad', askedBy, schedule: '* * * * *', run: d.argv('tick'), campaigns: ['Example Spring'] })
+    d.routine('example-long-group', { name: 'Example long', askedBy, schedule: '* * * * *', run: d.argv('tick'), group: 'x'.repeat(41) })
+    const s = await get(d.app, true)
+    expect(s.routines.find((x) => x.id === 'example-folder')).toMatchObject({ group: 'Example Company', campaigns: ['example-spring', 'example-summer'] })
+    expect(s.routines.find((x) => x.id === 'example-bad-campaign')).toMatchObject({ state: 'broken', group: null, campaigns: null })
+    expect(s.routines.find((x) => x.id === 'example-bad-campaign')?.reason).toContain('"campaigns" must be a list of 1 to 10 campaign ids')
+    expect(s.routines.find((x) => x.id === 'example-long-group')).toMatchObject({ state: 'broken', group: null })
+    expect(s.routines.find((x) => x.id === 'example-long-group')?.reason).toContain('"group" must be 1 to 40 characters')
+  })
+
+  test('an agent (no window header) may POST meta: the file keeps its other keys, null removes one key, a bad value is a 400 and an unknown routine a 404', async () => {
+    const d = desk()
+    d.routine('example-folder', { name: 'Example folder', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 7 })
+    const file = join(d.home, 'routines', 'example-folder.json')
+    expect((await post(d.app, { meta: { id: 'example-folder', group: 'Example Company', campaigns: ['example-spring'] } })).status).toBe(200)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ name: 'Example folder', timeoutMinutes: 7, group: 'Example Company', campaigns: ['example-spring'] })
+    expect((await get(d.app)).routines.find((x) => x.id === 'example-folder')).toMatchObject({ group: 'Example Company', campaigns: ['example-spring'] })
+
+    expect((await post(d.app, { meta: { id: 'example-folder', campaigns: null } })).status).toBe(200)
+    const cleared = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    expect(cleared).toMatchObject({ group: 'Example Company', timeoutMinutes: 7 })
+    expect(cleared).not.toHaveProperty('campaigns')
+
+    const bad = await post(d.app, { meta: { id: 'example-folder', campaigns: [] } })
+    expect(bad.status).toBe(400)
+    expect(((await bad.json()) as { error: string }).error).toContain('"campaigns" must be a list')
+    expect((await post(d.app, { meta: { id: 'nope', group: 'Example Company' } })).status).toBe(404)
   })
 })

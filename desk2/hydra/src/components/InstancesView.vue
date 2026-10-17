@@ -89,14 +89,16 @@ import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import { activeInstanceCounts } from '@/lib/active-instance-counts'
 import { openSettingsInDesk } from '@/lib/desk-embed'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
   getChatCounts,
   getDesktopInstall,
+  instancesAlive,
 } from '@/lib/api'
-import { freeLogo } from '@/lib/free-instances'
+import { freeLogo, freePlanLabel } from '@/lib/free-instances'
 import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
   accountDisplayName,
@@ -368,10 +370,18 @@ const { orderStyle } = useMergedOrderSource('claude', {
  * account, and an unlinked one carries no account record at all.)
  */
 const { instances: codexInstances, refresh: refreshCodex, listed: codexListed } = useCodexInstances()
-const presentPlans = computed(() => [
-  ...instances.value.map((i) => i.account?.planLabel),
-  ...codexInstances.value.map((i) => i.account?.planLabel),
-])
+// Every kind the plan facet acts on offers its labels here (owner, 2026-10-16): a CLI login's own plan or its
+// linked desktop's, a Free login's reported plan, and the DeepSeek harness's "API key".
+const presentPlans = computed(() => {
+  const desktopPlan = new Map(instances.value.map((d) => [d.dir, d.account?.planLabel]))
+  return [
+    ...instances.value.map((i) => i.account?.planLabel),
+    ...codexInstances.value.map((i) => i.account?.planLabel),
+    ...cliInstances.value.map((c) => c.planLabel ?? (c.associatedDesktopDir ? desktopPlan.get(c.associatedDesktopDir) : undefined)),
+    ...freeInstances.value.map(freePlanLabel),
+    ...(dshEnabled.value && dshInstances.value.length ? [t('dshInstances.planApiKey')] : []),
+  ]
+})
 
 const creating = ref(false)
 
@@ -679,13 +689,14 @@ const totalRows = computed(
     (kindShown('cli') ? cliTotal.value : 0) +
     (kindShown('free') ? freeTotal.value : 0),
 )
-/** The choice's counts: every row each choice has, whether it is the one shown or not. */
-const kindCounts = computed<Record<KindView, number>>(() => {
-  const desktop = desktopTotal.value
-  const cli = cliInstances.value.length
-  const free = freeTotal.value
-  return { all: desktop + cli + free, desktop, cli, free }
-})
+/** Available logins per kind; signed-out rows remain in the table for repair. */
+const kindCounts = computed(() => activeInstanceCounts({
+  desktop: showDesktopInstances.value ? instances.value : [],
+  codex: codexEnabled.value ? codexInstances.value : [],
+  dsh: dshEnabled.value ? dshInstances.value : [],
+  cli: showCliInstances.value ? cliInstances.value : [],
+  free: freeInstances.value,
+}))
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
@@ -1462,6 +1473,38 @@ let stopDesktopInstallPoll: (() => void) | null = null
 // A profile signed into another account shows it within this, not at the next two-minute list poll (useInstances.followLogins).
 const LOGIN_WATCH_MS = 5_000
 let stopLoginWatch: (() => void) | null = null
+/**
+ * The exit watch (2026-10-16, owner: a closed Codex app read open until a manual Refresh; "live means a watcher, a
+ * change event, or a short poll while something is in flight, never only a manual Refresh"). While this tab is on
+ * screen and a row reads open, every EXIT_WATCH_MS the daemon is asked whether the pids those rows show still run
+ * (a signal-0 probe, no process scan), and the kind whose pid is gone is listed again at once: a Desktop or Codex
+ * app, or a CLI login's live session. Opening is already followed (useInstances' open poll); an app opened outside
+ * AgentHydra still waits for the two-minute list.
+ */
+const EXIT_WATCH_MS = 3_000
+let stopExitWatch: (() => void) | null = null
+let watchingExits = false
+async function watchExits(): Promise<void> {
+  if (watchingExits) return
+  const desktop = instances.value.flatMap((i) => (i.isRunning && i.pid ? [i.pid] : []))
+  const codex = codexInstances.value.flatMap((i) => (i.isDesktopRunning && i.desktopPid ? [i.desktopPid] : []))
+  const cli = cliInstances.value.flatMap((i) => i.livePids ?? [])
+  if (!desktop.length && !codex.length && !cli.length) return
+  watchingExits = true
+  try {
+    const { alive } = await instancesAlive([...desktop, ...codex, ...cli])
+    const gone = (pids: number[]) => pids.some((p) => alive[p] === false)
+    await Promise.all([
+      gone(desktop) ? refreshInstances({ silent: true }) : null,
+      gone(codex) ? refreshCodex({ silent: true }) : null,
+      gone(cli) ? refreshCliInstances({ silent: true }) : null,
+    ])
+  } catch {
+    // An unanswered probe changes nothing on screen; the next beat asks again.
+  } finally {
+    watchingExits = false
+  }
+}
 
 onMounted(() => {
   // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop, cli and free kinds).
@@ -1474,6 +1517,7 @@ onMounted(() => {
     if (desktopWarning.value) void refreshDesktopInstall(true)
   }, 60_000)
   stopLoginWatch = visibleInterval(() => void followLogins(), LOGIN_WATCH_MS)
+  stopExitWatch = visibleInterval(() => void watchExits(), EXIT_WATCH_MS)
   // A probe or a resolve that never answers must not hold the order (or the warning) for good.
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
 })
@@ -1484,6 +1528,7 @@ onUnmounted(() => {
   catchupSignal.aborted = true
   stopDesktopInstallPoll?.()
   stopLoginWatch?.()
+  stopExitWatch?.()
   window.clearTimeout(firstDrawTimer)
   window.clearTimeout(loadHoldTimer)
 })
@@ -1531,7 +1576,7 @@ onUnmounted(() => {
               @keydown="onKindViewKey($event, view)"
             >
               {{ $t(KIND_VIEW_LABEL_KEY[view]) }}
-              <span class="tabular-nums text-muted-foreground">{{ kindCounts[view] }}</span>
+              <span class="tabular-nums text-muted-foreground" :title="$t('cliInstances.loggedIn')">{{ kindCounts[view] }}</span>
             </Button>
           </div>
         </template>

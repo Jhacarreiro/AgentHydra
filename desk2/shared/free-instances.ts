@@ -110,6 +110,30 @@ export interface FreeInstance {
    *  to not free ... let me know"): shown on the row until dismissed. `from` is null when the first reading was already
    *  promotable. */
   planChange?: { from: string | null; to: string; at: number } | null
+  /** Local pool membership only. Retiring preserves the login and all history; absent means active. */
+  poolState?: 'pending' | 'retired'
+  /** A staged import and its last receipt. Pending imports never activate themselves after a restart. */
+  poolAdmission?: FreePoolAdmission
+}
+export interface FreePoolCommit {
+  ok: true
+  id: string
+  existing: boolean
+  replaced: string[]
+  count: number
+  limit: number
+}
+export interface FreePoolAdmission {
+  requestId: string
+  email: string
+  plan: 'free' | 'go'
+  limit: number
+  existing: boolean
+  targetId?: string
+  state: 'pending' | 'committed' | 'aborted'
+  /** Metadata only; the importing caller restores its original cookie bytes before aborting a renewal. */
+  before?: Omit<FreeInstance, 'poolAdmission'>
+  result?: FreePoolCommit
 }
 /** A plan the provider bills for: anything reported that is not its Free plan. */
 export function isPaidPlan(plan: string | null | undefined): boolean {

@@ -21,28 +21,33 @@ class HttpError(ClaudeError):
     """A credential-free error suitable for the CLI."""
 
 
-def model_refusal(response: Any) -> str | None:
-    """Claude's own message when a 403 refuses only the chosen model, else None.
-
-    A free account can be offered a model it may not use right now (seen 2026-10-06: its own default was one
-    claude.ai no longer gives free accounts): claude.ai answers 403 permission_error, error_code
-    model_not_available, before anything is sent. Any other 403 stays a sign-in or verification problem.
-    """
+def _response_error(response: Any) -> dict:
+    """Read a bounded structured refusal without exposing response bodies or credentials."""
     try:
         if "json" not in response.headers.get("content-type", ""):
-            return None
+            return {}
         body = b""
         for chunk in response.iter_content(8192):
             body += chunk
             if len(body) > 65536:
-                return None
+                return {}
         error = json.loads(body).get("error") or {}
-        if (error.get("details") or {}).get("error_code") != "model_not_available":
-            return None
-        message = error.get("message")
-        return message.strip()[:300] if isinstance(message, str) and message.strip() else "This model isn't available right now."
+        return error if isinstance(error, dict) else {}
     except Exception:
+        return {}
+
+
+def _model_refusal(error: dict) -> str | None:
+    details = error.get("details")
+    if not isinstance(details, dict) or details.get("error_code") != "model_not_available":
         return None
+    message = error.get("message")
+    return message.strip()[:300] if isinstance(message, str) and message.strip() else "This model isn't available right now."
+
+
+def model_refusal(response: Any) -> str | None:
+    """Claude's own message when a 403 refuses only the chosen model, else None."""
+    return _model_refusal(_response_error(response))
 
 
 def account_label(name: Any, email: Any) -> str | None:
@@ -196,11 +201,14 @@ class ClaudeHttp:
             return response
         status = response.status_code
         # Rejected responses are never logged, and their connections still close.
-        refusal = model_refusal(response) if status == 403 else None
+        error = _response_error(response) if status == 403 else {}
+        refusal = _model_refusal(error)
+        details = error.get("details")
+        invalid_session = isinstance(details, dict) and details.get("error_code") == "account_session_invalid"
         response.close()
         if refusal:
             raise HttpError(refusal, code="model_not_available", status=status)
-        if status == 401:
+        if status == 401 or invalid_session:
             raise HttpError(
                 "The saved login expired. Run 'python claudfree.py login' to sign in again.",
                 code="login_expired",
@@ -208,8 +216,8 @@ class ClaudeHttp:
             )
         if status == 403 or 300 <= status < 400:
             raise HttpError(
-                "Claude requires sign-in or verification. Run 'python claudfree.py login'; the HTTP client will not open a browser automatically.",
-                code="login_required",
+                "Claude requires browser verification or refused this request. The saved login was preserved; the HTTP client will not open a browser automatically.",
+                code="verification_required",
                 status=status,
             )
         if status == 429:
@@ -415,8 +423,8 @@ class ClaudeHttp:
         streamed, server_message_id, event_types, stream_finished = self._read_reply_stream(
             response, chat, on_text
         )
-        conversation, assistant = self._confirm_answer(
-            org, chat, previous_ids, server_message_id, streamed
+        conversation, assistant, warning = self._confirm_answer(
+            org, chat, previous_ids, server_message_id, streamed, stream_finished
         )
         return {
             "chat_id": chat,
@@ -447,6 +455,7 @@ class ClaudeHttp:
             ),
             "event_types": sorted(event_types),
             "usage": self.last_usage,
+            **({"warning": warning} if warning else {}),
         }
 
     def _create_temporary(self, org, chat, web_search, on_created):
@@ -480,6 +489,8 @@ class ClaudeHttp:
         server_message_id: str | None = None
         event_types: set[str] = set()
         stream_finished = False
+        seen: dict[str, Any] = {"stop_reason": None, "blocks": {}, "partials": {}}
+        self.last_stream = {"stop_reason": None, "tool_calls": []}
         try:
             if "text/event-stream" not in response.headers.get("content-type", ""):
                 raise HttpError("Claude did not return a chat event stream.")
@@ -502,6 +513,7 @@ class ClaudeHttp:
                         code="generation_error",
                         chat_id=chat,
                     )
+                _note_stream_event(seen, event, kind)
                 text = _event_text(event, kind)
                 chunks.append(text)
                 if text and on_text:
@@ -520,6 +532,7 @@ class ClaudeHttp:
             ) from None
         finally:
             response.close()
+            self.last_stream = _stream_summary(seen)
         return "".join(chunks), server_message_id, event_types, stream_finished
 
     def _observe_limit(self, event):
@@ -530,11 +543,13 @@ class ClaudeHttp:
         if observed:
             self.last_usage = observed
 
-    def _confirm_answer(self, org, chat, previous_ids, server_message_id, streamed):
+    def _confirm_answer(self, org, chat, previous_ids, server_message_id, streamed, stream_finished):
         # Claude can assign its own message UUIDs. Identify the newly stored answer
-        # using the pre-request transcript, and allow a brief persistence delay.
-        for attempt in range(10):
-            # Poll only GETs for persistence; never repeat the message POST.
+        # using the pre-request transcript. The stored copy can lag the stream, so
+        # poll for up to 15 s with backoff; the polls are GETs, never a second POST.
+        deadline = time.monotonic() + 15
+        delay = 0.2
+        while True:
             conversation = self.read(org, chat)
             if conversation.get("is_temporary") is not True:
                 raise HttpError(
@@ -546,9 +561,16 @@ class ClaudeHttp:
             if candidate is not None:
                 assistant = message_details(candidate)
                 if assistant is not None:
-                    return conversation, assistant
-            if attempt < 9:
-                time.sleep(0.2)
+                    return conversation, assistant, None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(delay, remaining))
+            delay = min(1.0, delay * 2)
+        if stream_finished and streamed.strip():
+            # The reply finished on the stream and only its stored copy is late: answer with
+            # the streamed text and say so, rather than discarding a finished answer.
+            return conversation, _streamed_answer(streamed, server_message_id, getattr(self, "last_stream", None) or {}), "answer_unconfirmed"
         raise HttpError(
             f"Claude did not confirm a stored answer yet. Read chat {chat}; the message was not resent.",
             code="answer_not_confirmed",
@@ -561,6 +583,55 @@ def _message_ids(conversation):
         str(m.get("uuid", m.get("id", "")))
         for m in conversation.get("chat_messages", conversation.get("messages", []))
         if isinstance(m, dict)
+    }
+
+
+def _note_stream_event(seen, event, kind):
+    """Collect the stop reason and tool-use blocks the stream carries, for an unstored reply."""
+    index = event.get("index")
+    block = event.get("content_block")
+    delta = event.get("delta")
+    if kind == "content_block_start" and isinstance(block, dict) and block.get("type") in {"tool_use", "server_tool_use"}:
+        seen["blocks"][index] = dict(block)
+        seen["partials"][index] = []
+    if not isinstance(delta, dict):
+        return
+    if kind == "message_delta" and isinstance(delta.get("stop_reason"), str):
+        seen["stop_reason"] = delta["stop_reason"]
+    if delta.get("type") == "input_json_delta" and index in seen["partials"] and isinstance(delta.get("partial_json"), str):
+        seen["partials"][index].append(delta["partial_json"])
+
+
+def _stream_summary(seen):
+    tool_calls = []
+    for index, block in seen["blocks"].items():
+        raw = "".join(seen["partials"].get(index, []))
+        if raw:
+            try:
+                block["input"] = json.loads(raw)
+            except ValueError:
+                pass
+        tool_calls.append(block)
+    return {"stop_reason": seen["stop_reason"], "tool_calls": tool_calls}
+
+
+def _streamed_answer(streamed, server_message_id, stream):
+    # The stream's own stop reason and tool calls are all that is known here: no stored blocks or citations.
+    # A reply whose stop reason the stream did not give, or that stopped on max_tokens, is not
+    # reported complete: truncated feeds the caller's incomplete flag.
+    stop_reason = stream.get("stop_reason")
+    return {
+        "id": server_message_id,
+        "text": streamed,
+        "stop_reason": stop_reason,
+        "truncated": stop_reason is None or stop_reason in {"max_tokens", "max_output_tokens"},
+        "content": [],
+        "citations": [],
+        "tool_calls": list(stream.get("tool_calls", [])),
+        "tool_results": [],
+        "code_blocks": [],
+        "attachments": [],
+        "files": [],
     }
 
 

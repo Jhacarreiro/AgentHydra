@@ -144,7 +144,7 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 moment of the stop.
 
 **Routines** is the babysitter's third sibling (Desk 2's `plugins/73-routines.ts`, logic in
-`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, Settings > Managers > Routines). A routine is one
+`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, AgentHydra's Tools tab). A routine is one
 standing job on this PC, on a schedule: a command, an AI prompt that runs as a chat you can open, or a Windows scheduled
 task. Routines run on the PC through AgentHydra's own CLI and accounts; the manager asks no model itself. The owner's
 rule for them: a routine runs only for something the owner asked for in the owner's own words, and an AI can only propose one.
@@ -185,7 +185,7 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   makes the routine `ended` after that local day: it never runs but stays listed.
 
 States: `idle`, `due`, `running`, `paused` (the owner paused it), `off` (its status says off), `ended` (past `until`),
-`broken` (with its reason) and `waiting` (a proposal waiting for the owner's yes, listed under "Waiting for your yes").
+`broken` (with its reason) and `waiting` (a proposal waiting to be approved, by the owner or by an agent he told to, listed under "Awaiting approval").
 
 Schedule semantics: the memory keeps each schedule routine's last slot. The first time a routine is seen it starts from now,
 so a slot already past never runs. A look runs the newest slot at or before now, once, when it is later than the last slot
@@ -203,12 +203,13 @@ the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB);
 proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
-Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, and move one
-to the central store (the owner, 2026-10-16: an agent approves the routines he asks for, never handing the click back to him).
-Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard, switch the manager (`enabled`), edit a
-routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
-is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
-chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
+Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, move one
+to the central store, and set its group and campaigns (`meta`) (the owner, 2026-10-16: an agent approves the routines he asks
+for, never handing the click back to him). Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard,
+switch the manager (`enabled`), edit a routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in AgentHydra's Tools tab`. On the Tools tab's
+Overview each routine is a card whose small switch pauses or resumes it; the card opens its page (its schedule in words,
+its history, Run now and Open chat), and the Routine manager's page holds the manager's `enabled` switch (owner,
+2026-10-17: Desk's Settings > Managers, which listed them before, is now a link to the Tools tab). A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
 runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
 into `routines/<id>.json` without `why`, discard deletes it.
@@ -218,12 +219,24 @@ routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `
 `nextRunAt`, the run going on (`kind` `command` or `prompt`, its runner's `pid` or its chat), and its last 30 runs, plus
 `proposals` and `error`. `POST /api/routines` takes one action per call:
 `{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard, move }` (an id; `resume` and
-`discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
+`discard` are window only), or `{ propose: { id, why, ...contract } }`, or `{ meta: { id, group?, campaigns? } }` (a key it
+names is set, `null` removes it, an absent one is kept). Anything else answers 400 with the expected shape; a bad `group` or
+`campaigns` value is 400 with the reason, an unknown routine 404.
 
 The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause`, `propose`,
-`approve` and `move`, each marked MUTATES. It cannot resume, discard, edit or switch the manager. Its description tells the
+`approve`, `move` and `meta`, each marked MUTATES. It cannot resume, discard, edit or switch the manager. Its description tells the
 agent to approve or move only a routine the owner asked for in his own words, to propose a routine rather than add one
 nobody asked for, and to prefer a temporary background task it manages itself.
+
+**Group and campaigns.** Two optional keys say where a routine belongs; neither changes what it runs. `group` is the folder
+the Tools tab's Routines group lists it under (1 to 40 characters, one line). `campaigns` lists the CrAInium's Campaigns arm ids it works for
+(1 to 10, each `^[a-z0-9][a-z0-9-]{0,63}$`, no repeats). A central document keeps both outside its approval, as it keeps
+`description`, so setting them leaves the routine approved and running. Each routine's `group` and `campaigns` (null when
+absent) are on its entry in `GET /api/routines`. `GET /api/routines/:id/campaigns` (`?fresh=1` skips its 60-second cache)
+asks the arm's `campaigns` tool through the person's Connections server, `show` for each id and `dnc` once: a `RoutineCampaigns`
+answer with each campaign's ledger (status, goal, `ready` summed over its lanes, numbers, sends per day, newest 5 runs and the
+do-not-contact count). Addresses are never read into it. An id the arm does not know is in `missing`; with no Connections
+server, or a refusal of every campaign, `error` says why and `campaigns` is empty (HTTP 200 either way).
 
 **Central routines** (the owner, 2026-10-15: one place for the routines, which other people can use too). When
 `<desk home>/routines-store.json` names a store, the manager also lists the routines kept there, which every computer reading
@@ -236,13 +249,15 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
 
 - **Approval.** A document runs only with an Ed25519 signature, by a key this computer trusts (its own
   `<desk home>/routines-approver.key`, made with the store, or one the file's `approvers` lists), over its id and the sha of
-  everything in it but `approval` and `description` (`routines/central.ts`). Any other change makes it a proposal again. Approve
+  everything in it but `approval`, `description`, `group` and `campaigns` (`routines/central.ts`). Any other change makes it a proposal again. Approve
   signs with this computer's key and writes the document back with the sha it read; an edit is signed again the same way, and
   answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
   the MCP tool) and approve; a proposal that arrives already carrying an `approval` is refused.
 - **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
-  pinned here and runs as a local routine does. When none is, any runner carrying the labels may run it (schedule routines
-  only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
+  pinned here and runs as a local routine does. A document with `"eachRunner": true` (signed like every other key) runs on
+  every runner carrying its labels, each its own copy as a local routine, never claimed and of any kind, status included:
+  work each computer does over its own data, such as learning from that computer's chats. When neither, any runner carrying
+  the labels may run it (schedule routines only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
   of twice its timeout, renewed while the run lives (`routines/manager-board.ts`, `routines/runs.ts`). Anything else is state
   `elsewhere`, listed and never run, read or paused here. A schedule keeps its own `timeZone` on every runner.
 - **Runs.** Every central run is reported to the run log as CloudEvents (`routine.claimed`, `routine.started`,
@@ -848,6 +863,28 @@ instance is deleted. `POST /api/instances/:dir/meta` applies a present value, cl
 is `null`, and leaves an absent field unchanged. The curated icon/color keys live in
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `desk2/hydra/src/lib/instance-appearance.ts`.
+
+### How the Instances tab stays live
+
+Live means a watcher, a change event, or a short poll while something is in flight, never only a manual Refresh
+(owner, 2026-10-16). While the tab is on screen it runs three watches beside the two-minute list refresh:
+
+| Watch | Every | Asks | Acts when |
+|---|---|---|---|
+| Logins | 5 s | `GET /api/instances/logins` (config.json, no process scan) | a profile's login moved: the old identity is dropped and resolved again |
+| Unconfirmed logins | on the login watch | the account resolve, for a running app whose login could not be confirmed (the yellow mark) | its last resolve is 10 s old (`desk2/hydra/src/lib/account-resolve.ts`); a closed app keeps the 15-minute re-check |
+| Exits | 3 s, only while a row reads open | `GET /api/instances/alive?pids=...`: a signal-0 probe of each Desktop pid, Codex `desktopPid` and CLI `livePids`, no process scan | a pid is gone: the daemon drops both scan caches and the tab lists that kind again at once |
+
+`GET /api/cli-instances` gives each login's `livePids` (its live sessions' pids) beside `liveSessions`. The filter's
+facets act on every row kind: a CLI login's plan is its own or its linked desktop's and it is open while a session
+runs; a Free login's plan is the one its site reports ("Free" on the Free plan) and it is open while a chat or check
+of it is in flight; a DeepSeek harness row's plan is "API key" and it is open while it runs. An unknown fact never
+sets a row aside.
+
+A process scan that fails (a timed-out WMI query) is not "nothing runs": the Desktop list and the Codex list each read
+the last scan that answered, if it is under five minutes old (`lastGoodClaudeProcessScan` in `server/src/core/process.ts`,
+`listCodexDesktopProcesses` in `server/src/core/codex-desktop.ts`). A `fresh` read, which launch and stop use to act,
+never takes that snapshot.
 
 ### The usage numbers on a row
 

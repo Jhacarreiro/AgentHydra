@@ -70,6 +70,26 @@ Exporter aliases declared by a provider share its canonical pool: `google_*_keys
 `gemini_api_keys`. Unconfigured providers in checker exports fail before editing any lists; add their provider
 configuration first. Alias routing is included in the count report.
 
+### Free-tier quotas: what a refused key costs (2026-10-17)
+
+A census of the 726 Gemini keys that morning: 76 answered 200, 549 answered 429 with a quota of **0** for their project
+in the region the call lands in (`us-south1`), 86 answered 403 "reported as leaked", and the rest were out of prepaid
+credit or invalid. The keys belong to 542+ different projects, so each key is its own quota; more keys do add capacity.
+
+- **A day-spent model benches that key for that model only.** Gemini's free cap is 20 requests a day per project per
+  model, and when 3.8 Flash is spent the same key still serves 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite. The key comes
+  back for that model when the refusal's RetryInfo says, which is 00:00 UTC ("Please retry in 18h29m" at 05:30 UTC), not
+  midnight Pacific. `hswarm keys` counts the spent keys per model (`spent`), and route health reads a leg whose every
+  key has spent its model as resting until then.
+- **A zero quota rests only the key that says it, until the daily reset** (`no_quota` in `hswarm keys`). It used to rest
+  30 minutes, and from 2026-10-13 five such answers in a row rested the whole pool: the 76 live keys sat benched behind
+  the 549 empty ones, and Gemini answered no call for four days.
+- **A key reported as leaked is disabled at its first 403**; that block does not lift. Delete it from the list: the 86
+  found on 2026-10-17 moved to `gemini_api_keys.dead`, which every machine syncs and no re-import brings back.
+- **A provider with no balance endpoint** (Hugging Face) gets its once-a-day probation whenever its pool is read (an
+  AUTO plan, a pinned route's check), so a pool whose every key is disabled for credit still finds out when the
+  allowance comes back.
+
 ### Key vault
 
 Keys follow you between machines, encrypted, never through git. `$HSWARM_HOME/secrets/` holds one list per provider
@@ -198,22 +218,58 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 - `AGENTHYDRA_HSWARM_DIR` names the folder holding `hswarm/` when it is not beside the app (a wrong folder is reported in the tab, not replaced).
 - `AGENTHYDRA_PYTHON` names the interpreter (default `python`, `python3` off Windows).
 
+## One event loop for every chat
+
+The shared server answers every chat's calls and its own `GET /health` on one asyncio event loop, so work that takes
+a noticeable time does not run on it. Measured 2026-10-16 under `hswarm_doctor` + `hswarm_select` load, `/health` went
+from a 0.86 s max (p99 572 ms) to 0.31 s (p99 127 ms):
+
+- **Blocking reads run on a thread** (`asyncio.to_thread`): the key report (`hswarm_doctor`, `hswarm_keys list`), the
+  routing verdict, `GET /api/state`'s snapshot, whether the server is behind its clone (`shared.behind`, three git
+  calls), the bash probe and the jobs-folder scan. The ones that read the provider tables hold `config.RELOAD_LOCK`,
+  which `config.reload()` holds while it empties and refills them in place.
+- **One TLS context per process** (`client.tls()`, built on a start-up thread): every `httpx` client hswarm makes passes
+  `verify=tls()`. Loading the CA bundle per client cost 60-365 ms each.
+- **Key state is read and written in bulk.** A balance probe writes all of its readings in one transaction
+  (`KeyPool.note_balances`), and every pool reads through the process's one copy of the table (`keystate.read_changes`).
+- **A key pool is kept only while it has a write queued** (`client._QUEUED_POOLS`); one nobody holds is freed. The old
+  list of every pool built grew the server to 1.25 GB.
+- **A session the account cache does not know** reads AgentHydra's tables again at most once a minute
+  (`utilization.SESSION_RECHECK_S`), not on every ledger line.
+- **Booking never waits on AgentHydra.** Booking an ask or a decide (`booking.book_asks`) runs on a worker thread, and
+  the plan prices every account lookup reads are fetched on one: an expired copy is answered at once while a thread
+  fetches the next (`accounts._agenthydra_prices`), and the server makes a process's first fetch on a start-up thread.
+  The fetch held `/health` for up to its 2 s timeout once every 5 minutes, and each finished job task looks an account up.
+
+A new call that does file, git, SQLite or network work synchronously belongs on a thread as well. When `/health` is
+slow, `py-spy dump --nonblocking --pid <server pid>` shows what holds the loop.
+
 ## Free accounts first
 
 A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `routine`, `general`, `research` or
 `decision`, purpose not `evaluation`, at most 100,000 characters) may run on the owner's signed-in Free claude.ai and
 ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
 leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a free account's limit), the others for the account's usual model. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
-failed, slow or unparseable reply keeps the API route. With every account busy a task does not wait for one: a Free
-task took 16 s at the median and 42 s at the 90th percentile against about 3 s on the API (2026-10-08), so waiting
-would make a burst's overflow 5-10x slower to save a fraction of a cent a task, and under steady load the accounts
-are full anyway. A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
+failed, slow or unparseable reply keeps the API route. An ask never waits for an account: a Free task took 16 s at the
+median and 42 s at the 90th percentile against about 3 s on the API (2026-10-08). A job task whose next route would be
+the paid API waits up to `route_via_free_wait_s` (default 90 s) for a Free account with room, polling `free_status`
+every 5 s; under steady load the accounts are full anyway.
+A Free try that fails on its account (a rate limit, a reply not confirmed, a lost login, a sent message the provider
+refused) moves the task to another Free account, up to two more times and inside the task's own time cap: a tool task
+carries its progress to the new thread, which is named with ` m<k>`, and each failed try is one `free_miss` row on the
+ledger. A provider whose sends fail (`free_status` `providerHealth`: shut, or under 20% ok over 10 sends in the last
+hour) is passed over, with one probe task every 10 minutes; `hswarm doctor` names it while it is shut. Tool-free work
+asks ChatGPT first for routine and general, and Sonnet on Claude first for decision and research
+(`route_via_free_asks`). A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
 A live burst of 22 tasks ran 11 on Free accounts at once (job `20261009-000737-6a7e`); the fixed cap of 6 at a time
 before it had turned away about 2,800 eligible tasks in a day. `free_status` cannot show a task sent moments ago, so
 a task subtracts from the idle count every still-running task this process sent from 2 s before it asked for its
 snapshot onward, however long that read took: counted from the answer instead, a slow read (up to 5 s) let two tasks
 take one idle account (2026-10-09). `selection.route` shows the route a task took (`via: free`), the
-ledger line says provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
+ledger line says provider `free`. Order: a tool task the free accounts may take (a read or web one, or an edit or all one
+of a profile in `route_via_free_edit_profiles` / `route_via_free_shell_profiles`, below) asks them first, then CliMayte,
+then the paid API (CliMayte cannot take web tools); a tool-free task asks CliMayte first, then the free accounts, then
+the paid API, and any other edit or all task goes to CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
 tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in
@@ -225,6 +281,18 @@ mini) on a ChatGPT account: over 29 real critical read tasks it won 13, lost 15 
 19 judged errors to the API's 42, in half the time; about a third of its threads fail at once and take their API route.
 Code read work (reviews and investigations offered only read tools) asks for it too: 7 to 5 over 12 real tasks, mean 5.9
 vs 5.0, 16 judged errors to the API's 53.
+An edit or all task goes there too when its profile is in `route_via_free_edit_profiles` (default code, decision) for the
+edit tools and in `route_via_free_shell_profiles` (default decision) for the shell; its thread asks for
+`route_via_free_edit_asks` (default Sonnet on a Claude account for both). Its leg works in a scratch copy of the task's
+folder (`scratch.py`): a git worktree at HEAD carrying the checkout's dirty, untracked and small ignored files byte for
+byte, or a copy of a folder that is no checkout (a big one keeps its small top-level folders and up to 6 checkouts, and
+the leg reads the rest at their real paths). Its shell may not name the real folder. An accepted answer's changes land in
+the real folder all at once, and only when every file it touched is still what the copy started from; a failed leg, or
+one whose files changed meanwhile, drops the copy and the task takes its next route with the folder as it was. A checkout
+with more than 20,000 files or 300 MiB to copy, a task with shell grants, a capability or a container runtime, keeps its
+other routes. In a blind A/B on 19 real tasks (2026-10-17) Sonnet there beat the API answers 5 to 4 on code edit work
+(mean 7.3 vs 7.1, 3 judged errors to 5) and 9 to 1 on decision all work (7.9 vs 5.1, 5 to 28), more slowly: a median
+85 s against the API's 13 s on code edits.
 A critical or code task with no tools still takes its API route (`route_via_free_profiles` gates tool-free work and leaves
 critical and code out). In a blind A/B on real tasks (2026-10-13) Sonnet there beat the
 API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, GPT-6, Luna Thinking) lost it: they
@@ -309,7 +377,8 @@ opt-out on this machine. Two more settings bound it: `route_via_climayte_max` (d
 the routed tasks running at once, and `route_via_climayte_start_s`
 (default 90) cancels a routed worker that has not started and falls back to the API. A CliMayte worker's own calls
 are never routed (header `x-hswarm-climayte-worker`). The plan prices behind the monthly cost figures are read from
-AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes); the built-in list prices and
+AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes, an expired copy answered while a thread
+fetches the next); the built-in list prices and
 `~/.hswarm/plan.json` are the offline fallback and the override.
 
 **A give-up steps up one level, once** (owner, 2026-10-13). When an auto task's API leg gives up (`FAILED:`, a turn

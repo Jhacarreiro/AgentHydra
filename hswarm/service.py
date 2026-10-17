@@ -22,7 +22,7 @@ from urllib.parse import quote
 import httpx
 
 from . import config, egress, keylimits, redaction
-from .client import _OUT_OF_CREDIT_429, KeyPool, NoUsableKey
+from .client import _OUT_OF_CREDIT_429, KeyPool, NoUsableKey, tls
 from .provider_auth import auth_query, request_headers
 from .usage import ApiError
 
@@ -120,7 +120,7 @@ class ServiceClient:
             if not self.pool.ready(self._key):
                 raise ValueError("selected provider key is disabled or resting")
         self._http = httpx.AsyncClient(base_url=self.spec["base_url"], timeout=timeout_s,
-                                       transport=transport, follow_redirects=False)
+                                       transport=transport, follow_redirects=False, verify=tls())
 
     async def __aenter__(self):
         return self

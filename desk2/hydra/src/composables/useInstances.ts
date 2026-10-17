@@ -5,6 +5,7 @@
 import { ref } from 'vue'
 import type { CMInstance } from '@/lib/api'
 import * as api from '@/lib/api'
+import { resolveDue, unconfirmed } from '@/lib/account-resolve'
 import { loginChanged } from '@/lib/instance-appearance'
 import { reconcileList, sameData } from '@/lib/reconcile'
 
@@ -18,21 +19,6 @@ const lastError = ref<string | null>(null)
 // When each dir was last auto-resolved, so a poll tick doesn't re-hit one every 4 seconds.
 // See autoResolveAccounts() for what actually gets retried and why.
 const lastAutoResolveAt = new Map<string, number>()
-/** How long before an instance with NO identity yet (logged out, offline, unreadable) is retried.
- *  Short, because the thing that changes it — signing the profile in — is something the user does
- *  in the next minute and then looks straight at this table to confirm. A retry is a local file
- *  read that finds no token and gives up, so this is close to free. */
-const UNRESOLVED_RETRY_MS = 60_000
-/** How long a RESOLVED identity is trusted before a background re-check. An account's email, name
- *  or plan can change without anything on disk changing (the user edits it at claude.ai), so the
- *  only way to notice is to ask again on a timer. Slow, because it costs one profile call per
- *  instance and the answer rarely changes. */
-const RESOLVED_REFRESH_MS = 15 * 60_000
-/** A re-login IS visible on disk — config.json's `lastKnownAccountUuid` stops matching the
- *  identity on screen (see CMInstance.loginUuid) — so that case doesn't wait for the slow timer.
- *  Still throttled, so a mismatch that somehow persists can't turn the 4s poll into a profile-API
- *  hammer. */
-const LOGIN_CHANGED_RETRY_MS = 30_000
 
 /**
  * How hard a caller wants identities resolved.
@@ -129,7 +115,9 @@ async function refreshInstances(
  * every UNRESOLVED_RETRY_MS, so signing one in shows up on its own. A RESOLVED identity is not
  * final either — the account behind an instance can change under us, so it is re-checked every
  * RESOLVED_REFRESH_MS, and much sooner (LOGIN_CHANGED_RETRY_MS) when the instance's on-disk login
- * uuid stops matching the identity on screen. Refresh (`force`) still re-resolves everything now.
+ * uuid stops matching the identity on screen, and every UNCONFIRMED_RUNNING_RETRY_MS while a running app's login could
+ * not be confirmed (the yellow mark). The timers are lib/account-resolve.ts's. Refresh (`force`) still re-resolves
+ * everything now.
  *
  * Resolved a few AT A TIME, not one after another. On a fresh page load NOTHING has been resolved
  * yet, so every instance is stale and the old strictly-serial loop turned the account column into
@@ -151,13 +139,7 @@ async function autoResolveAccounts(
   const stale = instances.value.filter((i) => {
     if (opts.force) return true
     const last = lastAutoResolveAt.get(i.dir)
-    const age = last === undefined ? Number.POSITIVE_INFINITY : now - last
-    // No identity yet (signed out / offline / unreadable) — retry on the short timer.
-    if (!i.account?.email && !i.account?.name) return age >= UNRESOLVED_RETRY_MS
-    // Signed into a different account than the one on screen — re-resolve promptly.
-    if (loginChanged(i)) return age >= LOGIN_CHANGED_RETRY_MS
-    // Known identity, same account: re-check occasionally in case the email/name/plan changed.
-    return age >= RESOLVED_REFRESH_MS
+    return resolveDue(i, last === undefined ? Number.POSITIVE_INFINITY : now - last)
   })
   if (stale.length === 0) return
 
@@ -387,6 +369,9 @@ async function followLogins(): Promise<void> {
     lastAutoResolveAt.set(dir, Date.now())
     void resolveAccount(dir)
   }
+  // A running app whose login could not be confirmed is asked again on its own short timer, so signing it back in
+  // clears the mark within seconds instead of at the next quarter-hour re-check.
+  if (instances.value.some((i) => i.isRunning && unconfirmed(i))) void autoResolveAccounts({ mode: 'full' })
 }
 
 async function resolveAccount(dir: string, noNetwork = false): Promise<boolean> {

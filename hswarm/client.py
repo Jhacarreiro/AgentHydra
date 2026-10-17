@@ -42,11 +42,13 @@ import atexit
 import contextlib
 import contextvars
 import datetime as dt
+import functools
 import json
 import math
 import os
 import random
 import re
+import ssl
 import threading
 import time
 from collections.abc import Collection
@@ -156,24 +158,29 @@ DEAD_REST_S = 600.0
 # generate_content requests a day and answers the 21st with 429 RESOURCE_EXHAUSTED whose QuotaFailure names a
 # `...PerDay...` quotaId - and a RetryInfo of seconds, which is a lie for a daily cap. Resting it RATE_REST_S made
 # the pool hand the same spent keys to every task again and again. Measured 2026-09-24 (jobs 20260924-154437-ebda,
-# 20260924-205816-dd94): 19 and 20 tasks sat on the spent pool to 440-600 s with `failover: []`. A day-spent key now
-# rests until the quota resets (midnight Pacific; QUOTA_RESET_UTC_HOUR is the PDT hour, so in winter a key is
-# tried an hour early, answers one 429 and rests again), which drops the leg from route_plan once every key is spent.
+# 20260924-205816-dd94): 19 and 20 tasks sat on the spent pool to 440-600 s with `failover: []`.
+# The cap is per project PER MODEL (quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier, quotaDimensions.model,
+# limit 20; measured 2026-10-17 on one key: the 21st 3.8 Flash request answered 429, then 3.7 Flash, 3.5 Flash and 3.5
+# Flash-Lite answered 200 on that key). So a day-spent answer benches the key for that model only (KeyPool.spend); a
+# whole-key rest threw three of its four daily allowances away. It comes back when the refusal's RetryInfo says, when
+# that is a day-sized wait (DAY_HINT_MIN_S or more): 66,566 s at 05:30 UTC that day, "Please retry in 18h29m26s", which
+# is 00:00 UTC. The docs say midnight Pacific; the refusal says midnight UTC, and the clock (QUOTA_RESET_UTC_HOUR)
+# follows the refusal: 07:00 UTC benched every spent key seven hours past its refill. A hint of seconds is not believed
+# for a daily cap, and the clock decides.
 _DAILY_QUOTA_429 = re.compile(r"PerDay")
-QUOTA_RESET_UTC_HOUR = 7
+QUOTA_RESET_UTC_HOUR = 0
+DAY_HINT_MIN_S = 3600.0
+_RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
 # A 429 whose quota LIMIT is zero is not "too fast" either: the key's project has no quota at all where the call
 # landed. Measured 2026-09-26 on MPC-HELL: every Gemini model on every sampled key (twelve keys, twelve projects)
 # answered 429 with quota_limit_value "0" for GenerateContentRequestsPerMinutePerProjectPerRegion in us-south1, and
-# rested RATE_REST_S the 760 keys were rotated for 34 minutes by each of 124 builders, all of which died. Rested
-# ZERO_QUOTA_REST_S, the shared key state takes the leg out of every plan on the machine until the keys wake.
+# rested RATE_REST_S the 760 keys were rotated for 34 minutes by each of 124 builders, all of which died. The key that
+# says it rests until the provider's daily reset, and only that key. Census 2026-10-17: 549 of the 726 Gemini keys
+# (542 projects) answer it, all in us-south1, and the zero held on 60 of 60 re-asks that morning and on another model,
+# so a 30-minute rest asked each of them again 48 times a day. 2026-10-13 to 10-17 the whole pool was rested once five
+# keys in a row said it (a pool-wide rest, removed): with 76 keys answering 200 among the 549, five zeros came before a 200
+# about half the time, every key sat resting, and Gemini answered no call for four days.
 _ZERO_QUOTA_429 = re.compile(r'"quota_limit_value"\s*:\s*"0"')
-ZERO_QUOTA_REST_S = 1800.0
-# Resting each key as it answers still sends one request per key first, and a call may try every key (max_attempts is
-# the pool size + 2). 2026-10-13: every probed Gemini key (30 of 715, all seven models) answered quota_limit_value "0"
-# in us-south1, and HSwarm sent 4,095 Gemini requests from 03:00 to 04:00 UTC and 2,238 the next hour for one job
-# whose tasks timed out at 600-1,170 s. So once this many distinct keys say it with no 200 between, the whole pool
-# rests: a 200 clears the count, so a few dead keys among live ones never rest the rest.
-ZERO_QUOTA_POOL_KEYS = 5
 
 
 def _zero_limit_header(headers) -> bool:
@@ -220,7 +227,7 @@ _PLAN_GATED: dict[tuple[str, str, str], float] = {}  # (provider, key fingerprin
 
 
 def _until_quota_reset(now: dt.datetime | None = None, hour: int = QUOTA_RESET_UTC_HOUR) -> float:
-    """Seconds until the next daily-quota reset (hour:00 UTC; Gemini's QUOTA_RESET_UTC_HOUR unless told)."""
+    """Seconds until the next daily-quota reset (hour:00 UTC; QUOTA_RESET_UTC_HOUR, Gemini's, unless told)."""
     now = now or dt.datetime.now(dt.timezone.utc)
     reset = now.replace(hour=hour, minute=0, second=0, microsecond=0)
     if reset <= now:
@@ -289,18 +296,22 @@ BALANCE_FRESH_S = 1800.0        # a balance reading older than this is stale and
 DISABLED_RECHECK_S = 6 * 3600.0 # ...but a key in the disabled slot is re-read at most this often (see KeyPool.stale_keys)
 NO_CREDIT_RECHECK_S = 24 * 3600.0 # a key that AUTHENTICATES but is out of credit winds down longer still (owner, 2026-09-23:
                                   # "the ones that authenticate with no credit should be on, like, a 24-hour wind-down")
-PROBE_WIDTH = 16                # balance GETs in flight at once; a probe of every key used to run them one by one
+PROBATION_TICK_S = 60.0         # a pool read lets due credit-disabled keys out at most this often (KeyPool._probation_tick)
+PROBE_WIDTH = 16               # balance GETs in flight at once; a probe of every key used to run them one by one
 LOCK_WAIT_S = 2.0               # how long a write waits for the shared state file's lock before going ahead without it
 
 OUT_OF_CREDIT = "out of credit (402)"
 REVOKED = "revoked (401/403)"
+NO_QUOTA = "no quota where the call lands (429, limit 0)"  # a rest until the daily reset (_ZERO_QUOTA_429)
 # OpenRouter answers a key whose account no longer exists with 401 "User not found": not one bad minute, so the
 # key skips the strike ladder and goes straight to the disabled slot (a later probe still takes it back out).
-_ACCOUNT_GONE = re.compile(r"user not found", re.IGNORECASE)
+# Gemini answers a key Google found published with 403 "Your API key was reported as leaked. Please use another API
+# key.", a block that does not lift: 86 of the 726 Gemini keys (census, 2026-10-17), each asked again on the ladder.
+_ACCOUNT_GONE = re.compile(r"user not found|reported as leaked", re.IGNORECASE)
 
 
 def account_gone(text: str | None) -> bool:
-    """Whether a provider's refusal says the account behind the key no longer exists."""
+    """Whether a provider's refusal says the key will never serve again: its account is gone, or the key is blocked."""
     return bool(_ACCOUNT_GONE.search(text or ""))
 
 
@@ -555,8 +566,8 @@ class KeyPool:
         self._pending: dict[str, tuple] = {}
         self._pending_lock = threading.Lock()
         self._pending_path = None  # the state file the queued ops belong to
-        self._zero_quota: set[str] = set()  # keys that answered a zero quota since this pool's last 200 (ZERO_QUOTA_POOL_KEYS)
         self._registered = False  # on _LIVE_POOLS only while ops are queued (_register / _unregister)
+        self._probation_at = 0.0  # when a read last gave probation a look (_probation_tick)
         if state is None:
             self._load(force=True)
         else:
@@ -714,11 +725,13 @@ class KeyPool:
                 f"Top one up and run `hswarm keys probe --provider {self.provider}`, or re-enable one with "
                 f"`hswarm keys enable <fingerprint> --provider {self.provider}`; `hswarm keys` lists them.")
 
-    def rest(self, key: str, seconds: float, status: int | None = None, dead: bool = False, gone: bool = False) -> None:
+    def rest(self, key: str, seconds: float, status: int | None = None, dead: bool = False, gone: bool = False,
+             why: str | None = None) -> None:
         """Rest a key. `dead` (401/403) adds a strike and doubles the rest each time, up to the cap; once it has
         struck out DEAD_STRIKES times the key is DISABLED instead, because a key that has been revoked for six
         hours is not coming back on its own and re-trying it forever is what the disabled slot exists to stop.
-        `gone` (the provider said the account itself no longer exists) disables it on the first strike.
+        `gone` (the provider said the account itself no longer exists) disables it on the first strike. `why` names a
+        rest that is not a plain rate limit (NO_QUOTA), for the report; the next 200 clears it.
 
         A plain rest (a 429) goes through _defer: it lands in this process at once and on disk with the next merged
         write, at most STATE_FLUSH_S later. A strike or a disable is written at once, as before."""
@@ -728,8 +741,10 @@ class KeyPool:
             e["rest_until"] = max(float(e.get("rest_until") or 0.0), now + seconds)
             e["status"] = status
             e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+            if why:
+                e["why"] = why
             self._state[self._fp[key]] = e
-            self._defer(self._fp[key], ("rest", e["rest_until"], status, e["last"]))
+            self._defer(self._fp[key], ("rest", e["rest_until"], status, e["last"], why))
             return
         with self._locked() as tx:
             self._load(force=True, tx=tx)
@@ -763,18 +778,27 @@ class KeyPool:
             e["free_ok"] = bool(e.get("free_left"))  # last /key probe said there was free-tier allowance left
         return e
 
-    def zero_quota(self, key: str) -> bool:
-        """The key answered that its quota is zero where the call landed: rest it ZERO_QUOTA_REST_S, and once
-        ZERO_QUOTA_POOL_KEYS distinct keys have said so since the pool's last 200, rest every key. True when it rested
-        the whole pool."""
-        self.rest(key, ZERO_QUOTA_REST_S, status=429)
-        self._zero_quota.add(key)
-        if len(self._zero_quota) < ZERO_QUOTA_POOL_KEYS:
-            return False
-        for k in self._keys:
-            self.rest(k, ZERO_QUOTA_REST_S, status=429)
-        self._zero_quota.clear()
-        return True
+    def _spent_until(self, key: str, model: str) -> float:
+        """When `key` serves `model` again after a day-spent refusal (spend); 0.0 when it was never spent."""
+        return float((self._entry(key).get("spent") or {}).get(model) or 0.0)
+
+    def spend(self, key: str, model: str, until: float) -> None:
+        """`key` has spent today's allowance for `model` (the api model id) and serves it again at `until`; its other
+        models are untouched. Kept on the key's row by fingerprint, so every process on the machine skips it, and
+        through a 200 on another model (keystate._READINGS). Written at once: at most once per key, model and day."""
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
+            now = time.time()
+            e = dict(self._entry(key))
+            e["spent"] = {m: t for m, t in (e.get("spent") or {}).items() if t > now} | {model: until}
+            e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+            self._put(tx, key, e)
+
+    def spent_keys(self, model: str) -> set[str]:
+        """The keys whose allowance for `model` is spent until its refill: a call for that model never sends them."""
+        self._load()
+        now = time.time()
+        return {k for k in self._keys if self._spent_until(k, model) > now}
 
     def recover(self, key: str, free: bool = False) -> None:
         """A key that just answered 200 is healthy: its rest, strikes and disabling are cleared (a write only when
@@ -785,7 +809,6 @@ class KeyPool:
         money back into PAID rotation - where the very next request 402s. Found in review, 2026-09-17, before it
         ever shipped: every free call on such a key silently undid its own disable.
         """
-        self._zero_quota.clear()
         self._load()  # the copy this process has (a few seconds old at most): a write only when it shows something to clear
         if free and self._free_ok(key):
             return
@@ -821,6 +844,8 @@ class KeyPool:
             e = dict(e)
             e["rest_until"] = max(float(e.get("rest_until") or 0.0), op[1])
             e["status"], e["last"] = op[2], op[3]
+            if len(op) > 4 and op[4]:
+                e["why"] = op[4]
             self._state[fp] = e
         else:  # recover: keep only the balance readings, exactly as the immediate write did
             kept = {k: e[k] for k in self._READINGS if k in e}
@@ -852,22 +877,26 @@ class KeyPool:
         the key out then, neither sooner nor a day later."""
         with self._locked() as tx:
             self._load(force=True, tx=tx)
-            now = time.time()
-            e = dict(self._entry(key))
-            # A strike is a NEW failure. A probe that reads "still empty" on a key already disabled is the same
-            # failure seen again, and counting it would turn every disabled key "dead" after three probes.
-            if not self._parked(key, now):
-                e["strikes"] = int(e.get("strikes") or 0) + 1
-            e["status"] = status
-            e["balance_usd"] = balance_usd if balance_usd is not None else min(0.0, float(e.get("balance_usd") or 0.0))
-            e["balance_at"] = now
-            e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            self._disable_entry(e, OUT_OF_CREDIT, status=status, now=now, free_ok=free_ok)
-            if until is not None:
-                e["disabled_until"] = until
-            else:
-                e.pop("disabled_until", None)  # the latest verdict wins: a later 402 names no date
-            self._put(tx, key, e)
+            self._broke(tx, key, time.time(), status, balance_usd, free_ok, until)
+
+    def _broke(self, tx, key: str, now: float, status: int | None, balance_usd: float | None, free_ok: bool | None,
+               until: float | None = None) -> None:
+        """broke's change to one key's record, inside the caller's write transaction."""
+        e = dict(self._entry(key))
+        # A strike is a NEW failure. A probe that reads "still empty" on a key already disabled is the same
+        # failure seen again, and counting it would turn every disabled key "dead" after three probes.
+        if not self._parked(key, now):
+            e["strikes"] = int(e.get("strikes") or 0) + 1
+        e["status"] = status
+        e["balance_usd"] = balance_usd if balance_usd is not None else min(0.0, float(e.get("balance_usd") or 0.0))
+        e["balance_at"] = now
+        e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self._disable_entry(e, OUT_OF_CREDIT, status=status, now=now, free_ok=free_ok)
+        if until is not None:
+            e["disabled_until"] = until
+        else:
+            e.pop("disabled_until", None)  # the latest verdict wins: a later 402 names no date
+        self._put(tx, key, e)
 
     def disable(self, key: str, reason: str = "disabled by hand", status: int | None = None) -> None:
         """Put a key in the disabled slot outright (the `hswarm keys disable` path)."""
@@ -917,6 +946,18 @@ class KeyPool:
                 out.append(self._fp[k])
         return out
 
+    def _probation_tick(self) -> None:
+        """Probation on read, for a provider with no balance endpoint: whatever asks whether this pool can serve (an
+        AUTO plan through dispatch._wake and _dead, a pinned route through jobs._leg_health) lets a due key out first, at
+        most once a PROBATION_TICK_S. It ran only when a job started on the provider, and every reader drops a pool whose
+        keys are all disabled before a job starts: all 51 Hugging Face tokens, disabled 2026-10-05 to 10-07, got 0
+        requests in 8 days."""
+        now = time.time()
+        if now - self._probation_at < PROBATION_TICK_S or config.PROVIDERS.get(self.provider, {}).get("balance_path"):
+            return
+        self._probation_at = now
+        self.probation()
+
     def enable_all(self) -> int:
         now = time.time()
         return sum(1 for k in self._keys if self._parked(k, now) and self.enable(k))
@@ -940,6 +981,7 @@ class KeyPool:
     def disabled(self) -> list[str]:
         """Fingerprints currently in the disabled slot, including any an older build left parked on a timer."""
         self._load(force=True)
+        self._probation_tick()
         now = time.time()
         return [self._fp[k] for k in self._keys if self._parked(k, now)]
 
@@ -967,28 +1009,39 @@ class KeyPool:
         Not usable: disabled. An unknown reading (None, None) is a probe that learned nothing: it stamps the time
         so the pool does not ask again inside the window, and leaves the key's record, its disabling and its last
         balance alone. Returns whether the key is usable now."""
-        usable = available if available is not None else (usd is None or usd > 0.0)
-        if not usable and self.balance_authority == "reading":
-            self.broke(key, status=402, balance_usd=usd, free_ok=bool(free_left))
-            return False
-        learned = available is not None or usd is not None
+        return self.note_balances([(key, usd, available, free_left)])[0]
+
+    def note_balances(self, readings: list[tuple[str, float | None, bool | None, int | None]]) -> list[bool]:
+        """note_balance for each (key, usd, available, free_left), all in ONE write transaction; whether each key is
+        usable now, in order. A probe of every key wrote one transaction per key on the shared server's event loop,
+        and a doctor's were most of the stack dumps taken while GET /health waited (2026-10-16)."""
+        out: list[bool] = []
         with self._locked() as tx:
             self._load(force=True, tx=tx)
             now = time.time()
-            e = dict(self._entry(key))
-            if learned and usable:
-                # A positive reading clears rest, strikes and disabling; the key's region stays.
-                e = {"balance_usd": usd, "balance_at": now, **({"base_url": e["base_url"]} if e.get("base_url") else {})}
-            else:
-                # Either the probe learned nothing, or it read an empty balance for a provider whose number is not
-                # authority (OpenRouter). Keep the reading for the report, keep the disabling as it stands.
-                e["probed_at"] = now
-                if learned:
-                    e["balance_usd"], e["balance_at"] = usd, now
-            if free_left is not None:
-                e["free_left"] = int(free_left)
-            self._put(tx, key, e)
-        return not self._parked(key, now)
+            for key, usd, available, free_left in readings:
+                usable = available if available is not None else (usd is None or usd > 0.0)
+                if not usable and self.balance_authority == "reading":
+                    self._broke(tx, key, now, 402, usd, bool(free_left))
+                    out.append(False)
+                    continue
+                learned = available is not None or usd is not None
+                e = dict(self._entry(key))
+                if learned and usable:
+                    # A positive reading clears rest, strikes and disabling; the key's region and its day-spent models
+                    # stay (money says nothing about a per-model daily cap).
+                    e = {"balance_usd": usd, "balance_at": now, **{f: e[f] for f in ("base_url", "spent") if e.get(f)}}
+                else:
+                    # Either the probe learned nothing, or it read an empty balance for a provider whose number is not
+                    # authority (OpenRouter). Keep the reading for the report, keep the disabling as it stands.
+                    e["probed_at"] = now
+                    if learned:
+                        e["balance_usd"], e["balance_at"] = usd, now
+                if free_left is not None:
+                    e["free_left"] = int(free_left)
+                self._put(tx, key, e)
+                out.append(not self._parked(key, now))
+        return out
 
     def stale_keys(self, max_age_s: float = BALANCE_FRESH_S, disabled_age_s: float = DISABLED_RECHECK_S) -> list[str]:
         """The keys whose balance has not been read within their window: never, or too long ago. A probe that
@@ -1041,12 +1094,15 @@ class KeyPool:
         now = time.time()
         return sum(1 for k in self._keys if k not in exclude and self._usable(k, free, now))
 
-    def soonest_wake(self, free: bool = False) -> float:
+    def soonest_wake(self, free: bool = False, model: str | None = None) -> float:
         """Seconds until some key can take a request: 0 when one can now, the shortest rest left when every live
-        key is resting (a 429, a day-spent quota), inf when every key is disabled."""
+        key is resting (a 429, a zero quota), inf when every key is disabled. With `model` (an api model id), a key
+        that has spent today's allowance for it (spend) counts as resting until its refill."""
         self._load()
+        self._probation_tick()
         now = time.time()
-        rests = [max(0.0, self._rest_until(k) - now) for k in self._keys if self._usable(k, free, now)]
+        rests = [max(0.0, max(self._rest_until(k), self._spent_until(k, model) if model else 0.0) - now)
+                 for k in self._keys if self._usable(k, free, now)]
         return min(rests, default=float("inf"))
 
     def next_with_balance(self, exclude: set[str] | None = None) -> tuple[str | None, float]:
@@ -1089,6 +1145,9 @@ class KeyPool:
                 "state": ("disabled (:free only)" if disabled and free_ok else "disabled" if disabled
                           else "resting" if self._rest_until(k) > now else "ok"),
                 "resting_s": round(max(0.0, self._rest_until(k) - now), 1),
+                "why": e.get("why") if self._rest_until(k) > now else None,  # NO_QUOTA, or None for a plain rest
+                # The models whose daily allowance this key has spent, and the seconds until each comes back (spend).
+                "spent": {m: round(t - now, 1) for m, t in (e.get("spent") or {}).items() if t > now},
                 "strikes": strikes, "status": e.get("status"), "dead": strikes >= DEAD_STRIKES, "last": e.get("last"),
                 "disabled": disabled, "disabled_at": e.get("disabled_at"),
                 "disabled_reason": e.get("disabled_reason") or (OUT_OF_CREDIT if disabled else None),
@@ -1245,6 +1304,14 @@ async def find_region(http: httpx.AsyncClient, pool: KeyPool, key: str, refused:
     return found
 
 
+@functools.cache
+def tls() -> ssl.SSLContext:
+    """The one TLS context every HTTP client in the process verifies with (`verify=tls()`). Without it httpx builds one
+    per client and loads the CA bundle into it: about 60 ms on the shared server's event loop for each new client, 38
+    of them in its first hswarm_doctor and one per decide (2026-10-16). A context serves any number of clients."""
+    return httpx.create_ssl_context()
+
+
 class ChatClient:
     """One provider's chat endpoint. `DeepSeekClient` is the same class under its older name."""
 
@@ -1272,6 +1339,7 @@ class ChatClient:
             headers={"Content-Type": "application/json"},
             timeout=httpx.Timeout(timeout_s, connect=30.0, pool=None),
             limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections),
+            verify=tls(),
         )
         self.calls = 0
         self.retries = 0
@@ -1382,46 +1450,56 @@ class ChatClient:
         The reading is ACTED on: a key at or under zero is parked and one above zero is cleared. (Until
         2026-09-16 a key that merely ANSWERED the balance endpoint was cleared, so every `doctor` run put the
         empty keys back into rotation and the next worker died of 402 on one of them.)
+        The readings are written once every GET has answered, in one transaction (note_balances).
         """
         wanted = None if keys is None else set(keys)
         pairs = [(k, st) for k, st in zip(self.pool.keys, self.pool.status()) if wanted is None or k in wanted]
         gate = asyncio.Semaphore(PROBE_WIDTH)
 
-        async def one(k: str, st: dict) -> dict:
+        async def one(k: str, st: dict) -> tuple[dict, tuple | None]:
             async with gate:
                 return await self._balance_row(k, st)
 
-        return list(await asyncio.gather(*(one(k, st) for k, st in pairs)))
+        done = await asyncio.gather(*(one(k, st) for k, st in pairs))
+        readings = [(k, *reading) for (k, _), (_, reading) in zip(pairs, done) if reading is not None]
+        usable = iter(self.pool.note_balances(readings) if readings else ())
+        for row, reading in done:
+            if reading is not None:
+                row["usable"] = next(usable)
+        return [row for row, _ in done]
 
-    async def _balance_row(self, k: str, st: dict) -> dict:
+    async def _balance_row(self, k: str, st: dict) -> tuple[dict, tuple | None]:
+        """One key's row, and the reading (usd, available, free_left) balances() records for it; None when the
+        provider refused the key and that is recorded here already."""
         row: dict = {"fingerprint": config.fingerprint(k), "strikes": st["strikes"], "dead": st["dead"], "resting_s": st["resting_s"],
                      "state": st["state"], "disabled": st["disabled"], "disabled_reason": st["disabled_reason"]}
-        if self.spec.get("balance_path"):
-            try:
-                body = await self.get_json(self.spec["balance_path"], key=k)
-                free_left = openrouter_free_left(body) if self.provider == "openrouter" else None
-                body = await self._merge_credits(body, k)
-                row["balance"] = body
-                usd, available = balance_reading(body, self.provider)
-                row["credit_usd"], row["free_left"] = usd, free_left
-                row["usable"] = self.pool.note_balance(k, usd, available, free_left=free_left)
-                if usd is not None and usd <= 0 and self.pool.balance_authority == "status":
-                    # Reported, not acted on: this provider's number is not its word on whether it will serve the key.
-                    row["note"] = f"credit reads {usd:.4f}, which {self.provider} does not treat as out of credit; only a 402 disables"
-            except ApiError as e:
-                row["error"] = f"{type(e).__name__}: {e}"[:160]
-                if e.status == 402 or key_limit_spent(e.body):
-                    self.pool.broke(k, status=e.status)
-                    row["usable"] = False
-                elif e.status in DEAD_KEY_STATUS:
-                    self.pool.rest(k, 0, status=e.status, dead=True, gone=account_gone(e.body))
-                    row["usable"] = False
-                else:
-                    row["usable"] = self.pool.note_balance(k, None, None)  # the endpoint failed: a probe that learned nothing
-            except Exception as e:  # noqa: BLE001 - a dead key is reported, not fatal
-                row["error"] = f"{type(e).__name__}: {e}"[:160]
-                row["usable"] = self.pool.note_balance(k, None, None)
-        return row
+        if not self.spec.get("balance_path"):
+            return row, None
+        try:
+            body = await self.get_json(self.spec["balance_path"], key=k)
+            free_left = openrouter_free_left(body) if self.provider == "openrouter" else None
+            body = await self._merge_credits(body, k)
+            row["balance"] = body
+            usd, available = balance_reading(body, self.provider)
+            row["credit_usd"], row["free_left"] = usd, free_left
+            if usd is not None and usd <= 0 and self.pool.balance_authority == "status":
+                # Reported, not acted on: this provider's number is not its word on whether it will serve the key.
+                row["note"] = f"credit reads {usd:.4f}, which {self.provider} does not treat as out of credit; only a 402 disables"
+            return row, (usd, available, free_left)
+        except ApiError as e:
+            row["error"] = f"{type(e).__name__}: {e}"[:160]
+            if e.status == 402 or key_limit_spent(e.body):
+                self.pool.broke(k, status=e.status)
+                row["usable"] = False
+            elif e.status in DEAD_KEY_STATUS:
+                self.pool.rest(k, 0, status=e.status, dead=True, gone=account_gone(e.body))
+                row["usable"] = False
+            else:
+                return row, (None, None, None)  # the endpoint failed: a probe that learned nothing
+        except Exception as e:  # noqa: BLE001 - a dead key is reported, not fatal
+            row["error"] = f"{type(e).__name__}: {e}"[:160]
+            return row, (None, None, None)
+        return row, None
 
     async def _merge_credits(self, body: dict, key: str) -> dict:
         """OpenRouter's /key answers about the KEY (its spending limit, its free-tier allowance) and its /credits
@@ -1473,6 +1551,18 @@ class ChatClient:
             return None
         return time.time() + _until_quota_reset(hour=int(hour))
 
+    def _until_reset(self) -> float:
+        """Seconds until this provider's daily quotas come back: the `daily_quota_reset_utc_hour` its file names, else
+        QUOTA_RESET_UTC_HOUR (00:00 UTC, when Gemini's refusals say its allowance returns)."""
+        return _until_quota_reset(hour=int(self.spec.get("daily_quota_reset_utc_hour", QUOTA_RESET_UTC_HOUR)))
+
+    def _day_back_s(self, text: str | None) -> float:
+        """Seconds until a day-spent model serves again on the key that refused it: the refusal's own RetryInfo when it
+        names a day-sized wait, else the provider's reset clock (a hint of seconds is not believed for a daily cap)."""
+        m = _RETRY_DELAY.search(text or "")
+        hint = float(m[1]) if m else 0.0
+        return hint if hint >= DAY_HINT_MIN_S else self._until_reset()
+
     def _dead_key(self, r: httpx.Response, key: str, free: bool, attempt: int) -> str:
         """Rest or disable the key the provider just rejected; "continue" means another key takes it at once."""
         if r.status_code == 402 or key_limit_spent(r.text):
@@ -1488,9 +1578,11 @@ class ChatClient:
             raise NoUsableKey(f"NoUsableKey: every {self.provider} key was rejected as invalid ({r.text[:120]})")
         raise ApiError(r.status_code, r.text, self.provider)
 
-    async def _after_response(self, r: httpx.Response, key: str, free: bool, attempt: int, resamples: int) -> tuple[str, int]:
+    async def _after_response(self, r: httpx.Response, key: str, free: bool, attempt: int, resamples: int,
+                              model: str = "") -> tuple[str, int]:
         """A non-200 reply: rest/rotate/disable the key and say what the caller does next - "continue" (retry
-        at once), "sleep" (back off first) - or raise. Returns the resample count it kept."""
+        at once), "sleep" (back off first) - or raise. Returns the resample count it kept. `model` is the api model id
+        the request named, which a day-spent refusal is about."""
         if (r.status_code == 429 and _OUT_OF_CREDIT_429.search(r.text or "")) or (
                 r.status_code == 400 and spend_exhausted(r.text)):
             # "429" (or groq's and Anthropic's "400") but it means out of credit: disable, do not rest-and-retry forever.
@@ -1499,9 +1591,13 @@ class ChatClient:
                 return "continue", resamples
             raise NoUsableKey(f"NoUsableKey: every {self.provider} key is out of credit ({r.text[:100]})")
         if r.status_code == 429 and _DAILY_QUOTA_429.search(r.text or ""):
-            self.pool.rest(key, _until_quota_reset(), status=429)  # spent for today: no retry on it until the reset
-        elif r.status_code == 429 and (_ZERO_QUOTA_429.search(r.text or "") or _zero_limit_header(r.headers)):
-            self.pool.zero_quota(key)  # no quota where the call landed: waiting 20 s changes nothing
+            # Spent for today on this model only: the key's other models serve on, and the loop's top skips it for this
+            # one (another key, or NoUsableKey once none is left), so nothing waits here.
+            self.pool.spend(key, model, time.time() + self._day_back_s(r.text))
+            self.rotations += 1
+            return "continue", resamples
+        if r.status_code == 429 and (_ZERO_QUOTA_429.search(r.text or "") or _zero_limit_header(r.headers)):
+            self.pool.rest(key, self._until_reset(), status=429, why=NO_QUOTA)  # no quota where the call landed: this key, until the reset
         elif r.status_code == 429:
             self.pool.rest(key, self._retry_after(r.headers.get("retry-after"), RATE_REST_S), status=429)
         elif r.status_code in DEAD_KEY_STATUS or (r.status_code == 400 and _KEY_SHAPED_400.search(r.text or "")):
@@ -1584,6 +1680,11 @@ class ChatClient:
                 if not self.pool.live_besides(skip | gated, free=free):
                     raise NoUsableKey(f"NoUsableKey: no live {self.provider} key's plan includes {model_id} (_PLAN_GATED_400); not sent")
                 skip = skip | gated
+            if (spent := self.pool.spent_keys(model_id)) and not spent <= skip:
+                if not self.pool.live_besides(skip | spent, free=free):
+                    raise NoUsableKey(f"NoUsableKey: every live {self.provider} key has spent today's {model_id} allowance "
+                                      f"(_DAILY_QUOTA_429); not sent")
+                skip = skip | spent
             attempt += 1
             self.calls += 1
             transport_failed = False
@@ -1664,7 +1765,7 @@ class ChatClient:
                                     f"wait and no other key lifts: {(r.text or '')[:300]}", self.provider)
             if r.status_code == 429 and limited_since is None:
                 limited_since = time.monotonic()
-            action, resamples = await self._after_response(r, key, free, attempt, resamples)
+            action, resamples = await self._after_response(r, key, free, attempt, resamples, model_id)
             if r.status_code == 429 and self.gate is not None and not self.pool.available(free=free):
                 self.gate.saturated()
             delay = self._retry_delay(attempt, r.headers.get("retry-after")) if action != "continue" else 0.0

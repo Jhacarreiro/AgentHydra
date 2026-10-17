@@ -125,6 +125,10 @@ export interface ChatSummary {
   itemsStamp?: string
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
+  /** Tokens a Codex chat's thread has used so far (the token-usage events' running total); absent for Claude, whose count AgentHydra's usage route gives. */
+  tokensUsed?: number | null
+  /** The chat folder's current git branch; null outside a repository or on a detached head, absent until first read. */
+  gitBranch?: string | null
   pendingCount: number // open permission / question / plan requests
   queuedCount: number // user messages sent while a turn was running, not yet taken up
   climayteActive: number // CliMayte workers this chat dispatched that are still queued/running/waiting, and its sub-chats (seats) still at work
@@ -342,6 +346,9 @@ export interface TranscriptIndex {
   contextTokens?: number | null
   /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
   contextWindow?: number | null
+  /** An outside Codex session's: the tokens its thread has used so far (its rollout's total_token_usage), which AgentHydra's
+   *  usage route does not count for Codex; null when the rollout has none, absent on a Claude Code session. */
+  sessionTokens?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
   /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,

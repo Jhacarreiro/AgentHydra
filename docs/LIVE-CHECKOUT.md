@@ -57,8 +57,13 @@ dashboard keeps its log open), `-Apply` stops before the move, names the process
    `restartNeeded: true`, `bootCommit` older than `diskCommit`), restart it in place with
    `POST /api/daemon/restart` (the app header's Restart). The new daemon starts first and takes over the
    same port; CliMayte workers under their runners keep going and the new daemon picks them up (50 ran
-   through one on 2026-10-10). It answers 409 while a worker runs inside the daemon itself or a chat move
-   is in flight. The auto-update loop waits for running work on its own.
+   through one on 2026-10-10). Free batches never hold it (2026-10-17): each one is saved in
+   `<DATA_DIR>\free-batches`, the restart parks them (no new send starts; a look at Desk 2 under way
+   finishes first, at most 20 s), and the new daemon carries every one on, so `free_results` answers for a
+   batch started before the restart. A `free_chat` during the handoff is taken, saved, and sent by the new
+   daemon. A send cut off by a crash is resent under its own request id, which Desk 2 answers with the
+   operation it already has. It answers 409 while a worker runs inside the daemon itself or a chat move
+   is in flight. The auto-update loop waits for a chat move, and up to an hour for dispatch runs.
 
 Never edit files in `live/`. If it has local edits, `-Plan` reports a problem and the updater refuses
 the pull.

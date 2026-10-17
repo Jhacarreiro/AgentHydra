@@ -27,6 +27,8 @@ export class FreeBatchRetention<T extends RetainedBatch> {
     private batches: Map<string, T>,
     private keepMs: number,
     private clock: BatchRetentionClock = systemClock,
+    /** Called for each expired batch, after it left the map (mcp-free.ts removes its saved file). */
+    private onDrop: (id: string) => void = () => {},
   ) {}
 
   /** Called on insertion, completion and reads; the timer retains only this map, never a result. */
@@ -37,8 +39,10 @@ export class FreeBatchRetention<T extends RetainedBatch> {
       if (!batch.settled) continue
       // The previous check was age > keepMs, so the exact boundary remains available.
       const expires = batch.createdAt + this.keepMs + 1
-      if (now >= expires) this.batches.delete(id)
-      else next = Math.min(next, expires)
+      if (now >= expires) {
+        this.batches.delete(id)
+        this.onDrop(id)
+      } else next = Math.min(next, expires)
     }
     if (this.timer !== null && this.deadline === next) return
     if (this.timer !== null) this.clock.clearTimeout(this.timer)

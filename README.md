@@ -151,7 +151,7 @@ you already have.
 
 - **This PC (the default):** your people are folders under `~/.agenthydra/people/`, the format in [docs/PEOPLE.md](docs/PEOPLE.md).
 - **CrAInium (owners only):** in Settings → Your people, pick CrAInium. Your people are kept in the owners' private persona store on their own server, reached over SSH, and follow you to your other PCs. The choice only shows on a PC that has the private add-on and SSH access to that server.
-- **Safe sync:** the newer copy of a person wins, the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
+- **Safe sync:** the newer copy of a person wins (a copy here unchanged since the last sync never does, whatever its files' dates), the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
 
 <details>
 <summary>How it works</summary>

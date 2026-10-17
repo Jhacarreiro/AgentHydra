@@ -401,7 +401,12 @@ if (kept.hydra) {
   cloudForHydra = kept.hydra.cloud
   keepHydra()
 }
-const onOpenHydra = () => toggleHydra(true)
+// An ask to show AgentHydra (openHydra) closes Settings first: its dialog sat over the pane it opened (2026-10-16,
+// Settings > Managers' View more and its Routines tab row slid AgentHydra in behind the dialog).
+const onOpenHydra = () => {
+  if (settingsOpen.value) closeSettings()
+  toggleHydra(true)
+}
 // The AgentHydra frame preloads once the sidebar has its first outside sessions (or 10 s passed), so its burst of
 // requests does not compete with the sidebar's first reads; pointing at or focusing its button starts it at once.
 // The lazy panels' chunks load then too, each while the window is idle (prefetchPanels).

@@ -51,6 +51,7 @@ import {
 } from './logic'
 import { displayPrefs, findAsk, findShown, restartPeek } from './state'
 import { RAIL_TARGETS, railTargets } from '@/components/rail/state'
+import { keepRailFacts, railFacts } from '@/components/rail/rail-cache'
 import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN } from '@/components/rail/classes'
 
 // Hydra Desk 2's session header for an outside session: what AgentHydra's Sessions tab said and offered
@@ -92,12 +93,19 @@ const usage = shallowRef<AhUsage | null>(null)
 const secrets = shallowRef<AhSecrets | null>(null)
 const instances = computed(() => ahInstances.value ?? [])
 
+// The last usage seen for the session shows at once (rail-cache.ts) and the fresh read replaces it, so a revisit's tokens,
+// cost and turns do not pop in a second or two later after the row and usage reads (owner, 2026-10-17). A read that
+// failed leaves the kept count; one for a session no longer on view is dropped.
 async function loadUsage(r: AhSessionRow) {
-  usage.value = await ah.usage(r).catch(() => null)
+  const id = props.sessionId
+  const u = await ah.usage(r).catch(() => null)
+  if (row.value !== r || id !== props.sessionId) return
+  if (u?.status === 'ok' && id) keepRailFacts(id, { usage: u })
+  usage.value = u ?? usage.value
 }
 async function load(id: string) {
   row.value = null
-  usage.value = null
+  usage.value = railFacts(id)?.usage ?? null
   secrets.value = null
   const cloudRow = cloud.sessions.value.find((s) => s.id === id)
   const r = await ah.session(id, ahSource(props.session?.source, cloudRow?.source)).catch(() => null)

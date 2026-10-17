@@ -30,11 +30,12 @@ const ownSession = (w: CliMayteWorker) => (w.pc ? null : w.sessionId)
 const RunDot: FunctionalComponent = () => h('span', { class: 'flex items-center justify-center', 'aria-hidden': 'true' }, [h('span', { class: 'size-1.5 rounded-full bg-current' })])
 // A task that runs, here or on another PC, pulses gray as a working chat's dot does, and one running its check
 // pulses its mark the same way: blue is HSwarm's alone and nothing in the sidebar spins (owner, 2026-10-05: "Only
-// the HSwarm items should have blue"). Finished, failed, waiting and queued marks hold still.
+// the HSwarm items should have blue"). Finished, failed, waiting and queued marks hold still; waiting (for an account
+// with room) wears the usage-limit pink, since yellow is only what waits on the owner (owner, 2026-10-17).
 const STATUS: Record<string, { icon: Component; tone: string; label: string }> = {
   queued: { icon: Clock, tone: 'text-text-muted', label: 'Queued' },
   running: { icon: RunDot, tone: runPulse('gray'), label: 'Running' },
-  waiting: { icon: Hourglass, tone: 'text-warning-text', label: 'Waiting' },
+  waiting: { icon: Hourglass, tone: 'text-[var(--status-limited-text)]', label: 'Waiting' },
   checking: { icon: ListChecks, tone: runPulse('gray'), label: 'Running its check' },
   done: { icon: CircleCheck, tone: 'text-success-text', label: 'Done' },
   failed: { icon: CircleX, tone: 'text-danger-text', label: 'Failed' }
