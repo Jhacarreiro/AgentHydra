@@ -341,7 +341,13 @@ export class FreeInstances {
         a.state !== 'pending' || instance.poolState !== 'pending' || this.poolLogin(instance) !== verified)
         throw new FreeError('The pending account changed before the pool commit.', 409, 'pool_changed')
       const before = a.before
-      const renewal = before && !before.poolState && before.loggedIn && poolCount([before], instance.provider) === 1
+      if (a.existing && (!before || before.id !== instance.id || before.provider !== instance.provider ||
+        before.email?.toLowerCase() !== a.email || before.poolState === 'pending' ||
+        (before as FreeInstance & { movedAway?: unknown }).movedAway))
+        throw new FreeError('The original pool account no longer matches this renewal.', 409, 'pool_changed')
+      // Refreshing an existing managed identity is not a new admission, even if its old login
+      // expired or it was retired. The configured cap must never block it or evict a bystander.
+      const renewal = a.existing
       const projected = { ...instance, email: a.email, loggedIn: true, plan: a.plan, usage }
       const victims = renewal ? [] : poolVictims(this.store.data.instances, projected, a.plan, a.limit, id => this.busy(id))
       if (!victims) throw new FreeError('The web pool is full. No idle lower-priority Free account can be replaced.', 409, 'pool_full')
@@ -603,7 +609,7 @@ export class FreeInstances {
     if (instance.provider !== r.provider) throw new FreeError('The provider does not match this instance.')
     if (instance.poolState === 'pending') throw new FreeError('This account has a pending pool import. Resolve it before starting another operation.', 409, 'pool_pending')
     if (instance.poolState === 'retired' && ['chat', 'resume', 'nudge', 'login'].includes(r.command))
-      throw new FreeError('This account is retired from the web pool. Renew it through a capped admission before sending again.', 409, 'pool_retired')
+      throw new FreeError('This account is retired from the web pool. Renew its login before sending again.', 409, 'pool_retired')
     const running = [...this.jobs.values()].filter(j => j.instanceId === r.instanceId && j.state === 'running')
     if (this.forgetting.has(r.instanceId) || (running.length && (auto || running.some(j => !j.auto)))) throw new FreeError('This account already has an operation running.', 409)
     this.prune()

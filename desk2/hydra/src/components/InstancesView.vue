@@ -89,6 +89,7 @@ import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import { activeInstanceCounts } from '@/lib/active-instance-counts'
 import { openSettingsInDesk } from '@/lib/desk-embed'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
@@ -688,13 +689,14 @@ const totalRows = computed(
     (kindShown('cli') ? cliTotal.value : 0) +
     (kindShown('free') ? freeTotal.value : 0),
 )
-/** The choice's counts: every row each choice has, whether it is the one shown or not. */
-const kindCounts = computed<Record<KindView, number>>(() => {
-  const desktop = desktopTotal.value
-  const cli = cliInstances.value.length
-  const free = freeTotal.value
-  return { all: desktop + cli + free, desktop, cli, free }
-})
+/** Available logins per kind; signed-out rows remain in the table for repair. */
+const kindCounts = computed(() => activeInstanceCounts({
+  desktop: showDesktopInstances.value ? instances.value : [],
+  codex: codexEnabled.value ? codexInstances.value : [],
+  dsh: dshEnabled.value ? dshInstances.value : [],
+  cli: showCliInstances.value ? cliInstances.value : [],
+  free: freeInstances.value,
+}))
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
@@ -1574,7 +1576,7 @@ onUnmounted(() => {
               @keydown="onKindViewKey($event, view)"
             >
               {{ $t(KIND_VIEW_LABEL_KEY[view]) }}
-              <span class="tabular-nums text-muted-foreground">{{ kindCounts[view] }}</span>
+              <span class="tabular-nums text-muted-foreground" :title="$t('cliInstances.loggedIn')">{{ kindCounts[view] }}</span>
             </Button>
           </div>
         </template>

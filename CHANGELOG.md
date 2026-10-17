@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Rejected and cleared logins no longer look available.** Empty CLI and decrypted Desktop credentials report signed out. An explicit authentication rejection marks only the unchanged CLI or Codex login it checked; network failures and verification refusals do not mark accounts dead.
+
+- **A fresh Desktop login can restore its linked CLI.** An idle linked CLI with an expired or rejected login can take the Desktop's fresh grant, and a verified account check clears its signed-out state. Healthy independent CLI logins and active work stay protected.
+
+- **See available accounts and a quieter status header.** The account kind counts exclude signed-out and inactive entries while keeping those rows available for repair. Scheduler status is shorter and the helper indicator shows its count, with details still available on demand.
+
+- **Renew existing Free and Go accounts without a capacity limit.** Refreshing a saved account, including a signed-out or retired one, keeps its existing entry and never displaces another account. The configured limit still applies to new imports, and every renewal still verifies the account and its plan.
+
 - **Make room in the Free pool without losing saved logins.** An idle Free account can leave the active pool while keeping its login and history. Busy, pending and paid accounts stay protected.
 
 - **Claude verification refusals preserve saved logins.** A temporary verification page no longer marks an account signed out. Explicit expired or invalid sessions still require renewal.

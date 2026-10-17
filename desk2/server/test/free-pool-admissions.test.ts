@@ -347,24 +347,51 @@ native('parallel verified admissions cannot exceed the limit or retire a Go acco
   })
 })
 
-native(
-  'same live ID renews at zero while a retired or dead ID must obtain a capped slot',
-  async () => {
-    const f = fixture()
-    const live = f.account('renew@example.test')
-    const a = await f.stage(live.email!, 'go', 0, live.id)
-    expect((await f.service.commitPool(a.requestId)).id).toBe(live.id)
-    expect(f.service.allInstances()).toHaveLength(1)
-    const retired = f.account('retired@example.test', 'free', { poolState: 'retired' })
-    const b = await f.stage(retired.email!, 'free', 0, retired.id)
-    await expect(f.service.commitPool(b.requestId)).rejects.toMatchObject({ code: 'pool_full' })
-    expect(await f.service.abortPool(b.requestId)).toMatchObject({ id: retired.id, existing: true })
-    expect(retired.poolState).toBe('retired')
-    const dead = f.account('dead@example.test', 'free', { loggedIn: false })
-    const c = await f.stage(dead.email!, 'free', 0, dead.id)
-    await expect(f.service.commitPool(c.requestId)).rejects.toMatchObject({ code: 'pool_full' })
-  },
-)
+for (const [provider, plan] of [['claude', 'free'], ['chatgpt', 'free'], ['chatgpt', 'go']] as const) {
+  for (const state of ['live', 'signed-out', 'retired'] as const) {
+    native(`${provider} ${plan} ${state} renewal bypasses capacity without retiring anyone`, async () => {
+      const f = fixture()
+      const working = f.account('working@example.test', 'free', { provider })
+      const dead = f.account('dead@example.test', 'free', { provider, loggedIn: false })
+      const preserved = [working, dead].map(row => readFileSync(f.file(row)))
+      const existing = f.account('renew@example.test', plan, {
+        provider,
+        ...(state === 'signed-out' ? { loggedIn: false } : {}),
+        ...(state === 'retired' ? { poolState: 'retired' } : {}),
+      })
+      const a = await f.stage(existing.email!, plan, 0, existing.id, provider)
+      expect(await f.service.commitPool(a.requestId)).toMatchObject({
+        ok: true, id: existing.id, existing: true, replaced: [], count: 2, limit: 0,
+      })
+      expect(existing.loggedIn).toBe(true)
+      expect(existing.poolState).toBeUndefined()
+      expect(existing.plan).toBe(plan)
+      expect(f.service.allInstances()).toHaveLength(3)
+      for (const [index, row] of [working, dead].entries()) {
+        expect(row.poolState).toBeUndefined()
+        expect(readFileSync(f.file(row))).toEqual(preserved[index])
+      }
+    })
+  }
+}
+
+native('uncapped renewal still verifies identity and refuses missing original metadata', async () => {
+  const f = fixture()
+  const existing = f.account('renew@example.test', 'free', { loggedIn: false })
+  const working = f.account('working@example.test')
+  const a = await f.stage(existing.email!, 'free', 0, existing.id)
+  f.handle(async r => r.command === 'auth'
+    ? output({ ok: true, authenticated: true, account_email: 'other@example.test' })
+    : undefined)
+  await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_verification_failed' })
+  expect(existing.poolState).toBe('pending')
+  expect(working.poolState).toBeUndefined()
+  f.handle()
+  delete existing.poolAdmission!.before
+  await expect(f.service.commitPool(a.requestId)).rejects.toMatchObject({ code: 'pool_changed' })
+  expect(existing.poolState).toBe('pending')
+  expect(working.poolState).toBeUndefined()
+})
 
 native(
   'failed auth, mismatched identity, unknown plans, stale snapshots and missing browser markers cannot evict',

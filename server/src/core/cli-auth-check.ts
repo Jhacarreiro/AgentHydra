@@ -30,6 +30,8 @@ export interface CliAuthCheckResult {
   ok: boolean
   loggedIn: boolean
   wallCleared: boolean
+  /** A definitive rejection of the unchanged current grant recorded a signed-out wall. */
+  wallSet?: boolean
   reason:
     | 'verified'
     | 'not_found'
@@ -51,6 +53,7 @@ interface CheckDeps {
   wall(id: string): AuthWall | undefined
   clearWall(id: string): void
   verified?(instance: ManagedLogin, token: string): void
+  rejected?(instance: ManagedLogin): void
   fetchProfile?(url: string, init: RequestInit): Promise<Response>
   /** Only tests shorten the real 15-second deadline. */
   timeoutMs?: number
@@ -226,7 +229,10 @@ export function createCliAuthChecker(deps: CheckDeps) {
         )
       })
       const result = await Promise.race([request, timeout])
-      if (!result.ok) return result
+      // A 401 is also an answer about this exact grant. Run it through the same race guards as
+      // success before recording a signed-out wall; transport failures and 403s prove no such thing.
+      const rejected = result.reason === 'profile_rejected' && result.status === 401
+      if (!result.ok && !rejected) return result
       // No await between this validation and the mutation: a later grant, account or server
       // failure must never be cleared by a successful answer for the earlier one.
       const current = deps.instance(id)
@@ -254,6 +260,13 @@ export function createCliAuthChecker(deps: CheckDeps) {
       // verified grant succeeds idempotently; a replacement or another kind of wall never does.
       if (wall && (wall.reason === ORG_DISABLED_WALL || wall.reason === IDENTITY_WALL))
         return { ...result, ok: false, loggedIn: false, reason: 'account_restricted' }
+      if (rejected) {
+        if (deps.rejected) {
+          deps.rejected(current)
+          result.wallSet = true
+        }
+        return result
+      }
       deps.verified?.(current, captured.token)
       if (wall?.reason === 'signed out') {
         deps.clearWall(id)
