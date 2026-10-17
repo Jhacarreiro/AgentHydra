@@ -316,7 +316,7 @@ const nowIso = (ms: number): string => new Date(ms).toISOString()
 export async function proposeCentral(c: Central, raw: RoutineProposalRequest, localIds: Set<string>): Promise<Refusal | null> {
   const { id, name, why, prompt, store: _store, ...rest } = raw as RoutineProposalRequest & Record<string, unknown>
   if (typeof id !== 'string' || !ROUTINE_ID.test(id)) return { status: 400, error: 'the proposal is refused: its id is 1 to 40 of a-z, 0-9 and -, starting with a letter or digit' }
-  if ('approval' in rest) return { status: 400, error: 'the proposal is refused: a proposal carries no approval; only the owner approves' }
+  if ('approval' in rest) return { status: 400, error: 'the proposal is refused: a proposal carries no approval; approve signs it' }
   const front: Record<string, unknown> = { kind: 'routine', format: FORMAT, title: name, ...rest, why, runsOn: rest.runsOn ?? [c.runner.id] }
   if (front.schedule !== undefined && front.timeZone === undefined) front.timeZone = c.runner.zone
   let doc: RoutineDoc

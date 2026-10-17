@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
+- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
+- **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
 - **An unused database index stays removed after a restart.** An earlier storage cleanup removed an index nothing reads, but every later start of AgentHydra created it again and kept it updated as chats were scanned. It is now removed at every start, also after an older copy of AgentHydra opened the same database.
 
 ## [2.0.5] - 2026-10-16

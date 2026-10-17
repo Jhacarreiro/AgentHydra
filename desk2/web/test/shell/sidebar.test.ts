@@ -229,6 +229,17 @@ describe('sessions running elsewhere in the same list', () => {
     expect(externalGlyph({ status: 'idle', unread: true })).toMatchObject({ shape: 'dot', tone: 'success', label: 'Unread' })
   })
 
+  it('an outside chat whose turn ended while its background tasks run is the orange running dot, never the idle ring', () => {
+    // Owner, 2026-10-16: a Desktop chat whose background task had run 18 minutes was drawn as the idle ring with dimmed text.
+    for (const status of ['idle', 'stale'] as const)
+      for (const unread of [false, true])
+        expect(externalGlyph({ status, unread, backgroundActive: 1 })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none', active: true })
+    // A running turn keeps its blink, and a question its pulse; with nothing running in the background it is idle again.
+    expect(externalGlyph({ status: 'working', unread: false, backgroundActive: 1 })).toMatchObject({ motion: 'blink' })
+    expect(externalGlyph({ status: 'needs_you', unread: false, backgroundActive: 1 })).toMatchObject({ motion: 'pulse' })
+    expect(externalGlyph({ status: 'idle', unread: false, backgroundActive: 0 })).toMatchObject({ shape: 'ring', active: false })
+  })
+
   it('takes Hydra Desk marks: pinned to Pinned, archived to Archived, a moved-to group', () => {
     const external = [ext('pin', { pinned: true }), ext('arc', { archived: true }), ext('grp', { group: 'Ops', lastActivityAt: 40 }), ext('plain')]
     const g = groupChats([], { external, filter: 'all' })

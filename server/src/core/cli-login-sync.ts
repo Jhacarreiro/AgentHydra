@@ -32,14 +32,21 @@
 // A change here since the last sync is uploaded (even while a session runs: the file is what that CLI
 // last wrote); a newer copy in the store is landed here with the import's guards (landLogin: never
 // under a running session, never over another account, never over a newer copy). A login in the
-// store with no instance here gets one, with the same id and number. A login left out here
-// (`excluded`: "Stop syncing", a move away) is neither uploaded nor landed.
+// store with no instance here gets one, with the same id and number. A CLI login left out here
+// (`excluded`: "Stop syncing", a move away) is neither uploaded nor landed. A desktop login is never
+// left out (owner, 2026-10-16: "If the PC desktop logins are set to stop syncing, I don't want that").
 //
 // A LOG OUT REACHES EVERY PC (owner, 2026-10-02: "if I log something out, it logs out on both"). A
 // login this PC held and shared that is gone here (AgentHydra's Log out, or `claude /logout`) turns
 // its row into a signed-out marker (`meta.signedOut`); the other PCs sign out of it, unless theirs was
 // signed in after the logout, which then goes up in its place. Signing in again anywhere brings it
-// back everywhere. Deleting an instance stays on its PC: its row is neither marked nor brought back.
+// back everywhere.
+//
+// SO DOES A DELETE (owner, 2026-10-16: "we should also cross-remove. If one of us removes it ... It
+// removes from the other ... let us know that the other person removed it ... leave a note"). Deleting
+// an instance asks why; the reason rides the marker (`meta.removed`, the note sealed in its blob), and
+// every other PC deletes its instance of that login once nothing runs on it, and tells its owner who
+// deleted it and why. An instance made after the delete is a new one and goes up as usual.
 //
 // DESKTOP LOGINS ride the same pass, store and key (core/desktop-login-sync.ts): keyed by account uuid
 // with meta.kind 'desktop', landed only into closed profiles, never over a login a PC signed in on
@@ -83,11 +90,19 @@ import { join } from 'node:path'
 import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
-import { type LoginArrival, notifyLoginArrivals } from '../login-sync-arrivals'
+import { readLiveRegistry } from '../live-registry'
+import {
+  type LoginArrival,
+  type LoginRemoval,
+  notifyLoginArrivals,
+  notifyLoginRemovals,
+  removalEvent,
+  removalReason,
+} from '../login-sync-arrivals'
 import type { CliInstance, CliLoginSyncStatus } from '../types'
 import { dropCachedUsage } from '../usage-cache'
 import { cliKey, desktopKey } from '../usage-service'
-import { listCliInstances } from './cli-instances'
+import { deleteCliInstance, listCliInstances } from './cli-instances'
 import {
   cliLoginEmail,
   credentialExpiry,
@@ -109,9 +124,11 @@ import {
   desktopNotes,
   listDesktopProfiles,
   type PortableDesktopLogin,
+  removalReaches,
   syncDesktopLogins,
 } from './desktop-login-sync'
 import { setBeforeLaunchHook } from './instances'
+import { removeInstance } from './lifecycle'
 import { parseSeen, StoreMirror } from './login-sync-mirror'
 import { BASE_MS, SyncPace } from './login-sync-pace'
 import { quietWriter } from './quiet-write'
@@ -134,6 +151,16 @@ interface SyncState {
   cookies?: number
 }
 
+/** An instance deleted here, waiting for its row's removal marker to reach the store. */
+interface PendingRemoval {
+  kind: 'cli' | 'desktop'
+  num: number | null
+  name: string | null
+  /** The owner's reason, shown on the other PCs. */
+  note: string
+  at: number
+}
+
 interface SyncConfig {
   url: string
   /** Sealed (seal()) bearer token for the store. */
@@ -150,6 +177,9 @@ interface SyncConfig {
    *  setup wrote false there on every PC, so it records no choice. */
   chatsOff?: boolean
   excluded: string[]
+  /** Instances deleted here whose rows the next pass turns into the removal marker, by row id. Kept
+   *  until the store takes the marker, so a store out of reach at the delete still hears of it. */
+  removals?: Record<string, PendingRemoval>
   state: Record<string, SyncState>
   lastSyncAt: number | null
   lastError: string | null
@@ -454,9 +484,37 @@ export function noteLoggedOutHere(id: string): void {
   if (readConfig()?.enabled) void runLoginSync().catch(() => {})
 }
 
-/** Leave one login out of sync on this PC (or put it back). A move away and a deleted instance leave
- *  it out, so the store neither signs it straight back in nor signs the other PCs out of it. */
+/** An instance was deleted here with the owner's note: the next pass turns its login's row into the
+ *  removal marker, and every other PC deletes its instance of that login and shows the note (see the
+ *  header). `id` is the row: a desktop account's uuid, or the row a CLI instance synced through
+ *  (cliSyncRowOf, read before the delete). A row the store does not hold, or that an instance here
+ *  still uses, is removed nowhere else. False when this PC does not sync. */
+export function removeLoginEverywhere(
+  id: string,
+  what: { kind: 'cli' | 'desktop'; num: number | null; name: string | null; note: string },
+): boolean {
+  const c = readConfig()
+  if (!c?.enabled) return false
+  c.removals = { ...c.removals, [id]: { ...what, note: what.note.trim(), at: Date.now() } }
+  writeConfig(c)
+  // A pass records its own failure (lastError, the events) and the delete stays queued for the next
+  // one; this catch only keeps a rejected promise from going unhandled. floor-ok
+  void runLoginSync().catch(() => {})
+  return true
+}
+
+/** The store row CLI instance `id` syncs through as of the last pass, or null when it holds none of its
+ *  own (it follows another instance here on the same account, or is left out). */
+export function cliSyncRowOf(id: string): string | null {
+  if (readConfig()?.excluded.includes(id) || lastFollows.has(id)) return null
+  return lastSlots.get(id) ?? id
+}
+
+/** Leave one CLI login out of sync on this PC (or put it back). A move away leaves it out, so the
+ *  store neither signs it straight back in nor signs the other PCs out of it. A desktop login always
+ *  syncs (see the header), so leaving one out is refused. */
 export function setLoginSyncExcluded(id: string, excluded: boolean): void {
+  if (excluded && lastStore.get(id)?.kind === 'desktop') return
   const c = readConfig()
   if (!c) return
   const set = new Set(c.excluded)
@@ -509,6 +567,8 @@ export interface LoginSyncPassResult {
   problems: string[]
   /** Instances this pass made here (an account this PC did not have): the owner is told once per pass. */
   arrived: LoginArrival[]
+  /** Instances this pass deleted here because another PC deleted them: told the same way, with the note. */
+  removed: LoginRemoval[]
 }
 
 let running: Promise<LoginSyncPassResult> | null = null
@@ -527,11 +587,17 @@ interface StoreRow {
   at: number
   /** Signed out everywhere: a PC logged it out, and the others sign out of it too. */
   signedOut: boolean
+  /** Deleted everywhere (with `signedOut`): a PC deleted its instance, and the others delete theirs. */
+  removed: boolean
+  /** The PC that last wrote it (its host name). */
+  by: string | null
 }
 /** What the store held at the last pass, for the status's per-login rows. */
 let lastStore = new Map<string, StoreRow>()
 /** Each CLI instance's row at the last pass: its own id, or its account's row from another PC. */
 let lastSlots = new Map<string, string>()
+/** CLI instances that followed another instance here on their account at the last pass (slotsFor). */
+let lastFollows = new Set<string>()
 /** CLI rows that are no separate login here (a second row of an account an instance here has, a
  *  signed-out marker, one whose instance was deleted here): the status leaves them out. */
 let lastHidden = new Set<string>()
@@ -629,7 +695,7 @@ export function claimDesktopRenewal(
 
 async function claimNow(uuid: string, grantExpiresAt: number, now: number): Promise<string | null> {
   const c = readConfig()
-  if (!c?.enabled || c.excluded.includes(uuid)) return null
+  if (!c?.enabled) return null
   const l = live(c)
   if (!l) return null
   // A grant that has already run out is renewed even when the store cannot say who should: nobody
@@ -714,6 +780,8 @@ async function uploadLogin(
       expiresAt,
       at,
       signedOut: false,
+      removed: false,
+      by,
     })
     out.pushed++
     note(c, login.num, 'pushed', 'Uploaded this PC’s newer login.')
@@ -871,7 +939,9 @@ async function uploadHere(
   else out.problems.push(`#${inst.num}: ${read.error}`)
 }
 
-/** Turn a row into the signed-out marker (see the header): the other PCs sign out of it. */
+/** Turn a row into the signed-out marker (see the header): the other PCs sign out of it. With
+ *  `removal`, the removal marker: the other PCs delete their instance of it and show the note, which
+ *  rides sealed in the blob (the store's meta is readable by whoever holds its token). */
 async function markSignedOut(
   l: Live,
   c: SyncConfig,
@@ -886,24 +956,32 @@ async function markSignedOut(
     acct: string | null
   },
   expect: number,
+  removal?: { note: string },
 ): Promise<number | null> {
   const at = Date.now()
   const meta =
     row.kind === 'desktop'
       ? { kind: 'desktop', name: row.name, num: row.num }
       : { acct: row.acct, num: row.num }
-  const marker = { id: row.id, signedOut: true }
+  const removed = !!removal
+  const marker = {
+    id: row.id,
+    signedOut: true,
+    ...(removal ? { removed, note: removal.note } : {}),
+  }
   const r = await call(l, 'PUT', `/v1/logins/${row.id}`, {
     version: expect,
     blob: sealLogin(l.key, marker),
-    meta: { ...meta, signedOut: true, expiresAt: 0, by, at },
+    meta: { ...meta, signedOut: true, ...(removed ? { removed } : {}), expiresAt: 0, by, at },
   })
   if (r.status === 200 && typeof r.json?.version === 'number') {
     const v = r.json.version as number
     c.state[row.id] = { version: v, hash: '' }
-    store.set(row.id, { ...row, version: v, expiresAt: 0, at, signedOut: true })
+    store.set(row.id, { ...row, version: v, expiresAt: 0, at, signedOut: true, removed, by })
     out.pushed++
-    note(c, row.num, 'signedOut', 'Logged out here, so your other PCs sign out of it too.')
+    if (removal)
+      note(c, row.num, 'removed', `Deleted here, so your other PCs delete it too: ${removal.note}`)
+    else note(c, row.num, 'signedOut', 'Logged out here, so your other PCs sign out of it too.')
     return v
   }
   if (r.status === 409) {
@@ -911,6 +989,82 @@ async function markSignedOut(
     return null
   }
   throw httpError(`Signing #${row.num} out`, r)
+}
+
+/** The deletes this pass settled (sent, or found to need no marker), by row id and when each was
+ *  asked: pass() keeps a delete asked again while it ran. */
+let settledRemovals = new Map<string, number>()
+
+/** Send this PC's deletes (removeLoginEverywhere): each row becomes the removal marker. A row the store
+ *  does not hold, already removed, or that an instance here still uses (another instance on the same
+ *  account, a second profile of it) needs none; one the store moved meanwhile goes next pass. */
+async function sendRemovals(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  by: string,
+  inUse: Set<string>,
+): Promise<void> {
+  for (const [id, r] of Object.entries(c.removals ?? {})) {
+    const row = store.get(id)
+    const sameKind = !!row && (row.kind === 'desktop') === (r.kind === 'desktop')
+    if (sameKind && !row.removed && !inUse.has(id)) {
+      const what = {
+        id,
+        kind: r.kind,
+        num: row.num ?? r.num,
+        name: row.name ?? r.name,
+        acct: row.acct,
+      }
+      if ((await markSignedOut(l, c, store, out, by, what, row.version, { note: r.note })) === null)
+        continue
+      // No CLI instance here holds the row now, so no agreement is kept: a store row this PC agreed
+      // on with no instance reads as one deleted here alone, and would never come back after a
+      // sign-in on another PC (syncStoreOnlyLogins).
+      if (r.kind === 'cli') delete c.state[id]
+    }
+    settledRemovals.set(id, r.at)
+  }
+}
+
+/** The owner's note on a removal marker, or null when it has none or does not open. */
+async function removalNote(l: Live, id: string): Promise<string | null> {
+  const r = await mirrorFor(l).getItem('logins', id)
+  if (r.status !== 200 || typeof r.json?.blob !== 'string') return null
+  const m = openBlob(l.key, id, r.json.blob) as { note?: unknown } | null
+  return typeof m?.note === 'string' && m.note.trim() ? m.note.trim() : null
+}
+
+/** The login's row says another PC deleted it (see the header): delete the instance here too, once no
+ *  Claude session runs on it, and tell the owner who deleted it and why. */
+async function meetRemoval(
+  l: Live,
+  c: SyncConfig,
+  store: Map<string, StoreRow>,
+  out: LoginSyncPassResult,
+  inst: CliInstance,
+  slot: string,
+): Promise<void> {
+  const remote = store.get(slot)!
+  const num = inst.num ?? null
+  if (readLiveRegistry(inst.configDir, { transcripts: false }).length) {
+    cliWaitingPass.add(inst.id)
+    note(c, num, 'skipped', 'Deleted on another PC; deleted here once its Claude session ends.')
+    return
+  }
+  const why = await removalNote(l, slot)
+  const r = deleteCliInstance(inst.id, removalReason(remote.by, why))
+  if (!r.ok) {
+    out.problems.push(`#${num ?? '?'}: ${r.message}`)
+    return
+  }
+  dropCachedUsage(cliKey(inst.id))
+  clearGone(inst.id)
+  // No agreement kept, as in sendRemovals: a sign-in on any PC brings the login back here too.
+  delete c.state[slot]
+  note(c, num, 'removed', removalEvent(remote.by, why))
+  out.removed.push({ kind: 'cli', num, by: remote.by, note: why })
 }
 
 /** No credential file here. One this PC held and shared is gone: logged out here, so its row turns
@@ -926,6 +1080,10 @@ async function syncWithoutLogin(
 ): Promise<void> {
   const remote = store.get(slot)
   if (!remote) return
+  if (remote.removed && removalReaches(c.state[slot], remote)) {
+    await meetRemoval(l, c, store, out, inst, slot)
+    return
+  }
   if (remote.signedOut) {
     c.state[slot] = { version: remote.version, hash: '' }
     clearGone(inst.id)
@@ -1004,6 +1162,10 @@ async function syncCliInstance(
   // as "sync is broken"). Another PC's live copy still lands over it below; a new sign-in here
   // changes the file and goes up.
   const hollow = !hasOwnCliLogin(inst.configDir)
+  if (remote?.removed && removalReaches(st, remote)) {
+    await meetRemoval(l, c, store, out, inst, slot)
+    return
+  }
   if (remote?.signedOut) {
     if (!hollow) await meetSignOut(l, c, store, out, by, inst, slot, hash)
     return
@@ -1117,7 +1279,6 @@ async function syncDesktopLoginsPass(
   l: Live,
   c: SyncConfig,
   store: Map<string, StoreRow>,
-  excluded: Set<string>,
   out: LoginSyncPassResult,
   by: string,
 ): Promise<void> {
@@ -1125,7 +1286,6 @@ async function syncDesktopLoginsPass(
     await syncDesktopLogins({
       store,
       state: c.state,
-      excluded,
       out,
       note: (num, action, text) => note(c, num, action, text),
       upload: async (login: PortableDesktopLogin, expect: number, open?: boolean) => {
@@ -1152,6 +1312,8 @@ async function syncDesktopLoginsPass(
             expiresAt: login.expiresAt,
             at: Date.now(),
             signedOut: false,
+            removed: false,
+            by,
           })
           out.pushed++
           note(c, login.num, 'pushed', 'Uploaded this PC’s newer desktop login.')
@@ -1172,18 +1334,28 @@ async function syncDesktopLoginsPass(
         if (Array.isArray(login?.revoked)) noteRevokedDigests(login.revoked, id)
         return login
       },
-      markSignedOut: (uuid: string, num: number | null, name: string | null, expect: number) =>
-        markSignedOut(
-          l,
-          c,
-          store,
-          out,
-          by,
-          { id: uuid, kind: 'desktop', num, name, acct: null },
-          expect,
-        ),
+      // A profile deleted here gets the removal marker (sendRemovals), never the signed-out one.
+      markSignedOut: async (
+        uuid: string,
+        num: number | null,
+        name: string | null,
+        expect: number,
+      ) =>
+        c.removals?.[uuid]
+          ? null
+          : markSignedOut(
+              l,
+              c,
+              store,
+              out,
+              by,
+              { id: uuid, kind: 'desktop', num, name, acct: null },
+              expect,
+            ),
       confirmGone,
       clearGone,
+      removalNote: (uuid: string) => removalNote(l, uuid),
+      remove: (dir: string, why: string) => removeInstance(dir, { note: why }),
       dropUsage: (dir: string) => dropCachedUsage(desktopKey(dir), { keepLastKnown: true }),
     })
   } catch (err) {
@@ -1220,6 +1392,8 @@ function storeRowOf(r: { version: number; meta?: any }): StoreRow {
     expiresAt: numOr(meta.expiresAt, 0),
     at: numOr(meta.at, 0),
     signedOut: meta.signedOut === true,
+    removed: meta.signedOut === true && meta.removed === true,
+    by: strOr(meta.by),
   }
 }
 
@@ -1249,6 +1423,7 @@ async function executeSyncPass(
   by: string,
 ): Promise<void> {
   cliWaitingPass = new Set()
+  settledRemovals = new Map()
   try {
     const store = await readStoreLogins(l, c)
     lastStore = store
@@ -1257,6 +1432,13 @@ async function executeSyncPass(
     const insts = listCliInstances()
     const { slots, follows } = slotsFor(l.key, store, insts, excluded)
     lastSlots = new Map([...slots, ...follows])
+    lastFollows = new Set(follows.keys())
+    if (c.removals && Object.keys(c.removals).length) {
+      const inUse = new Set([...slots.values(), ...follows.values()])
+      if (Object.values(c.removals).some((r) => r.kind === 'desktop'))
+        for (const p of await listDesktopProfiles()) if (p.uuid) inUse.add(p.uuid)
+      await sendRemovals(l, c, store, out, by, inUse)
+    }
     for (const inst of insts) {
       if (excluded.has(inst.id)) continue
       const followed = follows.get(inst.id)
@@ -1269,7 +1451,7 @@ async function executeSyncPass(
       await dropOwnDuplicate(l, c, store, inst, slot)
     }
     await syncStoreOnlyLogins(l, c, store, out, insts, slots, excluded)
-    await syncDesktopLoginsPass(l, c, store, excluded, out, by)
+    await syncDesktopLoginsPass(l, c, store, out, by)
     cliWaiting = cliWaitingPass
     c.lastError = out.problems.length ? out.problems[0]! : null
   } catch (err) {
@@ -1372,6 +1554,7 @@ async function pass(): Promise<LoginSyncPassResult> {
     unchanged: 0,
     problems: [],
     arrived: [],
+    removed: [],
   }
   const c = readConfig()
   if (!c?.enabled) return out
@@ -1401,6 +1584,12 @@ async function pass(): Promise<LoginSyncPassResult> {
     c.chatsOff = now.chatsOff
     c.excluded = now.excluded
   }
+  // A delete asked while the pass ran is kept; one the pass settled is done.
+  const removals = Object.entries(now?.removals ?? c.removals ?? {}).filter(
+    ([id, r]) => settledRemovals.get(id) !== r.at,
+  )
+  if (removals.length) c.removals = Object.fromEntries(removals)
+  else delete c.removals
   writeConfig(c)
   chatsPass(l, c, by)
   // Whatever someone asked for (a manual sync, a launch) starts the pace over; the pace also starts
@@ -1408,6 +1597,7 @@ async function pass(): Promise<LoginSyncPassResult> {
   pace.afterPass(quiet && !asked, Date.now())
   asked = false
   void notifyLoginArrivals(out.arrived)
+  void notifyLoginRemovals(out.removed)
   return out
 }
 
@@ -1471,10 +1661,10 @@ function makeCliLogin(
   }
 }
 
+/** A desktop login always syncs (see the header): its row is never left out. */
 function makeDesktopLogin(
   p: DesktopProfile,
   remote: any,
-  excluded: Set<string>,
   state: any,
 ): CliLoginSyncStatus['logins'][number] {
   return {
@@ -1484,7 +1674,7 @@ function makeDesktopLogin(
     name: p.name,
     here: true,
     inStore: !!remote,
-    excluded: excluded.has(p.uuid!),
+    excluded: false,
     inSync: !!remote && state[p.uuid!]?.version === remote.version,
     problem: null,
     note: desktopNotes.own.has(p.uuid!)
@@ -1509,7 +1699,7 @@ function makeRemoteLogin(
     name: remote.name ?? id,
     here: false,
     inStore: true,
-    excluded: excluded.has(id),
+    excluded: remote.kind !== 'desktop' && excluded.has(id),
     inSync: false,
     problem: null,
     note: desktopNotes.waiting.has(id) ? 'waiting' : null,
@@ -1549,7 +1739,7 @@ export async function loginSyncStatus(): Promise<CliLoginSyncStatus> {
     if (!p.uuid || seen.has(p.uuid)) continue
     seen.add(p.uuid)
     const remote = lastStore.get(p.uuid)
-    logins.push(makeDesktopLogin(p, remote, excluded, c.state))
+    logins.push(makeDesktopLogin(p, remote, c.state))
   }
 
   for (const [id, remote] of lastStore)

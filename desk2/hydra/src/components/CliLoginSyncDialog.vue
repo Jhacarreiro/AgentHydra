@@ -296,6 +296,7 @@ const EVENT_KEY: Record<string, string> = {
   created: 'cliInstances.syncEventCreated',
   skipped: 'cliInstances.syncEventSkipped',
   signedOut: 'cliInstances.syncEventSignedOut',
+  removed: 'cliInstances.syncEventRemoved',
   merged: 'cliInstances.syncEventMerged',
   error: 'cliInstances.syncEventError',
 }
@@ -512,7 +513,9 @@ const recent = computed(() => {
             >
               {{ state.label }}
             </span>
+            <!-- A desktop login always syncs (owner, 2026-10-16), so only a CLI row has a switch. -->
             <Switch
+              v-if="l.kind !== 'desktop'"
               :model-value="!l.excluded"
               :aria-label="$t('cliInstances.syncInclude')"
               @update:model-value="(v: boolean) => include(l.id, v)"

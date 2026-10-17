@@ -37,48 +37,38 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
   },
 } as const
 
-/** The delete dialog (DeleteInstanceDialog.vue) on all four instance tables. The type-the-name prompt
- *  and the copy-name chip are one shared wording (instances.deleteDialogTypeName), not per table. */
+/** The delete dialog (DeleteInstanceDialog.vue) on all four instance tables. The "why" note field
+ *  is one shared wording (instances.deleteDialogNoteLabel / deleteDialogNoteHint), not per table. */
 export type DeleteDialogNamespace = 'instances' | CliDialogNamespace
 
 export const DELETE_DIALOG_KEYS = {
   instances: {
     title: 'instances.deleteDialogTitle',
     description: 'instances.deleteDialogDescription',
-    placeholder: 'instances.deleteDialogPlaceholder',
-    mismatch: 'instances.deleteDialogMismatch',
     submit: 'instances.deleteDialogSubmit',
     deleting: 'instances.deleteDialogDeleting',
   },
   cliInstances: {
     title: 'cliInstances.deleteDialogTitle',
     description: 'cliInstances.deleteDialogDescription',
-    placeholder: 'cliInstances.deleteDialogPlaceholder',
-    mismatch: 'cliInstances.deleteDialogMismatch',
     submit: 'cliInstances.deleteDialogSubmit',
     deleting: 'cliInstances.deleteDialogDeleting',
   },
   codexInstances: {
     title: 'codexInstances.deleteDialogTitle',
     description: 'codexInstances.deleteDialogDescription',
-    placeholder: 'codexInstances.deleteDialogPlaceholder',
-    mismatch: 'codexInstances.deleteDialogMismatch',
     submit: 'codexInstances.deleteDialogSubmit',
     deleting: 'codexInstances.deleteDialogDeleting',
   },
   dshInstances: {
     title: 'dshInstances.deleteDialogTitle',
     description: 'dshInstances.deleteDialogDescription',
-    placeholder: 'dshInstances.deleteDialogPlaceholder',
-    mismatch: 'dshInstances.deleteDialogMismatch',
     submit: 'dshInstances.deleteDialogSubmit',
     deleting: 'dshInstances.deleteDialogDeleting',
   },
   freeInstances: {
     title: 'freeInstances.deleteDialogTitle',
     description: 'freeInstances.deleteDialogDescription',
-    placeholder: 'freeInstances.deleteDialogPlaceholder',
-    mismatch: 'freeInstances.deleteDialogMismatch',
     submit: 'freeInstances.deleteDialogSubmit',
     deleting: 'freeInstances.deleteDialogDeleting',
   },

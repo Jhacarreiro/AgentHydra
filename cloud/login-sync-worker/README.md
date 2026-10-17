@@ -63,8 +63,10 @@ token, never the token.
   profiles in a profile of the same name and number (written only while that profile is closed).
 - **The pairing code** holds the store address, its token and the encryption key. Move it the way
   you would move a password, never in a chat or a ticket.
-- **Leave one login out** on one PC with its switch in Login sync. Logging out leaves it out too, so
-  the store does not sign it straight back in.
+- **Leave one CLI login out** on one PC with its switch in Login sync. Logging out leaves it out too,
+  so the store does not sign it straight back in. Desktop logins always sync.
+- **Deleting an instance deletes it on the other PC too.** The delete asks why, and the other PC
+  shows who deleted it with that note. Signing in again anywhere brings it back.
 - **Keep a synced desktop account open on one PC at a time.** One you signed in separately on both
   PCs is left alone, and both stay signed in.
 - **Stop syncing on this PC** forgets the store here; the store keeps its copies for the others.

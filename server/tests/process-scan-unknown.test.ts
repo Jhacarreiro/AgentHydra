@@ -12,7 +12,7 @@
 // suite's scratch dir; nothing here goes near a real profile.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import {
   codexDesktopRunState,
   invalidateCodexProcessCache,
@@ -97,10 +97,23 @@ describe('the scanners tell "could not look" apart from "none running"', () => {
 })
 
 describe('removeInstance (Claude Desktop profile)', () => {
+  test('a delete with no note, or a too-short one, is refused and leaves the profile in place', async () => {
+    const dir = desktopFixture('no-note')
+    for (const note of [undefined, '', '  ', 'ok']) {
+      const result = await removeInstance(dir, {
+        note,
+        scanProcesses: async () => ({ ok: true, processes: [] }),
+      })
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain('Say why you are deleting it')
+      expect(existsSync(dir)).toBe(true)
+    }
+  })
+
   test('refuses on an injected unknown scan and leaves the profile in place', async () => {
     const dir = desktopFixture('injected')
     const result = await removeInstance(dir, {
-      confirmName: basename(dir),
+      note: 'Scan refusal test',
       scanProcesses: async () => ({ ok: false, reason: 'injected' }),
     })
     expect(result.ok).toBe(false)
@@ -111,7 +124,7 @@ describe('removeInstance (Claude Desktop profile)', () => {
 
   test('refuses when the REAL scanner cannot enumerate (the audit reproduction, inverted)', async () => {
     const dir = desktopFixture('real')
-    const result = await withBrokenSpawn(() => removeInstance(dir, { confirmName: basename(dir) }))
+    const result = await withBrokenSpawn(() => removeInstance(dir, { note: 'Broken scanner test' }))
     expect(result.ok).toBe(false)
     expect(result.data?.runningState).toBe('unknown')
     expect(existsSync(dir)).toBe(true)
@@ -120,7 +133,7 @@ describe('removeInstance (Claude Desktop profile)', () => {
   test('a successful empty scan still deletes a stopped fixture', async () => {
     const dir = desktopFixture('stopped')
     const result = await removeInstance(dir, {
-      confirmName: basename(dir),
+      note: 'Stopped profile test',
       scanProcesses: async () => ({ ok: true, processes: [] }),
     })
     expect(result.ok).toBe(true)
@@ -130,7 +143,7 @@ describe('removeInstance (Claude Desktop profile)', () => {
   test('a scan that shows the profile running still refuses, naming the pid', async () => {
     const dir = desktopFixture('running')
     const result = await removeInstance(dir, {
-      confirmName: basename(dir),
+      note: 'Running profile test',
       scanProcesses: async () => ({
         ok: true,
         processes: [{ pid: 4321, cmdline: `claude --user-data-dir=${dir}`, dir, isMain: true }],

@@ -94,7 +94,9 @@ between server/ and web/.
   crashed the shared process: `free-request-coordinator.test.ts` runs a node:net server and its client in the test
   process, and Bun 1.4.3 on Windows frees such a socket's state while a poll still holds it (a segfault in 3 of 4 full
   runs, 2026-10-16; its header has the detail). In a test's own server, wait for an accepted socket's `close`; never
-  `destroy()` it.
+  `destroy()` it. Name test folders with `./` (`bun test ./server/test ./web/test`): a bare `server/test` is a name
+  filter that also matches `server/test-own-process/`, and that file then runs in the shared process (a segfault,
+  2026-10-16).
 - Every `bun test` run from `desk2/` preloads `server/test/preload.ts` (`desk2/bunfig.toml`): removing the folder the
   suite runs in, or a folder holding it, throws, and `process.env` cannot be reassigned. A test restores only the env
   keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left
