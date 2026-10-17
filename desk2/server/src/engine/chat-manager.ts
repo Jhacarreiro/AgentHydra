@@ -1917,9 +1917,13 @@ export class ChatManager {
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.pinned?.close() : e.pinned?.shutdown())?.catch(() => {})))
     closeAppServers()
-    releaseHosts(this.store.home)
-    this.store.saveChats(this.stored())
-    this.store.flush()
+    // The folder goes to the next server only once this one has written its last line.
+    try {
+      this.store.saveChats(this.stored())
+      await this.store.close()
+    } finally {
+      releaseHosts(this.store.home)
+    }
     this.sessionMeta.flushSync()
   }
 

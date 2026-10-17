@@ -798,8 +798,8 @@ first test with its name (`server/test/preload.ts`), and web tests restore their
 throwaway home (removed, with its Edge profile, when the run ends) and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
 long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
 sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account; the
-pane opens with a fresh window's preferences, not the ones the daemon keeps for the owner's windows, and saves none. 42
-cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
+pane opens with a fresh window's preferences, not the ones the daemon keeps for the owner's windows, and saves none. 62
+cases in about 5 minutes (2026-10-16); PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
 `GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
 any change to a tooltip, menu, popover, sidebar row or lazy overlay. The rows come from the daemon's live sessions, so
 the sidebar row cases take a row with its sub-chats showing first when one is on screen (a stand-in once took that

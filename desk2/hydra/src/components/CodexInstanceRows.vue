@@ -381,12 +381,12 @@ function openDelete(instance: CodexInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDelete(name: string) {
+async function onDelete(note: string) {
   const target = deleteTarget.value
   if (!target) return
   deleting.value = true
   try {
-    const result = await remove(target.id, name)
+    const result = await remove(target.id, note)
     if (result?.ok) {
       deleteOpen.value = false
       toast.success(t('codexInstances.toastDeleted'))
@@ -819,7 +819,6 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   <DeleteInstanceDialog
     v-model:open="deleteOpen"
     namespace="codexInstances"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDelete"

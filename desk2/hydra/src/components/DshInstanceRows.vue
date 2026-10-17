@@ -197,13 +197,13 @@ async function onNameSubmit(name: string): Promise<void> {
   }
 }
 
-async function onDeleteConfirm(typed: string): Promise<void> {
+async function onDeleteConfirm(note: string): Promise<void> {
   const target = deleteTarget.value
   if (!target) return
   submitting.value = true
   dialogError.value = null
   try {
-    const result = await deleteDshInstance(target.id, { deleteFiles: true, confirmName: typed })
+    const result = await deleteDshInstance(target.id, { deleteFiles: true, note })
     if (!result.ok) {
       dialogError.value = result.message
       return
@@ -315,7 +315,6 @@ defineExpose({ openCreate, refresh })
   <DeleteInstanceDialog
     :open="deleteTarget !== null"
     namespace="dshInstances"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="submitting"
     :error-message="dialogError"
     @update:open="(v) => { if (!v) deleteTarget = null }"

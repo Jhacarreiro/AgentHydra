@@ -43,6 +43,7 @@ import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDe
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
+import { createBackgroundTasks } from './background-tasks'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
@@ -502,8 +503,12 @@ export function createBridge(opts: BridgeOptions = {}) {
       sessions: got.sessions ?? [],
       workers: got.workers ?? [],
       codexTurns: await codexTurns(got.codexChats ?? []),
+      background: await backgroundTasks.read(got.live ?? []),
     }
   }
+
+  /** Each live engine's open background tasks, read where its transcript grew (background-tasks.ts). */
+  const backgroundTasks = createBackgroundTasks()
 
   /** Whether each Codex thread active in the last STALE_AFTER_MS has its last turn open (codex-rollout.ts codexTurnOpen),
    *  kept by the rollout's size and mtime, so a file that has not changed is not read again. */

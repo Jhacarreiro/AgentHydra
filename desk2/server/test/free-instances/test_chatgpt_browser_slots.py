@@ -286,7 +286,8 @@ class NativeBrowserSlotTests(unittest.TestCase):
             with browser_slots.browser_slot(self.root / 'slots', wait=.2, locker=chat_lock):
                 self.fail('A fourth native owner was admitted')
         self.assertEqual(caught.exception.code, 'browser_busy')
-        self.assertGreaterEqual(time.monotonic() - started, .19)
+        # A Windows wait may time out up to one clock tick (15.6 ms) early: 0.187 s on a CI runner.
+        self.assertGreaterEqual(time.monotonic() - started, .2 - .016)
         self.assertLess(time.process_time() - cpu, .1)
 
         for process, own in self.children:

@@ -351,7 +351,8 @@ jobs:
 
       - name: Install ClaudFree and its test tools (desk2)
         working-directory: desk2
-        run: pip install "server/src/free-instances/harness[browser,dev]"
+        # mcp: test_private_only reads the MCP server's chat tools.
+        run: pip install "server/src/free-instances/harness[browser,dev,mcp]"
 
       - name: Test (desk2 free-instances harness)
         working-directory: desk2

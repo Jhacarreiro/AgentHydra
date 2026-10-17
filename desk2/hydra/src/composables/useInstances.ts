@@ -329,11 +329,11 @@ async function create(): Promise<api.CMActionResult | undefined> {
   return result
 }
 
-/** Delete an instance (guarded server-side; confirmName must match exactly). */
-async function remove(dir: string, confirmName: string): Promise<api.CMActionResult | undefined> {
+/** Delete an instance (guarded server-side; the note says why, at least 3 characters). */
+async function remove(dir: string, note: string): Promise<api.CMActionResult | undefined> {
   setBusy(dir, true)
   try {
-    const result = await guard(api.deleteInstance(dir, confirmName))
+    const result = await guard(api.deleteInstance(dir, note))
     if (result?.ok) await refreshInstances()
     return result
   } finally {

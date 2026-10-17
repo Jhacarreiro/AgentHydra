@@ -32,6 +32,7 @@ import { basename, join } from 'node:path'
 import { syncOwnerClaude } from '../climayte-owner-sync'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
+import { deleteNoteProblem } from './delete-note'
 import { pinHaikuModel } from './haiku-pin'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
@@ -901,9 +902,9 @@ export interface DeleteCliInstanceOptions {
 }
 
 /**
- * Guarded delete: `confirmName` must equal the instance's display name (same discipline as the
- * desktop delete). Removes the record AND its config dir (which holds the login) — irreversible, so
- * the confirm gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
+ * Guarded delete: `note` says why the instance is deleted (at least 3 characters, see
+ * {@link deleteNoteProblem}). Removes the record AND its config dir (which holds the login) —
+ * irreversible, so the note gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
  * no "outside the root" escape to guard against as there is for desktop dirs.
  *
  * The record is dropped ONLY once the directory is verifiably gone (audit AH-03). The previous
@@ -914,7 +915,7 @@ export interface DeleteCliInstanceOptions {
  */
 export function deleteCliInstance(
   id: string,
-  confirmName?: string,
+  note?: string,
   options: DeleteCliInstanceOptions = {},
 ): CMActionResult {
   const rec = readStore().instances.find((i) => i.id === id)
@@ -926,12 +927,13 @@ export function deleteCliInstance(
       message: 'CLI instance not found.',
       data: { id },
     }
-  if (!confirmName || confirmName !== rec.name) {
+  const noteProblem = deleteNoteProblem(note)
+  if (noteProblem) {
     return {
       ok: false,
       action: 'cli-delete',
       dir: rec.configDir,
-      message: `Refusing to delete: confirmName must exactly match the instance name '${rec.name}'.`,
+      message: `Refusing to delete: ${noteProblem}`,
       data: { id },
     }
   }

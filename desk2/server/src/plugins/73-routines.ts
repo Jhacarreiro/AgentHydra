@@ -1,6 +1,6 @@
 // Routines (shared/routines.ts says what a routine is and what its file holds). GET /api/routines answers what its last look
-// saw (?fresh=1 looks first); POST /api/routines does one action: run, pause, propose (any caller), resume, approve,
-// discard, edit, mode, move (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
+// saw (?fresh=1 looks first); POST /api/routines does one action: run, pause, propose, approve, move (any caller), resume,
+// discard, edit, mode (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
 // file, runs each status command, reads each Windows task in one call, judges (routines/decide.ts) and starts the runs that
 // fell due. Its memory (each routine's last 30 runs, the one running, the newest slot it ran for, paused) is
 // <home>/routines.json, so a restart goes on watching a run it had not seen end (a command run's runner, routines/runner.ts,

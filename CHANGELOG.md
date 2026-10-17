@@ -8,8 +8,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ## [Unreleased]
 
 - **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
-- **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
-- **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
+- **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
 
 ## [2.0.5] - 2026-10-16
 
@@ -32,6 +31,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in 2.0.5**
 
+- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
+- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
+- **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
+- **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
 - **Stuck shared chats finish, and a full chat store clears itself.** A shared chat whose transcript moved to a new session no longer sits at "receiving" on your other PC: it is sent again from the start, and a PC that finds pieces of a chat missing asks for it again. Once a day the sync store also frees transcript pieces no chat uses anymore, which had filled its room and stopped new chats from being shared.
 - **Hydra Desk no longer shows the built-in Default login.** It is absent from account lists, pickers and Settings, and new, imported, moved or retried chats go to a signed-in account with room. Existing chats recorded on it still open with their transcript.
 - **Unchanged Free chat lists keep their history cache.** Background account checks no longer make the app download and process the whole chat history when nothing changed. Real chat updates, titles and errors still refresh it.

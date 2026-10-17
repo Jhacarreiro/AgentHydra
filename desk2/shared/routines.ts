@@ -50,8 +50,8 @@
 // POST `edit` changes the keys it names (null removes one), and the file must still check out.
 //
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
-// <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
-// Managers > Routines.
+// <desk home>/routines/proposed/<id>.json with a required "why" and never runs until it is approved: by the owner in Settings >
+// Managers > Routines, or by an agent the owner told to (POST approve, open to any caller since 2026-10-16).
 //
 // CENTRAL ROUTINES (owner, 2026-10-15: "move these Routines ... into some sort of centralized location? In the cranium ...
 // for other people to use this"). When <desk home>/routines-store.json names a store, the manager also reads the routines
@@ -84,7 +84,7 @@
 //   listed (the store's `problems` name it): the file runs. The manager keeps a copy of each document in
 //   <desk home>/routines/central/ and runs from it while the store cannot be reached.
 // MOVING A ROUTINE (ROUTINES.md 7.7: one at a time, on the owner's say): the owner's Move to central on one of this
-//   computer's routines (POST `move`, the window only, refused without a store) writes it to the store as a document pinned
+//   computer's routines (POST `move`, any caller, refused without a store) writes it to the store as a document pinned
 //   to this runner (runsOn its name), so it runs here as it did: a schedule keeps this computer's time zone, its folder
 //   becomes the workdir of the checkout "repos" names that holds it (else ~/ in this computer's home; in neither, the move is
 //   refused), and a command argument in this home starts with ~/. The file runs on meanwhile (`moving` on its card), and the
