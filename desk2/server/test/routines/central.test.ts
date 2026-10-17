@@ -21,7 +21,7 @@ import { Hono } from 'hono'
 import type { DeskSettings } from '@shared/protocol'
 import type { RoutineCampaigns, RoutinesStatus } from '@shared/routines'
 import type { ServerContext } from '../../src/context'
-import { approvedText, approverKey, checkApproval, FORMAT, parseDoc, renderDoc, type ApproverKey } from '../../src/routines/central'
+import { approvedText, approverKey, checkApproval, FORMAT, parseDoc, placementOf, renderDoc, type ApproverKey, type Runner } from '../../src/routines/central'
 import plugin from '../../src/plugins/73-routines'
 
 /** An approval's time: signed into the text, never compared with the clock. */
@@ -90,6 +90,32 @@ describe('approval (routines/central.ts)', () => {
     // A key this computer does not trust approves nothing, even one that signed correctly.
     const theirs = approvedText(parseDoc('example-a', renderDoc(front({}), '')), stranger, 'Example Owner', SIGNED_AT)
     expect(checkApproval(parseDoc('example-a', theirs), trusted).ok).toBe(false)
+  })
+})
+
+// Contract: an eachRunner routine runs on every runner carrying its labels, each its own and unclaimed, status kind
+// included; without the flag the same labels share one run per slot. Regression: work each computer must do over its own
+// data (the CreAitor's daily learn from that computer's chats) ran on one owner's computer only, or was refused as a
+// shared status routine. The flag is signed, so turning it on after an approval stops the routine until it is approved again.
+describe('placement (routines/central.ts)', () => {
+  const runner = (id: string): Runner => ({ id, labels: [id, 'windows'], zone: ZONE, home: 'C:/Users/example', repos: {} })
+  const status = { schedule: undefined, timeZone: undefined, run: ['python', 'learn.py'], status: ['python', 'learn.py', 'status'], runsOn: ['windows'] }
+
+  test('every labelled runner runs an eachRunner routine itself; without it they share one claimed run', () => {
+    const each = parseDoc('example-each', renderDoc(front({ ...status, eachRunner: true }), ''))
+    for (const id of ['example-pc', 'example-laptop']) expect(placementOf(each.runsOn, runner(id), each.eachRunner).placement).toBe('here')
+    expect(placementOf(each.runsOn, { ...runner('example-mac'), labels: ['example-mac', 'darwin'] }, each.eachRunner).placement).toBe('elsewhere')
+
+    const shared = parseDoc('example-shared', renderDoc(front({ runsOn: ['windows'] }), ''))
+    expect(shared.eachRunner).toBe(false)
+    expect(placementOf(shared.runsOn, runner('example-pc'), shared.eachRunner).placement).toBe('shared')
+
+    expect(() => parseDoc('example-bad', renderDoc(front({ eachRunner: 'yes' }), ''))).toThrow('"eachRunner" must be true or false')
+    const dir = temp('desk-central-each-')
+    const owner = approverKey(join(dir, 'owner.key'))
+    const signed = approvedText(parseDoc('example-each', renderDoc(front({ ...status }), '')), owner, 'Example Owner', SIGNED_AT)
+    const flipped = signed.replace('"kind"', '"eachRunner": true,\n  "kind"')
+    expect(checkApproval(parseDoc('example-each', flipped), [{ name: 'Example Owner', key: owner.public }])).toMatchObject({ ok: false })
   })
 })
 

@@ -67,13 +67,17 @@
 //   kind "routine", format "routine/1", title (its name), askedBy, why (while it is a proposal), the contract's WHEN and
 //   WHAT keys above (a "schedule" also names its IANA "timeZone"), its folder as "workdir": { "repo", "path" } (found
 //   through "repos" on each computer) or "cwd" (a full path, or one starting with ~/), "runsOn" (the runner labels it
-//   runs on), timeoutMinutes, until, describe, and "approval". Its prompt is the body. A document runs only once a person
+//   runs on), "eachRunner" (optional true or false), timeoutMinutes, until, describe, and "approval". Its prompt is the
+//   body. A document runs only once a person
 //   approved it: "approval" is an Ed25519 signature over its id and everything in it but the approval, by this computer's
 //   approver key (<desk home>/routines-approver.key, made with the store) or one listed in "approvers". An AI may write a
 //   proposal there (POST propose with "store": "central"), never an approval; any change after an approval makes it a
 //   proposal again. A schedule keeps its "timeZone" on every runner, and so does its "until" day.
 // WHERE IT RUNS: only on a runner that carries every label its runsOn names. When one of them is a runner's name it is
-//   pinned to that runner and runs as a local routine does. When none is, any runner carrying them may run it (a schedule
+//   pinned to that runner and runs as a local routine does. "eachRunner": true makes every runner carrying them run its
+//   own, each as a local routine, never claimed (any kind, status included): work each computer does over its own data,
+//   such as learning from that computer's chats (owner, 2026-10-17: AgentHydra, "while it's running, manage this stuff",
+//   on every owner's computer). When neither, any runner carrying them may run it (a schedule
 //   routine only) and exactly one runs each slot: before a slot runs, its runner claims it on the store's run board (the
 //   CrAInium's `routine_runs` tool, under the same repo key), which grants it to the first runner that asks, with a lease
 //   of twice its timeout that the holder renews while the run lives; a lease that lapsed lets another runner take the
