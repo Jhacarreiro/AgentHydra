@@ -46,7 +46,8 @@ import type {
 import { type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
-import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
+import type { Bridge } from '../bridge'
+import { pickHealthy, ROOM_PCT } from '../bridge/accounts'
 import type { AhWorker, WorkerSendSetting } from '../bridge/client'
 import { isLongLived } from './long-lived'
 import { copyMedia, endedTask, settled, TASK_SESSION_ENDED } from './chat-items'
@@ -86,13 +87,12 @@ import {
   type ChatManagerOptions, type Cut, type Entry, type ManagerBridge, type QueueCreated, type RequestAnswerer, type ResolvedAccount, type RetryPace, type SendOptions, type StoredRecord, type UserItem,
 } from './chat-manager-types'
 import {
-  accountName, accountRef, busy, entryOf, forkTitle, importTitle, pickHealthy, ranInOf, retryLater, signature, squash, workersKey,
+  accountName, accountRef, busy, entryOf, forkTitle, importTitle, ranInOf, retryLater, signature, squash, workersKey,
 } from './chat-manager-helpers'
 import { WorkerSync } from './chat-manager-workers'
 import { ChatMoves } from './chat-manager-moves'
 export type { ChatManagerOptions, ManagerBridge, QueueCreated, SendOptions } from './chat-manager-types'
 export { CLIMAYTE_ACCOUNT, LIVE, WORKER_GROUP, WORKER_MODEL } from './chat-manager-types'
-export { pickHealthy } from './chat-manager-helpers'
 
 /** A request the manager refuses, with the HTTP status the route answers. */
 export class ChatError extends Error {
@@ -671,12 +671,14 @@ export class ChatManager {
     const chat = e.chat
     const stale = () => e.titled || chat.title !== first || this.chats.get(chat.id) !== e
     void (async () => {
-      const tried: string[] = []
+      const tried = new Set<string>()
       let account: AccountRef | null = null
       for (let n = 1; n <= TITLE_TRIES; n++) {
         // No other account to try: the same one again (a slow answer, a passing error).
-        account = (await this.titleAccount(chat, tried)) ?? account ?? { ...DEFAULT_ACCOUNT }
-        tried.push(account.id)
+        const picked: AccountRef | null = (await this.titleAccount(chat, tried)) ?? account
+        if (!picked) return
+        account = picked
+        tried.add(picked.id)
         let why = 'no usable title in the answer'
         let title: string | null = null
         const from = this.now()
@@ -699,8 +701,8 @@ export class ChatManager {
   }
 
   /** The account a title is asked of: the chat's own when it has a login of its own, else the healthiest not tried; null when none is left. */
-  private async titleAccount(chat: ChatSummary, tried: string[]): Promise<AccountRef | null> {
-    if (chat.account.configDir && !tried.includes(chat.account.id)) return chat.account
+  private async titleAccount(chat: ChatSummary, tried: ReadonlySet<string>): Promise<AccountRef | null> {
+    if (chat.account.configDir && !tried.has(chat.account.id)) return chat.account
     const next = pickHealthy(this.placeable(await this.bridge.listAccounts().catch(() => [])), tried)
     return next ? accountRef(next) : null
   }
@@ -1777,15 +1779,9 @@ export class ChatManager {
     return { accountId: found.id, label: codexAccount(found).label, threadId: req.sessionId }
   }
 
-  /** The account an imported session continues on: the one asked for, else the default one, never the bare ~/.claude login. */
+  /** The account an imported session continues on: the one asked for, else one with room. */
   private async importAccount(configDir: string | null | undefined): Promise<{ account: AccountRef; auto: boolean; note: string | null }> {
-    const { account, auto, note } =
-      configDir === undefined ? await this.resolveAccount(this.settingsOf().defaultAccountId) : { account: await this.accountForConfigDir(configDir), auto: false, note: null }
-    // Never landed on unasked: the default ~/.claude login's own CLI token expires, so its resume would fail.
-    if (configDir === undefined && account.id === DEFAULT_ACCOUNT.id) {
-      throw new ChatError(409, 'Choose the account to continue this session on: Hydra Desk does not choose one.')
-    }
-    return { account, auto, note }
+    return configDir === undefined ? this.resolveAccount(this.settingsOf().defaultAccountId) : { account: await this.accountForConfigDir(configDir), auto: false, note: null }
   }
 
   private async externalItemsOf(sessionId: string): Promise<{ items: TranscriptItem[]; error: string | null }> {
@@ -2263,15 +2259,21 @@ export class ChatManager {
   }
 
   /** The account an SDK chat (an import, a fork, a chat from before CliMayte ran them) runs on: the one
-   *  named, refused while signed out (it could only fail). Hydra Desk places nothing: 'auto' is the
-   *  default login. */
+   *  named, refused while signed out (it could only fail). '', 'auto' and the retired 'default' place it. */
   private async resolveAccount(accountId: string): Promise<ResolvedAccount> {
-    if (!accountId || accountId === 'auto' || accountId === DEFAULT_ACCOUNT.id) return { account: { ...DEFAULT_ACCOUNT }, auto: false, note: null }
+    if (!accountId || accountId === 'auto' || accountId === 'default') return this.placeAccount()
     const accounts = await this.bridge.listAccounts().catch(() => [])
     const a = accounts.find((x) => x.id === accountId)
     if (!a) throw new ChatError(400, `unknown account ${accountId}: AgentHydra lists ${accounts.map((x) => x.id).join(', ') || 'no accounts'}`)
     if (!a.signedIn) throw new ChatError(409, `${a.label} is signed out`)
     return { account: accountRef(a), auto: false, note: null }
+  }
+
+  /** The signed-in account with room that 'auto' places on; refused when none has room. */
+  private async placeAccount(): Promise<ResolvedAccount> {
+    const account = pickHealthy(this.placeable(await this.bridge.listAccounts().catch(() => [])), new Set())
+    if (!account) throw new ChatError(409, `no account has room: every signed-in account is at or past ${ROOM_PCT}% or unread`)
+    return { account: accountRef(account), auto: true, note: null }
   }
 
   /** Puts why 'auto' found no account into the chat's transcript, and the server log. */
@@ -2373,7 +2375,7 @@ export class ChatManager {
   }
 
   private async accountForConfigDir(configDir: string | null): Promise<AccountRef> {
-    if (!configDir) return { ...DEFAULT_ACCOUNT }
+    if (!configDir) return (await this.placeAccount()).account
     const want = resolve(configDir).toLowerCase()
     const accounts = await this.bridge.listAccounts().catch(() => [])
     const a = accounts.find((x) => x.configDir && resolve(x.configDir).toLowerCase() === want)

@@ -18,7 +18,7 @@
 import { type SearchResult, searchResult } from '@shared/find'
 import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
-import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
+import { mapAccounts, pickHealthy } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, jobDirs, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
 import { attachJobModels } from './swarm-models'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
@@ -52,7 +52,6 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
 export { BridgeError } from './client'
-export { DEFAULT_ACCOUNT } from './accounts'
 
 type Ids = Iterable<string> | Promise<Iterable<string>>
 
@@ -256,15 +255,14 @@ export function createBridge(opts: BridgeOptions = {}) {
       ])
       return keptAccounts.ok(mapAccounts(instances, running))
     } catch (err) {
-      if (unreachable(err)) return keptAccounts.get() ?? [DEFAULT_ACCOUNT_INFO]
+      if (unreachable(err)) return keptAccounts.get() ?? []
       throw err
     }
   }
 
-  /** The account the window shows for 'auto' when it continues an outside session: the default login.
-   *  Hydra Desk chooses no account; a new chat is a CliMayte worker and CliMayte places it. */
-  async function pickAccount(): Promise<AccountRef> {
-    return { ...DEFAULT_ACCOUNT }
+  /** The account 'auto' would place a chat on now: one with room, the least used first; null when none has room. */
+  async function pickAccount(): Promise<AccountRef | null> {
+    return pickHealthy(await listAccounts(), new Set())
   }
 
   /** Reads once per WORKERS_FRESH_MS; both recent and all share the same tick. */

@@ -10,7 +10,6 @@
 // sessions until one of them next changed (the other owner, 2026-10-04: a refresh showed none).
 
 import type { ServerEvent } from '@shared/protocol'
-import { DEFAULT_ACCOUNT_INFO } from './accounts'
 import { BridgeError } from './client'
 import type { Bridge } from './index'
 
@@ -110,7 +109,7 @@ export function createPoller(o: PollerOptions) {
     emitIfChanged({ type: 'external.update', sessions: [] })
     emitIfChanged({ type: 'climayte.update', workers: [] })
     emitIfChanged({ type: 'swarm.update', jobs: [] })
-    emitIfChanged({ type: 'accounts.update', accounts: [DEFAULT_ACCOUNT_INFO] })
+    emitIfChanged({ type: 'accounts.update', accounts: [] })
     accountsAt = 0
   }
 

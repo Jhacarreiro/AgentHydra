@@ -51,18 +51,18 @@ describe('client', () => {
 })
 
 describe('bridge', () => {
-  test('lists accounts through AgentHydra; the pick is the default login (CliMayte places chats)', async () => {
+  test('lists accounts through AgentHydra; the pick is one of them, never a default login', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })
-    expect((await b.listAccounts()).length).toBe(6)
-    expect((await b.pickAccount()).id).toBe('default')
+    expect((await b.listAccounts()).length).toBe(5)
+    expect((await b.pickAccount())?.id).toMatch(/^cli-/)
   })
 
-  test('AgentHydra down: the default login, no sessions, no workers, never a throw', async () => {
+  test('AgentHydra down: no accounts, no pick, no sessions, no workers, never a throw', async () => {
     const b = createBridge({ url: deadUrl(), now: () => NOW })
     expect(await b.status()).toEqual({ up: false, url: b.url })
-    expect((await b.listAccounts()).map((a) => a.id)).toEqual(['default'])
-    expect((await b.pickAccount()).id).toBe('default')
+    expect(await b.listAccounts()).toEqual([])
+    expect(await b.pickAccount()).toBeNull()
     expect(await b.externalSessions()).toEqual([])
     expect(await b.workers()).toEqual([])
     expect(await b.activeWorkersFor(sid(1))).toEqual([])
@@ -427,7 +427,7 @@ describe('poller', () => {
       expect.objectContaining({ type: 'accounts.update' }),
     ])
     const acc = h.events[3] as Extract<ServerEvent, { type: 'accounts.update' }>
-    expect(acc.accounts.map((a) => a.id)).toEqual(['default'])
+    expect(acc.accounts).toEqual([])
 
     // still down: nothing new to say
     h.events.length = 0

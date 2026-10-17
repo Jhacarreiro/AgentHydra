@@ -11,9 +11,9 @@ const sid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0'
 describe('accounts', () => {
   const accounts = mapAccounts(fixture('cli-instances'), fixture('corch-workers'))
 
-  test('the default login comes first, then every CLI instance', () => {
-    expect(accounts.map((a) => a.id)).toEqual(['default', 'cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
-    expect(accounts[0]).toMatchObject({ id: 'default', configDir: null, signedIn: true, inUse: false, fiveHourPct: null })
+  test('lists every CLI instance and never the default login', () => {
+    expect(accounts.map((a) => a.id)).toEqual(['cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
+    expect(mapAccounts([], [])).toEqual([])
   })
 
   test('an instance maps its plan, usage, resets and live sessions', () => {
