@@ -324,6 +324,12 @@ jobs:
         working-directory: desk2
         run: bun install --frozen-lockfile
 
+      # desk2's server imports the root server's people host (server/src/people-host.ts), and that file's
+      # own imports (hono) resolve from the root workspace, not desk2's: without it the typecheck stops at
+      # "Cannot find module 'hono'" (every run since 25d7d6f8, 2026-10-15).
+      - name: Install dependencies (root, for the server files desk2 imports)
+        run: bun install --frozen-lockfile
+
       - name: Typecheck (desk2)
         working-directory: desk2
         run: bun run typecheck
