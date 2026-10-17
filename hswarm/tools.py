@@ -27,7 +27,7 @@ from .grep import GREP_LINE_RX, py_grep, relative_hits, rg_lines
 from .guard import restore
 from .outfilters import filter_output, strip_raw
 from .redaction import RESTORE_TOOLS, Redactor, restore as restore_tags
-from . import config, receipts, scratch, walk
+from . import config, filekind, receipts, scratch, walk
 from .procs import CREATE_NO_WINDOW, TIMEOUT_EXIT, find_bash, kill_tree, run_hidden, scrubbed_env  # noqa: F401 - re-exported
 from .survival import MAX_BYTES, read_text
 from .outline import LANGS, language_of, render_outline, render_unfold
@@ -556,6 +556,14 @@ class Sandbox:
         p = self.resolve(path, must_exist=True, tool="read_file")
         if p.is_dir():
             raise IsADirectoryError(str(p))
+        # A picture or other binary file is named, not decoded: as UTF-8 it was pages of garbage a worker paid for and
+        # guessed from (filekind.py). Before the size guard: there is no slice of a picture to ask for.
+        note = filekind.describe(p, self.rel(p))
+        if note is not None:
+            self.files_read.add(p)
+            with p.open("rb") as f:  # stamped like any read, so a deliberate write_file over it is not refused for good
+                self._read_marks[p] = hashlib.file_digest(f, "sha256").hexdigest()
+            return note
         # A big file read whole would blow the worker's context; force a slice instead of silently truncating.
         if p.stat().st_size > self.max_read_bytes and not (start_line or end_line):
             raise ValueError(f"file is {p.stat().st_size} bytes; read a slice with start_line/end_line")

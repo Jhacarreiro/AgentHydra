@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from . import walk
+from . import filekind, walk
 from .procs import run_hidden
 from .toolspecs import IGNORED_DIRS
 
@@ -53,6 +53,8 @@ def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit
                 continue
             p = folder / entry.name
             try:
+                if not filekind.reads_as_text(p):
+                    continue  # a picture or binary file: rg skips them too, and decoded they were hits of garbage
                 for i, line in enumerate(split_lines(p.read_text(encoding="utf-8", errors="replace")), 1):
                     if rx.search(line):
                         lines.append(f"{p}:{i}:{line}")

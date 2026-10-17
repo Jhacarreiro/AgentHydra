@@ -149,6 +149,100 @@ def test_read_slice_and_size_guard(tmp_path):
     assert run(sb.run("read_file", {"path": "big.txt", "start_line": 3, "end_line": 4})).splitlines() == ["3\t2", "4\t3"]
 
 
+# Tiny pictures as headers only, built here so the repo ships no image file. A reader of sizes needs nothing past them.
+def _le(n: int, width: int, signed: bool = False) -> bytes:
+    return n.to_bytes(width, "little", signed=signed)
+
+
+def _jpeg(width: int, height: int) -> bytes:
+    """An APP0, then an APP1 longer than the 8 KB head (as a phone's EXIF block can be), then the frame."""
+    exif = b"\xff\xe1" + (9000).to_bytes(2, "big") + b"Exif\x00\x00" + b"\x00" * 8992
+    return (b"\xff\xd8" + b"\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + exif
+            + b"\xff\xc0\x00\x11\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x03" + b"\x00" * 9)
+
+
+def _webp(chunk: bytes, body: bytes) -> bytes:
+    return b"RIFF" + _le(4 + 8 + len(body), 4) + b"WEBP" + chunk + _le(len(body), 4) + body
+
+
+PICTURES = [
+    ("shot.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + (640).to_bytes(4, "big") + (480).to_bytes(4, "big") + b"\x08\x06\x00\x00\x00",
+     "shot.png is a picture: PNG, 640 x 480 pixels, 29 bytes."),
+    ("photo.jpg", _jpeg(1024, 768), "photo.jpg is a picture: JPEG, 1024 x 768 pixels, 8.8 KB."),
+    ("anim.gif", b"GIF89a" + _le(5, 2) + _le(7, 2) + b"\x00\x00\x00", "anim.gif is a picture: GIF, 5 x 7 pixels, 13 bytes."),
+    ("lossy.webp", _webp(b"VP8 ", b"\x00\x00\x00\x9d\x01\x2a" + _le(300, 2) + _le(200, 2)), "lossy.webp is a picture: WebP, 300 x 200 pixels,"),
+    ("flat.webp", _webp(b"VP8L", b"\x2f" + _le((120 - 1) | ((90 - 1) << 14), 4)), "flat.webp is a picture: WebP, 120 x 90 pixels,"),
+    ("wide.webp", _webp(b"VP8X", b"\x00" * 4 + _le(4000 - 1, 3) + _le(3000 - 1, 3)), "wide.webp is a picture: WebP, 4000 x 3000 pixels,"),
+    # Stored top-down: a negative height.
+    ("icon.bmp", b"BM" + _le(54, 4) + b"\x00" * 4 + _le(54, 4) + _le(40, 4) + _le(16, 4, True) + _le(-9, 4, True) + b"\x01\x00\x18\x00" + b"\x00" * 24,
+     "icon.bmp is a picture: BMP, 16 x 9 pixels, 54 bytes."),
+    ("scan.tif", b"II*\x00\x08\x00\x00\x00" + b"\x00" * 8, "scan.tif is a picture: TIFF, 16 bytes."),
+    ("favicon.ico", b"\x00\x00\x01\x00\x01\x00" + b"\x10\x10" + b"\x00" * 14, "favicon.ico is a picture: ICO, 22 bytes."),
+    # The bytes say what it is, whatever the name says.
+    ("logo.txt", b"GIF87a" + _le(2, 2) + _le(3, 2) + b"\x00\x00\x00", "logo.txt is a picture: GIF, 2 x 3 pixels,"),
+    # No signature it knows, but binary and named as a picture: a picture by its name, with no size read from it.
+    ("broken.png", b"\x00\x01garbage", "broken.png is a picture: PNG, 9 bytes."),
+]
+
+
+@pytest.mark.parametrize("name, data, said", PICTURES, ids=[p[0] for p in PICTURES])
+def test_read_file_names_a_picture_instead_of_decoding_it(tmp_path, name, data, said):
+    # A PNG read as UTF-8 came back to a worker as pages of replacement characters it paid for and guessed from;
+    # a worker has no picture input, so it is told what the file is and where it can be looked at.
+    (tmp_path / name).write_bytes(data)
+    out = run(Sandbox(tmp_path).run("read_file", {"path": name}))
+    assert out.startswith(said), out
+    assert "read_file shows text only" in out and "hswarm_ask" in out and "�" not in out
+    assert ("convert it first" in out) == any(kind in said for kind in (": BMP", ": TIFF", ": ICO"))
+
+
+def test_read_file_names_other_binary_files_in_one_line(tmp_path):
+    sb = Sandbox(tmp_path)
+    (tmp_path / "blob.bin").write_bytes(bytes(range(256)) * 4)
+    assert run(sb.run("read_file", {"path": "blob.bin"})) == "blob.bin is a binary file (1.0 KB), not text; read_file shows text only."
+    # No NUL byte, but nearly none of it decodes as UTF-8.
+    (tmp_path / "noise.dat").write_bytes(bytes(range(128, 256)) * 3)
+    assert run(sb.run("read_file", {"path": "noise.dat"})) == "noise.dat is a binary file (384 bytes), not UTF-8 text; read_file shows text only."
+
+
+def test_read_file_keeps_text_files_as_they_read_before(tmp_path):
+    sb = Sandbox(tmp_path)
+    # A stray Latin-1 byte in UTF-8 text is still text, read the way it always was.
+    (tmp_path / "menu.txt").write_bytes(b"tea\ncaf\xe9\n")
+    assert run(sb.run("read_file", {"path": "menu.txt"})) == "1\ttea\n2\tcaf�"
+    # UTF-16 (Windows PowerShell 5.1's `>`) holds a NUL in every ASCII char; it keeps today's read, not a binary verdict.
+    (tmp_path / "out.log").write_bytes(b"\xff\xfe" + "ok\n".encode("utf-16-le"))
+    assert run(sb.run("read_file", {"path": "out.log"})).startswith("1\t")
+    # A text file merely named like a picture (a Git LFS pointer) is still text.
+    (tmp_path / "hero.png").write_text("version https://git-lfs.github.com/spec/v1\noid sha256:abc\n")
+    assert run(sb.run("read_file", {"path": "hero.png", "start_line": 2})) == "2\toid sha256:abc"
+
+
+def test_a_picture_needs_no_slice_and_counts_as_read(tmp_path):
+    # Over the read cap a text file asks for a slice; a picture has no slice to ask for, so it is named all the same.
+    # The note stamps the file like any read: a deliberate write_file over it is not refused for good.
+    sb = Sandbox(tmp_path, max_read_bytes=10)
+    pic = tmp_path / "big.jpg"
+    pic.write_bytes(_jpeg(8, 6))
+    assert run(sb.run("read_file", {"path": "big.jpg"})).startswith("big.jpg is a picture: JPEG, 8 x 6 pixels, ")
+    assert run(sb.run("read_file", {"path": "big.jpg", "start_line": 1, "end_line": 2})).startswith("big.jpg is a picture: JPEG")
+    assert pic.resolve() in sb.files_read
+    assert "wrote" in run(sb.run("write_file", {"path": "big.jpg", "content": "placeholder\n"}))
+
+
+@pytest.mark.parametrize("engine", ["rg", "python"])
+def test_grep_skips_pictures_and_binary_files(tmp_path, monkeypatch, engine):
+    # rg skips a binary file in a folder search; the rg-less walk decoded it and answered with hits of garbage.
+    if engine == "rg" and not shutil.which("rg"):
+        pytest.skip("no rg on PATH")
+    if engine == "python":
+        monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    (tmp_path / "a.txt").write_text("needle here\n")
+    (tmp_path / "shot.png").write_bytes(PICTURES[0][1] + b"\nneedle\xff\xfe\x00\n")
+    (tmp_path / "blob.bin").write_bytes(b"\x00\x01needle\x02\n")
+    assert run(Sandbox(tmp_path).run("grep", {"pattern": "needle"})) == "a.txt:1:needle here"
+
+
 @pytest.mark.parametrize("engine", ["rg", "python"])
 def test_list_glob_grep(tmp_path, monkeypatch, engine):
     if engine == "rg" and not shutil.which("rg"):
