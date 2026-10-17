@@ -123,10 +123,9 @@ test('a failed write leaves the previous file intact and no scratch behind', () 
   try {
     const path = join(dir, 'store.json')
     writeFileSync(path, '{"rows":["keep"]}')
-    // A value JSON.stringify cannot serialize makes the write throw before the rename.
-    const cyclic: Record<string, unknown> = {}
-    cyclic.self = cyclic
-    expect(() => writeJsonStoreAtomic(path, cyclic)).toThrow()
+    // A value JSON.stringify cannot serialize makes the write throw before the rename. A BigInt
+    // throws at once; a cyclic object spends seconds in JSON.stringify before it throws.
+    expect(() => writeJsonStoreAtomic(path, { n: 1n })).toThrow()
     expect(readFileSync(path, 'utf8')).toBe('{"rows":["keep"]}')
     expect(readdirSync(dir)).toEqual(['store.json'])
   } finally {

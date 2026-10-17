@@ -51,10 +51,23 @@ describe('subfolders', () => {
 })
 
 describe('withPath and withoutPath', () => {
-  test('adds a folder once, whatever its case', () => {
-    const list = withPath(['C:/Work/App'], 'c:/work/app')
-    expect(list).toEqual(['C:/Work/App'])
+  test('adds an exact-case folder once', () => {
+    expect(withPath(['C:/Work/App'], 'C:/Work/App')).toEqual(['C:/Work/App'])
+  })
+
+  test('adds to an empty list', () => {
     expect(withPath([], 'C:/Work/App')).toEqual(['C:/Work/App'])
+  })
+
+  test('removes an exact-case folder', () => {
+    expect(withoutPath(['C:/Work/App', 'C:/Other'], 'C:/Work/App')).toEqual(['C:/Other'])
+  })
+})
+
+// Windows folders are case-insensitive; elsewhere 'c:/work/app' is a different folder.
+describe.skipIf(process.platform !== 'win32')('withPath and withoutPath, case-mismatch', () => {
+  test('adds a folder once, whatever its case', () => {
+    expect(withPath(['C:/Work/App'], 'c:/work/app')).toEqual(['C:/Work/App'])
   })
 
   test('removes a folder whichever spelling it was kept under', () => {

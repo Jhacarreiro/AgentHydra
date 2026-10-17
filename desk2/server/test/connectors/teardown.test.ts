@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ConnectorStatus } from '../../../shared/connectors'
@@ -49,9 +49,14 @@ const def = () => factory({ home })
 const sharedUrl = () => `http://127.0.0.1:${daemon?.port}/api/mcp/shared/teardown`
 const status = (over: Partial<ConnectorStatus>): ConnectorStatus => ({ id: 'teardown', state: 'running', url: null, version: null, enabled: true, givesChats: true, checkedAt: 0, ...over })
 
+// npm's Windows shim is rea.cmd; elsewhere it is an executable rea, so the test runs on every OS.
 function putRea(dir: string): void {
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'rea.cmd'), '@echo off\r\n')
+  if (process.platform === 'win32') writeFileSync(join(dir, 'rea.cmd'), '@echo off\r\n')
+  else {
+    writeFileSync(join(dir, 'rea'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(dir, 'rea'), 0o755)
+  }
 }
 
 describe('detect', () => {

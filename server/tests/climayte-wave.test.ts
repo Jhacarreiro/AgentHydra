@@ -54,6 +54,12 @@ function forgetManagers(): void {
   for (const [id, w] of liveWorkers) if (w.kind === 'manage') liveWorkers.delete(id)
 }
 
+// Finished workers stay in the shared map; climayte-login-wall places its task on the account of a
+// leftover worker from this file, so a block forgets the workers of its own groups.
+function forgetGroups(groups: string[]): void {
+  for (const [id, w] of liveWorkers) if (groups.includes(w.group)) liveWorkers.delete(id)
+}
+
 describe('wave store', () => {
   let tempDir: string
 
@@ -853,6 +859,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1154,6 +1161,7 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1429,6 +1437,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     for (const group of groups) climayteCancel({ group })
     await killsLanded()
     forgetManagers()
+    forgetGroups(groups)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
