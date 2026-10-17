@@ -540,6 +540,42 @@ test('an account uuid maps to the acct id hswarm prints and to the instance sign
   expect(cliOnly[id]).toEqual({ num: 9, label: 'cli-a', kind: 'cli' })
 })
 
+test('the main ~/.claude folder names its login, its earlier logins and ledger ids, under every better name', async () => {
+  const { hswarmAccountMap, hswarmAccountId, MAIN_CLI_LABEL } = await import('../src/routes/hswarm')
+  const now = '00000000-0000-0000-0000-0000000000b1'
+  const before = '00000000-0000-0000-0000-0000000000b2'
+  const onDesktop = '00000000-0000-0000-0000-0000000000b3'
+  const knownName = '00000000-0000-0000-0000-0000000000b4'
+  const map = hswarmAccountMap({
+    desktop: [{ num: 3, name: 'inst-3', label: null, loginUuid: onDesktop, account: null }],
+    cli: [],
+    cliUuid: () => null,
+    known: { [knownName]: { name: 'Example Owner', email: null } },
+    main: {
+      current: now,
+      past: [before, onDesktop, knownName],
+      // Only the id is left of an account the ledger credited to the main folder before anyone recorded its logins.
+      ids: ['acct-0badc0de', hswarmAccountId(onDesktop)],
+    },
+  })
+  expect(map[hswarmAccountId(now)]).toEqual({ label: MAIN_CLI_LABEL, kind: 'cli', main: true })
+  expect(map[hswarmAccountId(before)]).toEqual({
+    label: MAIN_CLI_LABEL,
+    kind: 'cli',
+    main: true,
+    former: true,
+  })
+  expect(map['acct-0badc0de']).toEqual({
+    label: MAIN_CLI_LABEL,
+    kind: 'cli',
+    main: true,
+    former: true,
+  })
+  // A numbered instance and a remembered name both say more than "the main folder".
+  expect(map[hswarmAccountId(onDesktop)]).toEqual({ num: 3, label: 'inst-3', kind: 'desktop' })
+  expect(map[hswarmAccountId(knownName)]).toEqual({ label: 'Example Owner', former: true })
+})
+
 test('a signed-out account is named from known accounts and login history, never over a current login', async () => {
   const { hswarmAccountMap, hswarmAccountId } = await import('../src/routes/hswarm')
   const current = '00000000-0000-0000-0000-0000000000a1'

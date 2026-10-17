@@ -379,6 +379,8 @@ export interface AhSpendReport {
   bySource: AhSpendBucket[]
   pricesAsOf: string
   coverage: { sessions: number; total: number; refreshing: boolean }
+  /** The kit's oldest and newest call per source (epoch ms): where each source's record begins. */
+  kitCoverage?: { sources?: Record<string, { events?: number; firstTs?: number; lastTs?: number }> }
 }
 
 /** GET /api/analytics/activity (ActivityReport, trimmed): `hours` is 168 slots, Sunday 00:00 first, the PC's local time. */

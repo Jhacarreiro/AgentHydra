@@ -35,6 +35,7 @@ const SOURCE_LABELS: Record<string, string> = {
   opencode: 'OpenCode',
   dsh: 'DeepSeek',
   hermes: 'Hermes',
+  'vscode-copilot': 'VS Code Copilot',
 }
 /** The name the card gives one of AgentHydra's sources; one it does not know keeps its key. */
 const sourceLabel = (key: string): string => SOURCE_LABELS[key] ?? key
@@ -61,16 +62,29 @@ function dayKey(d: Date): string {
 }
 
 /**
- * HEAT_DAYS cells, oldest first, ending on `today`: each day's turns, and its level 0-4 against the busiest
- * day in the window (the scale the card has always drawn: any activity is at least 1).
+ * HEAT_DAYS cells, oldest first, ending on `today`: each day's turns, and its level 0-4 by where it ranks among
+ * the window's active days (quartiles, as GitHub shades its grid; any activity is at least 1). The level was the
+ * day's share of the busiest day's turns until 2026-10-17, when one Codex day of 733,633 turns (443 sub-agents)
+ * put 163 of the 165 active days of the All grid at level 1 (owner: "oddly lacking in the darker colored pixels").
  */
 function heatCells(turnsByDay: Map<string, number>, today: Date): HeatCell[] {
   const days = Array.from({ length: HEAT_DAYS }, (_, i) => {
     const d = dayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - (HEAT_DAYS - 1 - i)))
     return { day: d, count: turnsByDay.get(d) ?? 0 }
   })
-  const max = Math.max(1, ...days.map((c) => c.count))
-  return days.map((c) => ({ ...c, level: c.count <= 0 ? 0 : Math.min(4, Math.ceil((c.count / max) * 4)) }))
+  const active = days.map((c) => c.count).filter((n) => n > 0).sort((a, b) => a - b)
+  const quartile = (q: number) => active[Math.floor(q * (active.length - 1))] ?? 0
+  const cuts = [quartile(0.25), quartile(0.5), quartile(0.75)]
+  return days.map((c) => ({ ...c, level: c.count <= 0 ? 0 : 1 + cuts.filter((cut) => c.count > cut).length }))
+}
+
+/** Each source's first recorded day (the kit's oldest call for it), keyed by source. */
+function sourceSince(spend: AhSpendReport): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const [key, s] of Object.entries(spend.kitCoverage?.sources ?? {})) {
+    if (typeof s?.firstTs === 'number' && Number.isFinite(s.firstTs)) out.set(key, dayKey(new Date(s.firstTs)))
+  }
+  return out
 }
 
 /**
@@ -99,6 +113,7 @@ function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
   const { spend } = r
   // The daemon's cost at the owner's bulk rate; bridge/client.ts's AhSpendReport does not list it.
   const rate = spend as { hasRateDiscount?: boolean; totalCostAtRateUsd?: number | null }
+  const since = sourceSince(spend)
   const sources = (spend.bySource ?? [])
     .map((b) => ({
       key: b.key,
@@ -107,6 +122,7 @@ function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
       messages: num(b.turns),
       tokens: num(b.tokens?.total),
       costUsd: b.costUsd ?? null,
+      since: since.get(b.key) ?? null,
     }))
     .filter((s) => s.sessions || s.messages || s.tokens)
     .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)

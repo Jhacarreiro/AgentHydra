@@ -1045,11 +1045,14 @@ export interface HomeStatsSource {
   messages: number
   tokens: number
   costUsd: number | null
+  /** The source's first recorded day (YYYY-MM-DD): older use was never logged, or its logs were deleted before
+   *  AgentHydra kept them (Claude Code removes chats after 30 days unless told otherwise). Null when unknown. */
+  since: string | null
 }
 
 /**
  * One square of the stats card's activity grid: its local day (YYYY-MM-DD), that day's figure and its
- * shade 0-4 against the busiest day shown, so a hover can name the day and its number (owner, 2026-10-05:
+ * shade 0-4 by where the day ranks among the grid's active days, so a hover can name the day and its number (owner, 2026-10-05:
  * "Each of the squares ... need to have a number I can read when I hover over them").
  */
 export interface HeatCell {

@@ -128,6 +128,8 @@ export interface HswarmAccountName {
   kind?: string
   /** Signed out or moved: named from what AgentHydra remembers, not from a current login. */
   former?: boolean
+  /** The main ~/.claude folder's login (now, or `former`): it has no instance number. */
+  main?: boolean
 }
 
 /** How one acct id reads in a table: former accounts say so, an id nobody knows stays raw with a hint.
@@ -140,6 +142,10 @@ export function accountDisplay(
 ): { text: string; muted: boolean; title?: string } {
   const n = names[id]
   if (!n) return { text: id, muted: false, title: t('swarmStats.accountUnknown') }
+  if (n.main) {
+    const text = n.former ? t('swarmStats.accountMainEarlier', { name: n.label }) : n.label
+    return { text, muted: !!n.former, title: t('swarmStats.accountMainTitle') }
+  }
   if (!n.former) return { text: `#${n.num} ${pii(n.label)}`, muted: false }
   const text =
     n.num != null
