@@ -188,17 +188,22 @@ tray icon and the fair share first), then reading two working chats' pids out of
   order); without one it is reported, never killed. By hand: kill the source row's `livePid`,
   then `migrate_reconcile --finish <mutationId>`. The id `--finish` takes is the MUTATION id from
   `migrate_reconcile --json`, not the session id.
-- **A move and its report outlive a daemon RESTART (since 2026-10-17).** A run that moves chats
-  through the daemon runs under a runner outside it (`server/src/orchestrator-runner.ts`):
-  `migrate_batch`, `migrate_chat`, `undo`, `chats --move-to X --yes`, `groundskeeper --yes` (unless
-  `--only-archive`), `sweep --yes` with `--moves`, `--land-console` or `--all`, `loop --live`
-  (the same as `sweep --all --yes`), and `migrate_reconcile --reverse`. The list is
-  `movesChats` in `server/src/orchestrator.ts`. Its operation record is kept in
-  `<data dir>/orchestrator-runs/`, so `POST /api/daemon/restart` and the auto-updater no longer
-  wait for it: the next daemon takes the run on and answers its operation id with the result. The
-  move's own daemon calls wait out the handover (`server/src/toolbox-calls.ts`: the old daemon
-  turns new ones away with a 503 that hydralib sends again for up to 120 s, and lets one already
-  under way finish, up to 60 s). Before that a restart killed the move: on 2026-10-08 one died 23
+- **A move and its report outlive a daemon RESTART (since 2026-10-17).** A run that acts on chats
+  one after another through the daemon runs under a runner outside it
+  (`server/src/orchestrator-runner.ts`): `migrate_batch`, `migrate_chat`, `undo`,
+  `chats --move-to X --yes`, `groundskeeper --yes` (unless `--only-archive`), `sweep --yes` with any
+  lane flag (`--archive`, `--moves`, `--land-console`, `--deliver`) or `--all`, `loop --live` (the
+  same as `sweep --all --yes`), `migrate_reconcile --reverse`, and `fan_out`'s spawn (unless
+  `--dry-run`), `send`, `recover` and `delete`. The list is `outlivesDaemon` in
+  `server/src/orchestrator.ts`. A restart takes about 2 s, and these take far longer: a fan_out
+  spawn 50 s per chat, a sweep's doctrine pass up to 24 chats over as long as 201 s. Its operation
+  record is kept in `<data dir>/orchestrator-runs/`, with a cancel asked of it and the run it
+  preempted, so `POST /api/daemon/restart` and the auto-updater no longer wait for it: the next
+  daemon takes the run on and answers its operation id with the result, and sends a recorded cancel
+  again. The run's own daemon calls wait out the handover (`server/src/toolbox-calls.ts`: the old
+  daemon turns new ones away with a 503 that hydralib sends again for up to 120 s, and lets one
+  already under way finish, up to 60 s). A next daemon on another port is found through the
+  `runtime.json` pointer it writes. Before that a restart killed the move: on 2026-10-08 one died 23
   minutes into a 9-chat drain, leaving two chats on both accounts and seven never tried. A poll
   that still answers `reason: 'daemon-restarted'` means a move started on an older daemon or one
   that ended over an hour ago. ⛔ On that answer do NOT re-fire the move: run `migrate_reconcile`

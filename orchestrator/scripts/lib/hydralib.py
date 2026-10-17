@@ -87,12 +87,14 @@ _DEFAULT_BASE = f"http://127.0.0.1:{DEFAULT_PORT}"
 _SIDE_RUN_ANNOUNCED = False
 TIMEOUT_SECS = float(os.environ.get("AGENTHYDRA_TIMEOUT_SECS", "30"))
 
-# A toolbox run the daemon started under a runner (a chat move, server/src/orchestrator.ts
-# MOVE_SCRIPTS) has its operation id here. Such a run outlives a daemon restart (2026-10-17), so a
-# call that meets the handover waits it out instead of failing a move step half-way: the outgoing
-# daemon answers 503 with x-agenthydra-restarting (the call did not run; server/src/toolbox-calls.ts),
-# then the port refuses connections until the next daemon binds it (a refused connect sent nothing).
-# Either is sent again every second, for up to RESTART_WAIT_SECS. A script run from a shell has no id
+# A toolbox run the daemon started under a runner (a chat move, an acting sweep, a fan_out spawn:
+# server/src/orchestrator.ts outlivesDaemon) has its operation id here. Such a run outlives a daemon
+# restart (2026-10-17), so a call that meets the handover waits it out instead of failing a step
+# half-way: the outgoing daemon answers 503 with x-agenthydra-restarting (the call did not run;
+# server/src/toolbox-calls.ts), then the port refuses connections until the next daemon binds it (a
+# refused connect sent nothing). Either is sent again every second, for up to RESTART_WAIT_SECS. The
+# next daemon may bind another port (it hops off one still held); a refused connect then reads the
+# runtime.json pointer it wrote and follows it (_successor_base). A script run from a shell has no id
 # and fails at once, as before.
 OPERATION = os.environ.get("AGENTHYDRA_OPERATION", "").strip()
 RESTART_WAIT_SECS = float(os.environ.get("AGENTHYDRA_RESTART_WAIT_SECS", "120"))
@@ -153,23 +155,37 @@ def _stale_pointer_note() -> str:
     )
 
 
-def _default_port_answers() -> bool:
-    """One /api/health probe of the default port AS this service: in-process when a stub owns that
-    base (INPROC), else on the wire with a short timeout. Anything but an ok answer is False."""
-    inproc = INPROC.get(_DEFAULT_BASE)
+def _answers_as_us(base: str) -> bool:
+    """One /api/health probe of `base` AS this service: in-process when a stub owns that base
+    (INPROC), else on the wire with a short timeout. Anything but an ok answer is False."""
+    inproc = INPROC.get(base)
     try:
         if inproc is not None:
             status, raw = inproc("GET", "/api/health", None)
         else:
-            req = urllib.request.Request(
-                f"{_DEFAULT_BASE}/api/health", headers={"accept": "application/json"}
-            )
+            req = urllib.request.Request(f"{base}/api/health", headers={"accept": "application/json"})
             with urllib.request.urlopen(req, timeout=1.5) as res:
                 status, raw = res.status, res.read()
         body = json.loads(raw) if status == 200 else None
         return bool(isinstance(body, dict) and body.get("ok") and body.get("service") == "agenthydra")
     except Exception:
         return False
+
+
+def _default_port_answers() -> bool:
+    return _answers_as_us(_DEFAULT_BASE)
+
+
+def _successor_base() -> str:
+    """The url the next daemon bound, when it is not BASE and answers as us, else ''.
+
+    A RUN UNDER A RUNNER OUTLIVES ITS DAEMON, AND ITS AGENTHYDRA_URL DOES NOT (2026-10-17). The
+    daemon pins its own url into the run's env (orchestrator.ts orchestratorChildEnv); a successor
+    that hops to another port (its predecessor still held the old one) leaves that url naming a
+    port nobody binds again, and the run's every call refused there until RESTART_WAIT_SECS ran
+    out. The successor writes the port it bound to runtime.json, so a refused connect reads it."""
+    url = _runtime_pointer_url(os.environ, None)
+    return url if url and url != BASE and _answers_as_us(url) else ""
 
 
 def _note_side_run(store) -> None:
@@ -211,9 +227,9 @@ def _send(method: str, path: str, data: bytes | None, timeout: float,
     headers = {"accept": "application/json", "content-type": "application/json"}
     if OPERATION:
         headers["x-agenthydra-operation"] = OPERATION
-    req = urllib.request.Request(f"{BASE}{path}", data=data, method=method, headers=headers)
     since = time.monotonic()
     while True:
+        req = urllib.request.Request(f"{BASE}{path}", data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as res:
                 _note_side_run(res.headers.get("x-agenthydra-side-run"))
@@ -222,6 +238,11 @@ def _send(method: str, path: str, data: bytes | None, timeout: float,
             if _restart_gap(e) and time.monotonic() - since < RESTART_WAIT_SECS:
                 if isinstance(e, urllib.error.HTTPError):
                     e.close()
+                elif successor := _successor_base():
+                    sys.stderr.write(f"hydralib: {BASE} is gone; its successor answers on {successor}, "
+                                     "which this run uses from here on.\n")
+                    BASE = successor
+                    continue
                 time.sleep(1)
                 continue
             failed = e

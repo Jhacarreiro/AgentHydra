@@ -1,6 +1,6 @@
 /**
- * The daemon calls a chat move makes while it runs under a runner (orchestrator.ts movesChats), and
- * the restart's hold on them.
+ * The daemon calls a toolbox run makes while it runs under a runner (orchestrator.ts outlivesDaemon:
+ * a chat move, an acting sweep, a fan_out spawn), and the restart's hold on them.
  *
  * A move outlives a daemon restart, but each of its steps is a call into the daemon (import the chat,
  * archive its source, stamp its settings), and a restart exits the daemon with whatever it is

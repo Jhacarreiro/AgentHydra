@@ -306,29 +306,42 @@ async function waitForLockToClear(
   return !liveRun(script)
 }
 
+/** A sweep's acting lanes, as sweep.py LANE_FLAGS names them; `--all` takes the policy's. */
+const SWEEP_LANE_FLAGS = ['--archive', '--moves', '--land-console', '--deliver', '--all']
+
 /**
- * Does this run move chats? Such a run goes under a runner, outside the daemon
- * (orchestrator-runner.ts), with its operation kept on disk for the next daemon
- * (adoptOrchestratorRuns). Exact tokens, as the rest of this file: a flag inside another
- * flag's value does not count. Each row was checked against the script's own argv handling:
+ * Does this run act on chats one after another, for longer than a restart takes? Such a run goes
+ * under a runner, outside the daemon (orchestrator-runner.ts), with its operation kept on disk for
+ * the next daemon (adoptOrchestratorRuns). Exact tokens, as the rest of this file: a flag inside
+ * another flag's value does not count. Each row was checked against the script's own argv handling:
  *   - migrate_batch, migrate_chat: always;
  *   - chats: `--move-to` with `--yes` (no `--yes` plans only);
  *   - groundskeeper: `--yes`, unless `--only-archive` (it then evacuates nothing);
- *   - sweep: `--yes` with a lane that moves (`--moves`, `--land-console`, or `--all`, whose lanes
- *     come from the policy); a sweep with no lane flag plans only;
+ *   - sweep: `--yes` with any lane flag (SWEEP_LANE_FLAGS); a sweep with no lane flag plans only.
+ *     Every acting sweep also runs the doctrine pass, which stamps every chat in the fleet;
  *   - loop: `--live`, which is `sweep --all --yes` (orch.py);
  *   - undo: always, since it can run migrate_chat back and has no planning mode;
- *   - migrate_reconcile: `--reverse` (it hands the row to undo.py).
+ *   - migrate_reconcile: `--reverse` (it hands the row to undo.py);
+ *   - fan_out: a spawn (no subcommand) unless `--dry-run`, and `send`, `recover` and `delete`;
+ *     `status`, `list` and `beacon` only read or note (FAN_OUT_UNLOCKED_SUBCOMMANDS).
  *
  * ⛔ A RESTART CUT A DRAIN HALF-WAY (2026-10-08). A peer session restarted the daemon 23 minutes
  * into a 9-chat migrate_batch; its python child died with the daemon, two chats were left landed
  * and still unarchived on the source, and seven were never tried. Until 2026-10-17 every restart
- * was refused while a move ran (moveRestartRefusal); now a move goes on through the restart and
- * the next daemon answers its operation id. A move's own daemon calls wait out the handover
- * (toolbox-calls.ts, hydralib's AGENTHYDRA_OPERATION). Every run that moves chats gets this, not
- * only migrate_*: a run that moves chats and dies with its daemon is the same cut.
+ * was refused while a move ran (moveRestartRefusal); now such a run goes on through the restart and
+ * the next daemon answers its operation id. Its own daemon calls wait out the handover
+ * (toolbox-calls.ts, hydralib's AGENTHYDRA_OPERATION).
+ *
+ * ⛔ NOT ONLY MOVES (2026-10-17). A restart takes about 2 s (the daemon log: successor spawned,
+ * old one exited, new one serving), and Bun on Windows ends the daemon's children with it, so any
+ * run that acts chat by chat and is under way at that moment is cut. Measured from the toolbox's
+ * own ledgers: a fan_out spawn takes 50 s per chat (median of 48 groups; 94% over 30 s, the
+ * longest 466 s), a doctrine pass stamps up to 24 chats over a median 20 s (up to 201 s), and an
+ * archive lane ran 88 s for 4 chats. A spawn cut half-way leaves the rest of its group never
+ * started and a chat that may be typed but unrecorded; a send cut between members leaves the rest
+ * unsent with no record of who got it.
  */
-export function movesChats(script: string, args: string[]): boolean {
+export function outlivesDaemon(script: string, args: string[]): boolean {
   const has = (flag: string) => args.includes(flag)
   switch (script) {
     case 'migrate_batch':
@@ -340,11 +353,13 @@ export function movesChats(script: string, args: string[]): boolean {
     case 'groundskeeper':
       return has('--yes') && !has('--only-archive')
     case 'sweep':
-      return has('--yes') && (has('--moves') || has('--land-console') || has('--all'))
+      return has('--yes') && SWEEP_LANE_FLAGS.some(has)
     case 'loop':
       return has('--live')
     case 'migrate_reconcile':
       return has('--reverse')
+    case 'fan_out':
+      return !FAN_OUT_UNLOCKED_SUBCOMMANDS.has(args[0] ?? '') && !has('--dry-run')
     default:
       return false
   }
@@ -375,9 +390,9 @@ export function orchestratorBusy(): boolean {
 //     says cancelled rather than failed.
 // Results are kept in memory, bounded (OPERATION_KEEP) and expiring (OPERATION_TTL_MS): this is
 // reconciliation for a dropped connection and a restart-free daemon, not an audit log - the
-// toolbox's own ledgers are the durable record of what an act did. A run that moves chats
-// (movesChats) is the exception since 2026-10-17: it runs under a runner and its record is also kept
-// in RUNS_DIR,
+// toolbox's own ledgers are the durable record of what an act did. A run that acts on chats at
+// length (outlivesDaemon) is the exception since 2026-10-17: it runs under a runner and its record
+// is also kept in RUNS_DIR,
 // so the next daemon answers its id (adoptOrchestratorRuns). Every other run's record still dies
 // with the daemon, as below.
 //
@@ -425,9 +440,8 @@ interface OperationEntry {
   /** The registry's own deadline timer (see OPERATION_WATCHDOG_GRACE_MS). Cleared the moment the
    *  run settles, so a finished operation leaves no timer behind. */
   watchdog: ReturnType<typeof setTimeout> | null
-  /** A run that moves chats (movesChats) under a runner: what ran and where its files are. Its
-   *  record is saved in RUNS_DIR whenever it changes, so the next daemon can take it on. Null for
-   *  every other run. */
+  /** A run under a runner (outlivesDaemon): what ran and where its files are. Its record is saved
+   *  in RUNS_DIR whenever it changes, so the next daemon can take it on. Null for every other run. */
   runner: RunnerRun | null
 }
 
@@ -437,15 +451,21 @@ interface RunnerRun {
   cwd: string
   startedAt: number
   timeoutMs: number
+  /** The operation this run took the route from (runOrchestrator's preemption), kept so the next
+   *  daemon's answer still names it. */
+  preempted?: string
 }
 
-/** A move's operation as saved: the record and how to read its run. */
+/** A runner run's operation as saved: the record, how to read its run, and whether a cancel was
+ *  asked for. A cancel left out of the record read `failed` on the next daemon, not `cancelled`,
+ *  and one that had not landed yet was never sent again. */
 interface SavedRun {
   op: OrchestratorOperation
   run: RunnerRun
+  cancelRequested?: boolean
 }
 
-/** Where a move's record and its runner's files live (orchestrator-runner.ts). */
+/** Where a runner run's record and its runner's files live (orchestrator-runner.ts). */
 const RUNS_DIR = join(DATA_DIR, 'orchestrator-runs')
 const recordPath = (id: string) => join(RUNS_DIR, `${id}.json`)
 /** A record's name; the runner's own files carry a second extension. */
@@ -456,11 +476,13 @@ function saveRun(entry: OperationEntry): void {
   if (!entry.runner) return
   const path = recordPath(entry.op.id)
   const tmp = `${path}.${process.pid}.tmp`
+  const saved: SavedRun = { op: entry.op, run: entry.runner }
+  if (entry.cancelRequested) saved.cancelRequested = true
   try {
-    writeFileSync(tmp, JSON.stringify({ op: entry.op, run: entry.runner } satisfies SavedRun))
+    writeFileSync(tmp, JSON.stringify(saved))
     renameSync(tmp, path)
   } catch (err) {
-    console.error(`[orchestrator] could not save move ${entry.op.id}:`, err)
+    console.error(`[orchestrator] could not save run ${entry.op.id}:`, err)
   }
 }
 
@@ -528,10 +550,12 @@ export function operationMissReason(now = Date.now()): OperationMiss {
         'ran them. If your run began before that time, it was a DIFFERENT process: the record ' +
         'did not survive the restart, and the run itself may have finished or died with the ' +
         "daemon that ran it. Do NOT re-fire the act - read the toolbox's own ledger for what it " +
-        'did, and verify the effect directly. A move (migrate_batch, migrate_chat) keeps its ' +
-        'record through a restart, so a move missing here ended over an hour ago or ran on a ' +
-        'daemon older than that record: run migrate_reconcile, which lists chats left ' +
-        'half-moved, and migrate_reconcile --finish <id> settles each.'
+        'did, and verify the effect directly. A move, an acting sweep or loop --live, and a ' +
+        'fan_out spawn, send, recover or delete keep their records through a restart, so one ' +
+        'missing here ended over an hour ago or ran on a daemon older than that record. For a ' +
+        'move, run migrate_reconcile, which lists chats left half-moved, and ' +
+        'migrate_reconcile --finish <id> settles each; for a fan_out, fan_out_status reads ' +
+        'its group.'
       : 'no such operation - this daemon has been up over an hour, so the id was either never ' +
         'minted here or its record has passed the one-hour retention.',
   }
@@ -652,7 +676,7 @@ function settleOperation(
   op.result = result
   op.finishedAt = Date.now()
   op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
-  // A move's result goes into its record before its runner's files go: the record is what answers.
+  // A runner run's result goes into its record before its files go: the record is what answers.
   if (entry.runner) {
     saveRun(entry)
     removeRunnerFiles(entry.runner.files)
@@ -708,12 +732,13 @@ export function startOrchestratorOperation(
   const op = newOperation(input, key, check)
   const entry = newOperationEntry(op)
   const deps = opts.deps ?? {}
-  // A run that moves chats runs under a runner and outlives this daemon (movesChats); a spawn
-  // handed in is the caller's own.
-  const move = check.ok && !deps.spawn && movesChats(check.invocation.script, check.invocation.args)
+  // A run that acts on chats at length runs under a runner and outlives this daemon
+  // (outlivesDaemon); a spawn handed in is the caller's own.
+  const outlives =
+    check.ok && !deps.spawn && outlivesDaemon(check.invocation.script, check.invocation.args)
   entry.promise = runOrchestrator(input, {
     ...deps,
-    ...(move ? { spawn: runnerSpawn(entry) } : {}),
+    ...(outlives ? { spawn: runnerSpawn(entry) } : {}),
     onProcess: operationProcessHandler(op, entry, deps),
   }).then((result) => settleOperation(op, entry, result))
   // `validateInvocation` failing means the run resolves immediately with a refusal, so the default
@@ -743,15 +768,16 @@ export function listOrchestratorOperations(): OrchestratorOperation[] {
     .sort((a, b) => b.startedAt - a.startedAt)
 }
 
-/** The spawn a chat-moving run goes through (movesChats): its python under a runner, outside this
- *  daemon, with its record saved before the runner starts, so a daemon that never saw it start can
- *  still take it on. */
+/** The spawn a run that outlives the daemon goes through (outlivesDaemon): its python under a
+ *  runner, outside this daemon, with its record saved before the runner starts, so a daemon that
+ *  never saw it start can still take it on. */
 function runnerSpawn(entry: OperationEntry): NonNullable<SpawnDeps['spawn']> {
   return (command, cwd, timeoutMs, hooks) => {
     mkdirSync(RUNS_DIR, { recursive: true })
     const files = runnerFiles(RUNS_DIR, entry.op.id)
     const startedAt = Date.now()
     entry.runner = { files, command, cwd, startedAt, timeoutMs }
+    if (hooks?.preempted) entry.runner.preempted = hooks.preempted
     saveRun(entry)
     // AGENTHYDRA_OPERATION tells hydralib this run outlives a restart, so its daemon calls wait one
     // out (toolbox-calls.ts).
@@ -764,14 +790,15 @@ function runnerSpawn(entry: OperationEntry): NonNullable<SpawnDeps['spawn']> {
 }
 
 /**
- * Take on the moves an earlier daemon left (movesChats): every record in RUNS_DIR is an operation
- * here again, under its own id. A running one is watched on from its runner's files and holds its
- * route lock as it did there, so a second move is still refused busy; a finished one answers its
- * result until OPERATION_TTL_MS after it ended.
+ * Take on the runner runs an earlier daemon left (outlivesDaemon): every record in RUNS_DIR is an
+ * operation here again, under its own id. A running one is watched on from its runner's files and
+ * holds its route lock as it did there, so a second move or spawn is still refused busy, and a
+ * cancel asked of it there is sent again here; a finished one answers its result until
+ * OPERATION_TTL_MS after it ended.
  *
  * Awaited by index.ts once the port is free and before it serves it: the predecessor held that port,
- * so it has exited and no move it started is missed, and no request reaches this daemon before its
- * moves are back. Returns how many were taken on.
+ * so it has exited and no run it started is missed, and no request reaches this daemon before its
+ * runs are back. Returns how many were taken on.
  */
 export async function adoptOrchestratorRuns(now = Date.now()): Promise<number> {
   let names: string[]
@@ -795,6 +822,7 @@ export async function adoptOrchestratorRuns(now = Date.now()): Promise<number> {
     }
     const entry = newOperationEntry(saved.op)
     entry.runner = saved.run
+    entry.cancelRequested = saved.cancelRequested === true
     if (saved.op.finishedAt === null) watchAdopted(entry, saved.run, now)
     else operations.set(saved.op.id, entry)
     adopted++
@@ -809,9 +837,11 @@ export async function adoptOrchestratorRuns(now = Date.now()): Promise<number> {
   return adopted
 }
 
-/** A move that was running when its daemon went: watched on from its files. A runner whose hand-off
+/** A run that was going when its daemon went: watched on from its files. A runner whose hand-off
  *  died with that daemon never claims its spec; the watch then answers "never started; nothing ran"
- *  (index.ts relaunchDaemon waits for hand-offs under way before it hands over, so that is rare). */
+ *  (index.ts relaunchDaemon waits for hand-offs under way before it hands over, so that is rare).
+ *  A cancel the last daemon recorded is sent again: it may have come before the runner wrote its
+ *  pid, when there was nothing yet to kill. */
 function watchAdopted(entry: OperationEntry, run: RunnerRun, now: number): void {
   const { op } = entry
   op.ran = true
@@ -825,8 +855,11 @@ function watchAdopted(entry: OperationEntry, run: RunnerRun, now: number): void 
   entry.promise = watchRunner(run.files, run, (kill) => {
     entry.kill = kill
     lock.kill = kill
+    if (entry.cancelRequested) kill()
   })
-    .then((r) => settleOperation(op, entry, runOutcome({ ...ran, started: run.startedAt }, r)))
+    .then((r) =>
+      settleOperation(op, entry, runOutcome({ ...ran, started: run.startedAt }, r, run.preempted)),
+    )
     .finally(() => {
       if (inFlight.get(lockKey) === lock) inFlight.delete(lockKey)
     })
@@ -848,6 +881,8 @@ export function cancelOrchestratorOperation(
   if (!e) return { ok: false, error: 'no such operation' }
   if (e.op.status !== 'running') return { ok: true, status: e.op.status }
   e.cancelRequested = true
+  // Into the record before the kill, so a daemon that exits in between still hands the cancel on.
+  saveRun(e)
   e.kill?.()
   return { ok: true, status: 'running' }
 }
@@ -1038,6 +1073,8 @@ function tail(raw: string, alreadyDropped = 0): string {
  *  the moment the child exists, so a caller (the durable-operation registry) can cancel it. */
 export interface SpawnHooks {
   onProcess?: (kill: () => void) => void
+  /** The operation this run took the route from, for a spawn that keeps its own record. */
+  preempted?: string
 }
 
 export interface SpawnDeps {
@@ -1493,6 +1530,7 @@ export async function runOrchestrator(
         if (entry) entry.kill = kill
         deps.onProcess?.(kill)
       },
+      ...(preempted ? { preempted } : {}),
     })
     return runOutcome({ script, args, command, cwd: dir, started }, r, preempted)
   } catch (e) {
