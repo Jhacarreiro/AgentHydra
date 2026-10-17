@@ -79,12 +79,12 @@ function fakeCodex(o: { resumeError?: string; up?: Promise<void> } = {}) {
   return { open, turnStarts, thread, calls, held, opening: () => opening }
 }
 
-async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats; up?: Promise<void> } = {}) {
+async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats; up?: Promise<void>; claudePct?: number } = {}) {
   const home = temp('desk-pin-home-')
   const cwd = temp('desk-pin-cwd-')
   mkdirSync(cwd, { recursive: true })
   process.env.HYDRA_DESK_HOME = home
-  const account: AccountInfo = { id: 'acct-1', label: '#1 user (Pro)', configDir: temp('desk-pin-acct-'), number: 1, email: null, plan: 'Pro', signedIn: true, fiveHourPct: 10, weeklyPct: 10, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false }
+  const account: AccountInfo = { id: 'acct-1', label: '#1 user (Pro)', configDir: temp('desk-pin-acct-'), number: 1, email: null, plan: 'Pro', signedIn: true, fiveHourPct: o.claudePct ?? 10, weeklyPct: 10, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false }
   const codex: CodexDirectory = {
     instances: async () => [ALPHA, BETA],
     usage: async (id) => ({ snapshot: { session: { pct: id === ALPHA.id ? 10 : 40 }, weekAll: { pct: 5 } } }),
@@ -230,6 +230,16 @@ test('a Codex chat run outside Desk continues here in its own thread, on the acc
   expect(fake.held()).toEqual([])
   expect(fake.calls('thread/unsubscribe')).toEqual([{ home: BETA.codexHome, threadId }])
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Two files.', 'Carrying on.'])
+})
+
+test('a Codex chat run outside Desk continues here while no Claude account has room: its Claude account is only where a pin back would go', async () => {
+  const threadId = '0f0f0f0f-1111-4222-8333-666666666666'
+  const cwd = temp('desk-pin-full-')
+  const outside: ExternalSession = { id: threadId, title: 'Full', cwd, source: 'codex', instance: '#8 beta', status: 'idle', activity: null, lastActivityAt: 2, model: null, accountId: null, codexAccountId: BETA.id, canResume: true, fromPc: null, pinned: false, archived: false, unread: false, group: null }
+  const { m } = await setup({ external: [outside], items: { [threadId]: [] }, claudePct: 99 })
+
+  const chat = await m.importSession({ sessionId: threadId })
+  expect(chat).toMatchObject({ service: 'codex', cwd, serviceThreads: { codex: { accountId: BETA.id, threadId } } })
 })
 
 test("a Codex chat its Codex app holds open waits, in a sentence, and is never started over in a new thread", async () => {

@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
+
 ## [2.0.5] - 2026-10-16
 
 **TL;DR**
