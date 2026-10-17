@@ -439,6 +439,13 @@ export function repeatOf(t: RunTask, group: string, now: number): CliMayteWorker
   return null
 }
 
+/** The one group every repeated worker shares, or null when nothing repeats or the repeats span
+ *  several groups (no single group can hold them). An unnamed retry answers in that group. */
+export function repeatedGroup(repeats: Array<CliMayteWorker | null>): string | null {
+  const groups = new Set(repeats.flatMap((w) => (w ? [w.group] : [])))
+  return groups.size === 1 ? [...groups][0]! : null
+}
+
 /** An account the task may use must exist: an unknown one used to make a task that waited forever
  *  for an account that will never sign in (fuzz, 2026-10-02). A signed-out instance is known, and
  *  its task waits for the sign-in as before. */
