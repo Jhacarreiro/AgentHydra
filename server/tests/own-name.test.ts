@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -88,7 +89,11 @@ test.skipIf(process.platform !== 'win32')(
     try {
       const reader = child.stdout.getReader()
       const first = new TextDecoder().decode((await reader.read()).value)
-      expect(first.trim().toLowerCase()).toBe(target.toLowerCase())
+      // Windows may expand a short TEMP path (RUNNER~1) in process.execPath.
+      // Compare the actual files while still requiring the copied daemon executable.
+      expect(realpathSync.native(first.trim()).toLowerCase()).toBe(
+        realpathSync.native(target).toLowerCase(),
+      )
 
       // Stale on purpose: the stamp no longer matches, so the next refresh must replace a running exe.
       const stamp = readStamp(target)
