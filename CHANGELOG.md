@@ -52,6 +52,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The tray icon says which version is running.** Hover it to see AgentHydra's version and whether it is a release or a source checkout.
 - **Claude Code cloud sessions and Project threads can be listed.** With `AGENTHYDRA_CLOUD_SESSIONS=1`, AgentHydra lists your claude.ai Claude Code cloud sessions and Project threads beside local ones, as working, needs you or idle, read with the logins it already has. It is off unless you set that variable. Remote Control sessions are not taken from claude.ai; one running on this PC still shows from its local transcript. A login whose sign-in has expired is skipped until Claude Code refreshes it.
 - **A web page can no longer reach HSwarm through AgentHydra.** HSwarm's status, accounts and console routes were set up before AgentHydra's check on where a request comes from, so a page open in your browser could use HSwarm's console through it. They now sit behind that check like every other route, and a test fails if any route is set up before it again.
+- **A relaunched CliMayte chat no longer shows its prompt as raw JSON.** A chat that went on after a move to another account, a restart or an API error was handed its last prompt wrapped in JSON, which showed up as a message you never sent. It now gets the plain text, and chats already saved no longer show the JSON.
 
 ## [2.0.5] - 2026-10-16
 

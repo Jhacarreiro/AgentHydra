@@ -612,7 +612,8 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
   that the earlier session never got to stay as yours. The prompt a moved session goes on with ("This
   session was moved to another account ...") is not shown either; one that went on after a pause, a
   restart or an overloaded API is one muted line ("Continued after AgentHydra restarted."), and a result
-  sent back by a failed verdict is CliMayte's note, never your message. Chats already saved read the same way.
+  sent back by a failed verdict is CliMayte's note, never your message. A chat relaunched after a move or a
+  restart never shows its own prompt as raw JSON (`{"type":"user",...}`). Chats already saved read the same way.
 - **A chat moving off a signed-out or full account says so, and sends once.** The sign-in or limit line
   is a warning that says the chat is moving to another account and your message goes again by itself,
   instead of a red dead end. The session copy no longer stops the server while it runs (a 555 MB session

@@ -16,7 +16,8 @@ import {
   setCliMayteClaudeCommand,
   startCliMayte,
 } from '../src/climayte'
-import { setSpendKit, workers } from '../src/climayte-core'
+import { PROMPTS, setSpendKit, workers } from '../src/climayte-core'
+import { promptTextOf } from '../src/climayte-launch'
 import { harnessKit } from './mocks/climayte-kit'
 import { ATTEMPT_MS } from './mocks/climayte-timing'
 
@@ -83,4 +84,94 @@ describe('a new attempt does not show the summary line of the one before it', ()
     },
     2 * ATTEMPT_MS + 10_000,
   )
+})
+
+const envelope = (text: string) =>
+  JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })
+const lineText = (raw: string): string => JSON.parse(raw.trim()).message.content[0].text
+
+describe('a relaunch hands the previous message on as plain text', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-prompt-'))
+  const cwd = join(root, 'work')
+  const slowDir = join(root, 'acct-slow')
+  for (const d of [cwd, slowDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(slowDir, 'fake-slow'), '')
+  let group = ''
+
+  afterAll(async () => {
+    if (group) climayteCancel({ group })
+    await killsLanded()
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test(
+    'an attempt stopped before its session started is relaunched with its message, not an envelope',
+    async () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      try {
+        setCliMayteClaudeCommand([
+          process.execPath,
+          join(import.meta.dir, 'mocks', 'fake-claude.ts'),
+        ])
+        setCliMayteAccountsProvider(() => [
+          { id: 'slow-1', num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
+        ])
+        startCliMayte()
+        const run = climayteRun({
+          tasks: [
+            {
+              prompt: 'a slow task',
+              cwd,
+              title: 'prompt envelope',
+              model: 'sonnet',
+              effort: 'medium',
+              ownerWords: 'a relaunch carries the message as plain text',
+            },
+          ],
+        })
+        group = run.group
+        const id = run.workers[0]?.id as string
+        const first = join(PROMPTS, `${id}-0.txt`)
+        const second = join(PROMPTS, `${id}-1.txt`)
+        const deadline = Date.now() + ATTEMPT_MS
+        while (!existsSync(first) && Date.now() < deadline) await Bun.sleep(50)
+
+        expect(climayteSend(id, 'STEER NOW', { urgent: true })).toMatchObject({
+          ok: true,
+          urgent: true,
+        })
+        const next = Date.now() + ATTEMPT_MS
+        while (!existsSync(second) && Date.now() < next) await climayteWait({ id }, 50)
+
+        expect(existsSync(second)).toBe(true)
+        const message = lineText(readFileSync(first, 'utf8'))
+        const relaunch = lineText(readFileSync(second, 'utf8'))
+        expect(relaunch.startsWith(message)).toBe(true)
+        expect(relaunch).not.toContain('"type":"user"')
+      } finally {
+        if (platform) Object.defineProperty(process, 'platform', platform)
+      }
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
+})
+
+describe('promptTextOf reads a prompt file as its message', () => {
+  test('a double-wrapped stream-json user line decodes to the message', () => {
+    const plain = 'Check the ledger totals for March.'
+    expect(promptTextOf(`${envelope(envelope(plain))}\n`)).toBe(plain)
+  })
+
+  test('a plain-text prompt file is unchanged', () => {
+    const plain = 'Check the ledger totals for March.'
+    expect(promptTextOf(`${plain}\n`)).toBe(plain)
+  })
+
+  test('JSON among other words is not an envelope', () => {
+    const text = `Fix the parser for ${envelope('x')} inputs.`
+    expect(promptTextOf(text)).toBe(text)
+  })
 })

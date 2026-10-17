@@ -306,7 +306,7 @@ function deliveryPlan(
 
 /** The message the attempt before this one was started with (its prompt file), else the task. */
 const prevPromptOf = (w: CliMayteWorker, n: number): string =>
-  tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000) || w.prompt
+  promptTextOf(tailText(join(PROMPTS, `${w.id}-${n - 1}.txt`), 1_000_000)) || w.prompt
 
 /** The transcripts of the task's sessions so far, newest first: the one that wrote the handoff,
  *  then the ones before it in the chain (18 of 36 continuations on record were second or later in
@@ -883,6 +883,32 @@ type DeliverFiles = NonNullable<RunnerSpec['deliver']>
 /** The stream-json user line the native runner writes to the CLI's stdin for the prompt. */
 function userLine(text: string) {
   return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }
+}
+
+/** The message a prompt file holds: a stream-json user line unwrapped, again and again, since files
+ *  written from an earlier envelope nest one level more each relaunch. */
+export function promptTextOf(raw: string): string {
+  let text = raw.trim()
+  for (let inner = envelopeText(text); inner !== null; inner = envelopeText(text))
+    text = inner.trim()
+  return text
+}
+
+function envelopeText(text: string): string | null {
+  if (!text.startsWith('{')) return null
+  let line: { type?: unknown; message?: { content?: unknown } }
+  try {
+    line = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (line?.type !== 'user') return null
+  const content = line.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  return content
+    .map((b) => (b?.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+    .join('')
 }
 
 export function cliArgv(
