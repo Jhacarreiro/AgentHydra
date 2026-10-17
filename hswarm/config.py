@@ -306,8 +306,9 @@ _ROUTE_VIA_FREE_PROFILES_DEFAULT = ("routine", "general", "research", "decision"
 ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
 # `route_via_free_tools`: the tools a TOOL task may be offered and still go to a Free account, which runs them through a
 # text tool protocol (free_client.py); a task offered any other tool takes its API route. `route_via_free_tool_profiles`:
-# the profiles such a tool task may have (critical and code included: see their asks below). Never edit or shell tools: a Free leg that fails falls back to the API, and an
-# edit it had already made would be left behind it. The defaults are what held up in a blind A/B on 30 real tasks
+# the profiles such a tool task may have (critical and code included: see their asks below). Edit and shell tools only
+# by route_via_free_edit_profiles / _shell_profiles below, whose legs work in a scratch copy of the folder, since a Free
+# leg that fails falls back and an edit made in the real folder would be left behind it. The defaults are what held up in a blind A/B on 30 real tasks
 # against the API answers they had got (2026-10-13, Opus/GPT-6 judges with the task's own tools, mean score of 10):
 # general read 6.2 Free vs 5.8 API, decision read 6.1 vs 8.4, research web 3.8 vs 6.2 with only 4 of 10 served.
 _ROUTE_VIA_FREE_TOOLS_DEFAULT = ("read_file", "list_dir", "glob", "grep", "outline", "unfold", "fetch_output")
@@ -322,16 +323,26 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # edit tools (FREE_EDIT_TOOLS) / the shell (FREE_SHELL_TOOLS) on Free. Such a leg works in a scratch copy of its folder
 # (scratch.py): a git worktree at HEAD with the checkout's dirty and small ignored files on top, or a copy of a folder that
 # is no checkout. Its changes land in the real folder only when its answer is accepted and every file it touched is
-# still what the copy started from; a failed or refused leg drops the copy, so the task's next route starts clean.
+# still what the copy started from; a failed or refused leg drops the copy, so the task's next route starts clean. An all
+# task is offered both, so its profile must be in both lists.
+# The defaults are what a blind A/B on 19 real edit and all tasks held up (2026-10-17, free_ab run edit-20261017): Sonnet
+# 5.5 on a Claude Free account, in a scratch copy, against the API answers the tasks had got, judged by Opus 5.5 with read
+# tools and both answers' diffs (mean score of 10). Free served 19 of 19. Code edit work: 5 to 4, mean 7.3 vs 7.1, 3
+# judged errors to the API's 5 (9 tasks; the API's glm-5-3-flash took a median 13 s, Free 85 s). Decision all work
+# (verdicts on branches in a folder of five checkouts, with builds and tests in the shell): 9 to 1, mean 7.9 vs 5.1, 5
+# errors to 28 (10 tasks). Not measured, so not on: the shell for code (code all tasks), critical edit and all work, and
+# every other profile; decision's edit tools were measured inside its all tasks, not alone.
 FREE_EDIT_TOOLS = ("write_file", "edit_file")
 FREE_SHELL_TOOLS = ("bash",)
-_ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT: tuple[str, ...] = ()
+_ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT: tuple[str, ...] = ("code", "decision")
 ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
-_ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT: tuple[str, ...] = ()
+_ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT: tuple[str, ...] = ("decision",)
 ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
 # `route_via_free_edit_asks`: per profile, the models an edit or shell task's Free thread asks for, spelled as
-# route_via_free_tool_asks spells them; a profile not listed takes its route_via_free_tool_asks.
-_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {}
+# route_via_free_tool_asks spells them; a profile not listed takes its route_via_free_tool_asks. Code and decision edit
+# work asks for Sonnet on a Claude account, the model the A/B above measured; code's read asks lead with Luna Thinking,
+# never measured editing. With no Claude account free the task goes on to CliMayte, then its API route.
+_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"code": ("sonnet@claude",), "decision": ("sonnet@claude",)}
 ROUTE_VIA_FREE_EDIT_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT)
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
@@ -683,7 +694,7 @@ def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
     global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES, ROUTE_VIA_FREE_ASKS
-    global ROUTE_VIA_FREE_WAIT_S
+    global ROUTE_VIA_FREE_WAIT_S, ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES, ROUTE_VIA_FREE_EDIT_ASKS
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -698,6 +709,9 @@ def _reset() -> None:
     ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
     ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
     ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S = dict(_ROUTE_VIA_FREE_ASKS_DEFAULT), 90.0
+    ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_EDIT_ASKS = dict(_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT)
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

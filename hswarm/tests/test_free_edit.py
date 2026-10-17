@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hswarm import config, free_route, scratch  # noqa: E402
 from hswarm.spec import Task  # noqa: E402
 from hswarm.tools import Sandbox  # noqa: E402
-from test_free_route import fake  # noqa: E402,F401 - the fake AgentHydra fixture
+from test_free_route import ACCOUNTS, fake  # noqa: E402,F401 - the fake AgentHydra fixture
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="the scratch copy of a checkout is a git worktree")
 
@@ -125,6 +125,18 @@ def test_a_free_edit_leg_whose_file_changed_meanwhile_lands_nothing(fake, repo, 
     res, note = _consult(_edit_task(repo))
     assert res is None and note["free_kind"] == "conflict" and "notes.txt" in note["error"]
     assert (repo / "notes.txt").read_bytes() == b"someone else's edit\n" and not (repo / "added.txt").exists()
+    _no_scratch_left(repo, scratch.ROOT)
+
+
+def test_an_edit_task_asks_for_its_edit_asks_not_its_profiles_read_asks(fake, repo, monkeypatch):
+    # Code read work asks Luna Thinking on ChatGPT, never measured editing; its edit work asks what the edit A/B measured.
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_ASKS", {"general": ("luna-thinking",)})
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_EDIT_ASKS", {"general": ("sonnet@claude",)})
+    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
+    f = fake(accounts=[{**ACCOUNTS[0], "five_hour_pct": 10}, chatgpt], reply=[EDIT, "Done."])
+    res, note = _consult(_edit_task(repo))
+    assert note is None and res.status == "ok"
+    assert {k: f.chats[0]["tasks"][0].get(k) for k in ("model", "provider")} == {"model": "sonnet", "provider": "claude"}
     _no_scratch_left(repo, scratch.ROOT)
 
 

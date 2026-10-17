@@ -281,6 +281,18 @@ mini) on a ChatGPT account: over 29 real critical read tasks it won 13, lost 15 
 19 judged errors to the API's 42, in half the time; about a third of its threads fail at once and take their API route.
 Code read work (reviews and investigations offered only read tools) asks for it too: 7 to 5 over 12 real tasks, mean 5.9
 vs 5.0, 16 judged errors to the API's 53.
+An edit or all task goes there too when its profile is in `route_via_free_edit_profiles` (default code, decision) for the
+edit tools and in `route_via_free_shell_profiles` (default decision) for the shell; its thread asks for
+`route_via_free_edit_asks` (default Sonnet on a Claude account for both). Its leg works in a scratch copy of the task's
+folder (`scratch.py`): a git worktree at HEAD carrying the checkout's dirty, untracked and small ignored files byte for
+byte, or a copy of a folder that is no checkout (a big one keeps its small top-level folders and up to 6 checkouts, and
+the leg reads the rest at their real paths). Its shell may not name the real folder. An accepted answer's changes land in
+the real folder all at once, and only when every file it touched is still what the copy started from; a failed leg, or
+one whose files changed meanwhile, drops the copy and the task takes its next route with the folder as it was. A checkout
+tracking more than 20,000 files or 300 MiB, a task with shell grants, a capability or a container runtime, keeps its
+other routes. In a blind A/B on 19 real tasks (2026-10-17) Sonnet there beat the API answers 5 to 4 on code edit work
+(mean 7.3 vs 7.1, 3 judged errors to 5) and 9 to 1 on decision all work (7.9 vs 5.1, 5 to 28), more slowly: a median
+85 s against the API's 13 s on code edits.
 A critical or code task with no tools still takes its API route (`route_via_free_profiles` gates tool-free work and leaves
 critical and code out). In a blind A/B on real tasks (2026-10-13) Sonnet there beat the
 API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, GPT-6, Luna Thinking) lost it: they
