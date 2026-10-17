@@ -47,6 +47,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Shared chats no longer fill the sync store.** Each PC keeps its own copy, so the store now lets go of a chat's transcript as soon as your other PCs have it, instead of keeping every chat whole until the store is full. A PC that joins later or lost its copy asks for the chat again and gets it whole, and when room is short your most recently active chats go first.
 - **An unused database index stays removed after a restart.** An earlier storage cleanup removed an index nothing reads, but every later start created it again, and every write kept it up to date; it is now removed at every start.
 - **A CliMayte dispatch retried with its request ids answers with its workers' own group.** A dispatch that names no group and carries an earlier dispatch's request ids now answers in the group holding those workers, and a task it adds joins them, so status, cancel and wait reach every one. Dispatches that name their group are unchanged.
+- **The tray icon says which version is running.** Hover it to see AgentHydra's version and whether it is a release or a source checkout.
 
 ## [2.0.5] - 2026-10-16
 
