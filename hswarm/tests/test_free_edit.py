@@ -184,3 +184,21 @@ def test_a_folder_that_is_no_checkout_is_copied_with_its_checkouts_as_worktrees(
     finally:
         scr.drop()
     _no_scratch_left(repo, scratch.ROOT)
+
+
+def test_a_checkout_tracking_more_than_a_copy_takes_is_never_copied(tmp_path, repo, monkeypatch):
+    monkeypatch.setattr(scratch, "TRACKED_TOTAL_FILES", 2)  # the checkout tracks 3
+    with pytest.raises(scratch.ScratchRefused):
+        scratch.open_scratch(str(repo))  # the task's own checkout: no copy, the task takes its other routes
+    _no_scratch_left(repo, scratch.ROOT)
+    top = tmp_path / "project"
+    top.mkdir()
+    repo = Path(shutil.move(str(repo), str(top / "repo")))
+    (top / "plan.md").write_bytes(b"the plan\n")
+    scr = scratch.open_scratch(str(top))
+    try:
+        assert (scr.base / "plan.md").exists() and not (scr.base / "repo").exists()
+        assert scr.to_scratch(f"read {repo / 'notes.txt'}") == f"read {repo / 'notes.txt'}"  # read where it is
+    finally:
+        scr.drop()
+    _no_scratch_left(repo, scratch.ROOT)

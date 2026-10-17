@@ -266,9 +266,10 @@ before it had turned away about 2,800 eligible tasks in a day. `free_status` can
 a task subtracts from the idle count every still-running task this process sent from 2 s before it asked for its
 snapshot onward, however long that read took: counted from the answer instead, a slow read (up to 5 s) let two tasks
 take one idle account (2026-10-09). `selection.route` shows the route a task took (`via: free`), the
-ledger line says provider `free`. Order: a read or web tool task asks the free accounts first, then CliMayte, then the paid API (CliMayte cannot take web
-tools); an edit or all tool task, and a tool-free one, asks CliMayte first, then the free accounts, then the paid API
-(docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
+ledger line says provider `free`. Order: a tool task the free accounts may take (a read or web one, or an edit or all one
+of a profile in `route_via_free_edit_profiles` / `route_via_free_shell_profiles`, below) asks them first, then CliMayte,
+then the paid API (CliMayte cannot take web tools); a tool-free task asks CliMayte first, then the free accounts, then
+the paid API, and any other edit or all task goes to CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
 tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in
