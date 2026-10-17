@@ -1689,8 +1689,7 @@ export class ChatManager {
     const rawCwd = req.cwd ?? outside?.cwd
     if (!rawCwd) throw new ChatError(400, `cwd is required: AgentHydra does not know the folder of session ${req.sessionId}`)
     const cwd = checkCwd(rawCwd)
-    // A Codex chat's Claude account is only where it would go if pinned back to Claude: the default, never refused.
-    const { account, auto, note } = codex ? { ...(await this.resolveAccount(this.settingsOf().defaultAccountId)), note: null } : await this.importAccount(req.configDir)
+    const { account, auto, note } = codex ? await this.codexClaudeAccount() : await this.importAccount(req.configDir)
     const loaded = await this.externalItemsOf(req.sessionId)
     const loadError = loaded.error
     // Another import of the same session (a second window) may have landed during the awaits above: two
@@ -1777,6 +1776,15 @@ export class ChatManager {
     const found = (await this.codexDir.instances().catch(() => [])).find((i) => i.id === outside.codexAccountId)
     if (!found?.loggedIn) throw new ChatError(409, `${where} is signed out, so this chat cannot continue here.`)
     return { accountId: found.id, label: codexAccount(found).label, threadId: req.sessionId }
+  }
+
+  /** A Codex chat's Claude account is only where it would go if pinned back to Claude: never refused, so with no
+   *  Claude account to place it on, CliMayte places it. */
+  private async codexClaudeAccount(): Promise<ResolvedAccount> {
+    return this.resolveAccount(this.settingsOf().defaultAccountId).catch((err: unknown) => {
+      if (err instanceof ChatError && err.status === 409) return { account: { ...CLIMAYTE_ACCOUNT }, auto: true, note: null }
+      throw err
+    })
   }
 
   /** The account an imported session continues on: the one asked for, else one with room. */
