@@ -58,7 +58,10 @@ function running(id: string, port: number | null): CliMayteWorker {
         account: { id: `acct-${id}`, num: 1, name: 'test', configDir: root },
         log: join(root, `${id}.jsonl`),
         errLog: join(root, `${id}.err.log`),
-        pid: 1,
+        // A live CLI pid of its own: attemptExited reads a dead one as the attempt having ended, and
+        // pid 1 belongs to root (kill(1, 0) throws) on a CI runner, which settled these attempts early.
+        pid: process.pid,
+        daemonPid: process.pid,
         startedAt: Date.now(),
         endedAt: null,
         outcome: 'running',
