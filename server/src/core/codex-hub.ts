@@ -10,11 +10,13 @@
 // `sessions/` holds the rollouts at the same relative paths as on the PC, `session_index.jsonl`
 // the titles, and `manifest.json` the list as that PC's app-server last answered it. Because it is
 // shaped like a Codex home, codexInstanceStores() serves it to the transcript index unchanged, so
-// listing, reading, search and analytics treat a pushed chat like a local one. Read-only: nothing
-// here can start a turn on, rename or archive a chat on the PC it came from.
+// listing, reading and search treat a pushed chat like a local one. The analytics kit leaves it out
+// (kit/ingest-foreign.ts): it is the other PC's usage, which kit sync would count twice. Read-only:
+// nothing here can start a turn on, rename or archive a chat on the PC it came from.
 //
 // Off unless AGENTHYDRA_CODEX_HUB_TOKEN is set; then every push must carry it as a bearer token.
-// Any number of PCs may push with the same token; each is kept apart by the name it sends.
+// Any number of PCs may push with the same token; each is kept apart by the name it sends, and two
+// that send one name by the install id each sends with it (hubNameRefused).
 
 import { timingSafeEqual } from 'node:crypto'
 import {
@@ -30,6 +32,7 @@ import {
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { appEnv, CONFIG_DIR } from '../config'
+import { relayPcInstall } from './codex-hub-relay'
 
 /** One chat as the PC's app-server listed it (the subset of its `Thread` the hub keeps). */
 export interface HubThread {
@@ -54,12 +57,18 @@ export interface HubFile {
 
 export interface HubPush {
   pc: string
+  /** How long its pusher waits between pushes; its name is held for three of them (hubNameHoldMs). */
+  intervalMs?: number
   threads: HubThread[]
   files?: HubFile[]
 }
 
 export interface HubManifest {
   pc: string
+  /** The install id of the pusher that sent it (HUB_INSTALL_HEADER); absent when it sent none. */
+  install?: string
+  /** The interval its pusher sent, up to HUB_PUSH_INTERVAL_MAX_MS; absent when it sent none. */
+  intervalMs?: number
   pushedAt: string
   threads: HubThread[]
   /** Relative rollout path -> the `updatedAt` of the thread row it was copied for. */
@@ -80,6 +89,19 @@ export const ROLLOUT_UNPACKED_MAX = 256 * 1024 * 1024
 /** The year 10000 in Unix seconds: a chat's time is from 1970 up to here. */
 const TIME_END = 253_402_300_800
 
+/**
+ * The header a pusher names its install with, on every push and on its relay socket (codex-hub-push.ts). A PC is
+ * kept by its name, and two can send one: WSL beside the Windows PC it runs on, two Linux boxes called `ubuntu`, the
+ * daemon's pusher beside a standalone one. They replaced each other's relay socket every few seconds, which ended
+ * every Desk session on it, and each push deleted the other's rollouts. The id tells them apart.
+ */
+export const HUB_INSTALL_HEADER = 'x-codex-hub-install'
+/** The least an install keeps its name from another one after its last push: five pushes at the default interval. */
+const HUB_NAME_HOLD_MS = 10 * 60_000
+/** The longest a pusher waits between pushes (codex-hub-push.ts); three of them, a day, is the longest hold. */
+export const HUB_PUSH_INTERVAL_MAX_MS = 8 * 60 * 60_000
+const INSTALL_ID = /^[A-Za-z0-9_-]{8,64}$/
+
 export function codexHubToken(): string | null {
   return appEnv('CODEX_HUB_TOKEN')?.trim() || null
 }
@@ -90,6 +112,64 @@ export function hubTokenMatches(header: string | undefined, token: string): bool
   const a = Buffer.from(presented)
   const b = Buffer.from(token)
   return a.length === b.length && timingSafeEqual(a, b)
+}
+
+/** An install id as a pusher sent it, or null for none, or for what is not one (taken as none). */
+export function hubInstallId(raw: string | null | undefined): string | null {
+  const id = raw?.trim()
+  return id && INSTALL_ID.test(id) ? id : null
+}
+
+/** The request headers that name install `id` to the hub; none for no id. */
+export function hubInstallHeaders(id: string | null | undefined): Record<string, string> {
+  return id ? { [HUB_INSTALL_HEADER]: id } : {}
+}
+
+/**
+ * What a pusher refused its name is told, and logs. A name of its own is for another machine: two pushers on one
+ * PC (the daemon's and a standalone one) push the same chats, and another name for one lists each twice on the hub.
+ */
+export function hubNameTaken(pc: string): string {
+  return (
+    `another PC already pushes as ${pc}; set AGENTHYDRA_CODEX_HUB_PC to give this one a name of its own; ` +
+    'if both pushers run on this PC, stop one of them instead'
+  )
+}
+
+/** A pusher's interval as it sent it, up to HUB_PUSH_INTERVAL_MAX_MS, or null for none or for what is not one. */
+function cleanInterval(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+    ? Math.min(raw, HUB_PUSH_INTERVAL_MAX_MS)
+    : null
+}
+
+/**
+ * How long a push holds its PC's name: three of its pusher's intervals, so one that pushes every half hour with its
+ * relay off still holds it at its next push, and HUB_NAME_HOLD_MS at least, the hold for one that sent none.
+ */
+function hubNameHoldMs(intervalMs: unknown): number {
+  return Math.max(HUB_NAME_HOLD_MS, 3 * (cleanInterval(intervalMs) ?? 0))
+}
+
+/**
+ * Whether install `claim` is refused PC `key`'s name. Another install holds it while its relay socket is open, and
+ * for hubNameHoldMs after its last push; once it has gone (the PC set up again, with a new id) the name passes to
+ * the next. A pusher that sends no id, as the first ones did, is never refused and holds its name against no one.
+ */
+export function hubNameRefused(
+  key: string,
+  claim: string | null,
+  root: string = CODEX_HUB_DIR,
+): boolean {
+  if (!claim) return false
+  const live = relayPcInstall(key)
+  if (live && live !== claim) return true
+  const last = readCodexHubManifest(join(root, key))
+  return (
+    !!last?.install &&
+    last.install !== claim &&
+    Date.now() - Date.parse(last.pushedAt) < hubNameHoldMs(last.intervalMs)
+  )
 }
 
 /** The folder name for a PC: its name lowercased to letters, digits and dashes. */
@@ -159,23 +239,26 @@ function cleanThread(raw: unknown): HubThread | null {
 
 export type HubPushResult =
   | { ok: true; pc: string; stored: number; want: string[] }
-  | { ok: false; status: 400 | 413; error: string }
+  | { ok: false; status: 400 | 409 | 413; error: string }
 
 /**
  * Takes one PC's push: its whole chat list (which replaces the last one) and any rollouts it sent.
  * Answers the rollout paths the hub still lacks at the version listed, so the PC sends those next;
  * a rollout no listed chat names any more (archived or deleted there) is removed here.
  * A refused push writes nothing: every time is checked and every rollout unpacked first.
+ * `install` is the pusher's install id: a name another install holds is refused (hubNameRefused).
  */
 export function acceptCodexHubPush(
   body: unknown,
   root: string = CODEX_HUB_DIR,
   maxUnpacked: number = ROLLOUT_UNPACKED_MAX,
+  install: string | null = null,
 ): HubPushResult {
   const push = body as Partial<HubPush> | null
   const pc = typeof push?.pc === 'string' ? push.pc.trim() : ''
   const key = pc ? hubPcKey(pc) : null
   if (!key) return { ok: false, status: 400, error: 'pc is required' }
+  if (hubNameRefused(key, install, root)) return { ok: false, status: 409, error: hubNameTaken(pc) }
   if (!Array.isArray(push?.threads))
     return { ok: false, status: 400, error: 'threads must be a list' }
   const threads = push.threads.map(cleanThread).filter((t): t is HubThread => t !== null)
@@ -258,7 +341,15 @@ export function acceptCodexHubPush(
     )
     .map(([rel]) => rel)
 
-  const manifest: HubManifest = { pc, pushedAt: new Date().toISOString(), threads, files }
+  const intervalMs = cleanInterval(push.intervalMs)
+  const manifest: HubManifest = {
+    pc,
+    ...(install ? { install } : {}),
+    ...(intervalMs ? { intervalMs } : {}),
+    pushedAt: new Date().toISOString(),
+    threads,
+    files,
+  }
   writeAtomic(join(dir, MANIFEST), JSON.stringify(manifest))
   writeAtomic(join(dir, 'session_index.jsonl'), index.length ? `${index.join('\n')}\n` : '')
   return { ok: true, pc, stored, want }

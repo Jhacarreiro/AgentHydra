@@ -604,8 +604,8 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_CODEX_HUB_URL` | unset | the hub this PC pushes its Codex chats to (`https://hub.example.test`); with the token set, the daemon pushes every interval |
 | `AGENTHYDRA_CODEX_HUB_PC` | the computer's name: on a Mac its Bonjour name (`scutil --get LocalHostName`), which no network changes; elsewhere less a `.local`, `.lan`, `.home` or `.localdomain` suffix | the name this PC's chats are listed under on the hub. A Mac or Linux PC that already pushed under a longer name (`mac-lan`) is listed once more under the new one: delete its old `<config dir>/codex-hub/<pc>/` folder on the hub, or set this to the old name |
 | `AGENTHYDRA_CODEX_HUB_HEADERS` | unset | JSON object of extra headers for each push, e.g. a Cloudflare Access service token in front of the hub |
-| `AGENTHYDRA_CODEX_HUB_INTERVAL_MIN` | `2` | minutes between pushes |
-| `AGENTHYDRA_CODEX_HUB_RELAY` | `ask` | on a pushing PC: `ask` lets the hub continue this PC's chats with approvals and the sandbox on, `full` also without them (Desk's bypass mode), `off` keeps the relay closed |
+| `AGENTHYDRA_CODEX_HUB_INTERVAL_MIN` | `2` | minutes between pushes, at most 480 (eight hours); the [Codex hub](#codex-chats-from-other-pcs-codex-hub) holds this PC's name for three of them after each push |
+| `AGENTHYDRA_CODEX_HUB_RELAY` | `ask` | on a pushing PC: `ask` lets the hub continue this PC's chats with approvals and the sandbox on, and only when each resume and turn says so; `full` also without them (Desk's bypass mode); `off` keeps the relay closed |
 | `AGENTHYDRA_CODEX_HUB_UPDATE` | on | on a PC running the compiled pusher: `off` keeps the installed build instead of following the hub's |
 | `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or [`~/.claude/settings.json`](CLAUDE-CONFIG-LAYOUT.md) | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
@@ -872,16 +872,25 @@ remote control pairs one PC with the ChatGPT app over OpenAI's encrypted relay a
 else. Instead, each PC asks its own Codex app-server for its chat list (`thread/list`, the list and titles
 the Codex app shows) and pushes it to one hub daemon, which keeps a Codex home per PC under
 `<config dir>/codex-hub/<pc>/`. The hub's chat list, sessions, search and transcripts then include every
-PC's chats, each marked with the PC it came from.
+PC's chats, each marked with the PC it came from. Its usage analytics does not: a chat's usage belongs to
+the PC that ran it, and [kit sync](#usage-across-pcs-post-apikitsync) would count a hub copy as the hub's too.
 
 A chat from another PC can be continued in Desk while that PC is on. Its pusher keeps a WebSocket open to the
 hub (`/api/codex-hub/relay`); when Desk continues one of its chats, the hub asks the PC to start its own
 `codex app-server` and carries the JSON-RPC lines between it and Desk unread, so the turn runs on the PC, with
 its files and its Codex login, and its approvals and questions are answered in Desk. The PC only lets the hub
-resume, read, start and stop turns in existing threads (never start a thread, change config or sign in), and
-by default refuses a turn without approvals or outside the sandbox (`AGENTHYDRA_CODEX_HUB_RELAY`). A turn
-that ends is pushed at once. The Codex app on the PC holds a chat it has open, so close it there first. Nothing
-on the hub can rename or archive a chat on its PC.
+resume, read, start and stop turns in existing threads (never start a thread, change config or sign in). It
+rebuilds each request from the params Desk sends with it and refuses one that carries anything else, such as
+`config`, `history`, `path`, `modelProvider`, instructions, `approvalsReviewer`, a turn's `cwd` or an input
+read from a file on the PC. Resume's `cwd` is left out, so the thread keeps its own folder, and `initialize`
+goes on with `experimentalApi` off. By default it also refuses a turn without approvals or outside the
+sandbox (`AGENTHYDRA_CODEX_HUB_RELAY`): `approvalPolicy` `never`, `sandbox` `danger-full-access` or
+`sandboxPolicy` `dangerFullAccess`, and a resume without `approvalPolicy` and `sandbox` or a turn without
+`approvalPolicy` and `sandboxPolicy`, which Codex would take from the PC's `config.toml` or the thread's last
+turn. Granular approvals, `externalSandbox` and extra `writableRoots` are refused in every mode. A line from
+the hub that is not one JSON object is dropped, and so is an answer to anything but a request the PC's Codex
+asked and still waits on. A turn that ends is pushed at once. The Codex app on the PC holds a chat it has open,
+so close it there first. Nothing on the hub can rename or archive a chat on its PC.
 
 - **Hub:** set `AGENTHYDRA_CODEX_HUB_TOKEN`. `POST /api/codex-hub/push` takes a PC's list and the rollouts
   it lacks (`Authorization: Bearer <token>`), and `GET /api/codex-hub/relay?pc=<name>` is the PC's relay
@@ -893,6 +902,26 @@ on the hub can rename or archive a chat on its PC.
   a PC that does not run the daemon can run `bun server/src/codex-hub-push-main.ts` (`--once` for one
   round). The first push sends every rollout, later ones only what changed; a chat archived or deleted
   on the PC leaves the hub at its next push. Add PCs by repeating this on each with its own name.
+- **Two PCs with one name:** the hub keeps a PC by its name, and two can send one (WSL beside the Windows
+  PC it runs on, two Linux PCs called `ubuntu`, two pushers on one PC: see the next point). So each
+  pusher makes a random install id once, keeps it in the config dir (`codex-hub-install` for the daemon's
+  pusher, `codex-hub-push-install` for the standalone one, so those two are two installs), and sends it
+  with every push and relay connect as `x-codex-hub-install`, and its interval with every push; the hub
+  keeps both in the PC's `manifest.json`. While one install holds a name (its relay socket is open, or it
+  pushed within the last three of its intervals, and 10 minutes at least, so one with
+  `AGENTHYDRA_CODEX_HUB_RELAY=off` and a long interval still holds it at its next push), another
+  install's push under that name is answered 409 and its relay socket closed with 4409, so neither
+  replaces the other's socket or deletes its rollouts. The refused pusher logs
+  `another PC already pushes as <name>; set AGENTHYDRA_CODEX_HUB_PC ...`, asks again at its next push and
+  connects again after five minutes, not five seconds. Once the install that held the name has stopped
+  for that long (the PC set up again, with a new id), the next one takes it: after 10 minutes at the
+  default interval, after a day at the longest. A pusher from before install ids sends none: it is taken
+  as before and holds its name against no one. Between two machines, a name of its own is the fix.
+- **Two pushers on one PC:** the daemon's pusher and a standalone one read the same Codex home and push the
+  same chats, so run only one of them: stop the standalone pusher, or leave `AGENTHYDRA_CODEX_HUB_URL` out
+  of the daemon's environment. Another name does not help here. Set where both read it (the user's
+  environment), it moves both to the new name, where one is refused again; set for one only, the hub lists
+  each of the PC's chats twice, under both names. The refusal says so too.
 - **Pusher updates:** a PC without Bun runs the pusher compiled (`bun build --compile
   server/src/codex-hub-push-main.ts`, `codex-hub-push.exe`), and that build follows the hub's: put the new
   build at `<config dir>/codex-hub/.pusher/codex-hub-push.exe` on the hub, and each pusher compares its own

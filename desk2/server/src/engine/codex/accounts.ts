@@ -24,6 +24,19 @@ export interface CodexDirectory {
 
 export type CodexPick = { account: CodexAccount } | { why: string }
 
+/** Another PC's Codex behind the hub: its id is the hub's `hub:<pc>`, which no account of this machine has. */
+export const isRelayAccount = (id: string): boolean => id.startsWith('hub:')
+
+/** Why no Codex account can be read: AgentHydra, which lists them, does not answer. */
+export const NOT_ANSWERING = 'AgentHydra is not answering, so Desk cannot see the Codex accounts.'
+
+/** Why a chat on another PC's Codex cannot go on now: that PC's relay is not open. */
+export const notConnected = (pc: string): string =>
+  `${pc} is not connected to the Codex hub now (it is off, or its pusher is not running), so this chat cannot continue here.`
+
+/** Why a chat on another PC's Codex stays there: another service would run it here, and its folder is that PC's. */
+export const onlyOnPc = (pc: string): string => `${pc}'s chat goes on only on that PC's Codex: its folder is there.`
+
 /** The directory through AgentHydra's API: this machine's accounts, then every PC behind its Codex hub. */
 export function codexDirectory(client: Pick<HydraClient, 'codexInstances' | 'codexUsage' | 'codexRelayPcs'>): CodexDirectory {
   return {
@@ -31,7 +44,7 @@ export function codexDirectory(client: Pick<HydraClient, 'codexInstances' | 'cod
       const [own, pcs] = await Promise.all([client.codexInstances(), client.codexRelayPcs()])
       return [...own, ...pcs.map((p) => ({ id: p.id, name: p.pc, codexHome: relayHome(p.id), loggedIn: p.relay, relay: true }))]
     },
-    usage: (id) => (id.startsWith('hub:') ? Promise.resolve(null) : client.codexUsage(id).catch(() => null)),
+    usage: (id) => (isRelayAccount(id) ? Promise.resolve(null) : client.codexUsage(id).catch(() => null)),
   }
 }
 
@@ -71,7 +84,7 @@ export async function pickCodexAccount(dir: CodexDirectory, avoid: ReadonlySet<s
   try {
     instances = await dir.instances()
   } catch {
-    return { why: 'AgentHydra is not answering, so Desk cannot see the Codex accounts.' }
+    return { why: NOT_ANSWERING }
   }
   // Another PC's Codex only goes on with that PC's own chats: a new thread never starts there.
   const signedIn = instances.filter((i) => i.loggedIn && !i.relay)

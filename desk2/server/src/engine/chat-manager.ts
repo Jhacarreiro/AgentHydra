@@ -10,7 +10,7 @@
 import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AccountInfo,
@@ -75,7 +75,7 @@ import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
 import { chatFace } from './core-lead'
 import { coreDir } from './hydra-core-mode'
 import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
-import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
+import { type CodexDirectory, codexAccount, isRelayAccount, NOT_ANSWERING, notConnected, onlyOnPc, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
 import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
@@ -403,10 +403,15 @@ export class ChatManager {
     return [...this.chats.values()].flatMap((e) => Object.values(e.chat.serviceThreads ?? {}).map((t) => t.threadId))
   }
 
-  /** What Pin service offers (GET /api/chat-services): Claude always; Codex when one of its accounts is signed in. */
+  /**
+   * What Pin service offers (GET /api/chat-services): Claude always; Codex when one of this machine's accounts is
+   * signed in. Another PC's Codex behind the hub only goes on with that PC's chats (pickCodexAccount), so it is not one:
+   * the PCs whose relay is open are listed apart (`pcs`), for those chats' own menu.
+   */
   async services(): Promise<ChatServiceInfo[]> {
     const claude = (await this.bridge.listAccounts().catch(() => [])).filter((a) => a.signedIn).length
-    const codex = this.codexDir ? await this.codexDir.instances().then((l) => l.filter((i) => i.loggedIn).length, () => null) : null
+    const listed = this.codexDir ? await this.codexDir.instances().catch(() => null) : null
+    const codex = listed ? listed.filter((i) => i.loggedIn && !i.relay).length : null
     return [
       { kind: 'claude', label: SERVICE_LABEL.claude, ready: true, accounts: claude },
       {
@@ -414,7 +419,8 @@ export class ChatManager {
         label: SERVICE_LABEL.codex,
         ready: !!codex,
         accounts: codex ?? 0,
-        ...(codex ? {} : { why: codex === null ? 'AgentHydra is not answering, so Desk cannot see the Codex accounts.' : 'No Codex account is signed in.' }),
+        ...(codex ? {} : { why: codex === null ? NOT_ANSWERING : 'No Codex account is signed in.' }),
+        ...(listed ? { pcs: listed.filter((i) => i.loggedIn && i.relay).map((i) => i.id) } : {}),
       },
       this.chatgptService(),
     ]
@@ -1370,7 +1376,8 @@ export class ChatManager {
     const was: SusLevel = chat.sus ?? 'fine'
     if (to === was) return
     if (to === 'bad') await this.pinService(e, 'codex')
-    else if (was === 'bad') await this.pinService(e, null)
+    // Another PC's chat was on that PC's Codex before 'bad', and stays there (pinService).
+    else if (was === 'bad' && !pcOf(chat)) await this.pinService(e, null)
     if (to === 'fine') delete chat.sus
     else chat.sus = to
     this.refreshSusPick(chat)
@@ -1679,7 +1686,8 @@ export class ChatManager {
     const codex = outside?.source === 'codex' ? await this.codexImport(req, outside) : null
     const rawCwd = req.cwd ?? outside?.cwd
     if (!rawCwd) throw new ChatError(400, `cwd is required: AgentHydra does not know the folder of session ${req.sessionId}`)
-    const cwd = checkCwd(rawCwd)
+    // Another PC's chat (the Codex hub's) goes on in that PC's folder, which this machine need not have.
+    const cwd = codex && isRelayAccount(codex.accountId) ? pcCwd(rawCwd) : checkCwd(rawCwd)
     // A Codex chat's Claude account is only where it would go if pinned back to Claude: the default, never refused.
     const { account, auto, note } = codex ? { ...(await this.resolveAccount(this.settingsOf().defaultAccountId)), note: null } : await this.importAccount(req.configDir)
     const loaded = await this.externalItemsOf(req.sessionId)
@@ -1766,8 +1774,7 @@ export class ChatManager {
     if (!this.codexDir) throw new ChatError(409, 'Codex chats cannot continue here: this Desk has no Codex accounts.')
     if (!outside.codexAccountId) throw new ChatError(409, 'AgentHydra does not say which Codex account holds this chat, so it cannot continue here.')
     const found = (await this.codexDir.instances().catch(() => [])).find((i) => i.id === outside.codexAccountId)
-    if (found?.relay && !found.loggedIn)
-      throw new ChatError(409, `${found.name ?? 'That PC'} is not connected to the Codex hub now (it is off, or its pusher is not running), so this chat cannot continue here.`)
+    if (found?.relay && !found.loggedIn) throw new ChatError(409, notConnected(found.name ?? 'That PC'))
     if (!found?.loggedIn) throw new ChatError(409, `${where} is signed out, so this chat cannot continue here.`)
     return { accountId: found.id, label: codexAccount(found).label, threadId: req.sessionId }
   }
@@ -1940,13 +1947,16 @@ export class ChatManager {
 
   /**
    * Pin service: the chat's next turns run on `to` (null: Claude again). The turn running now finishes where it
-   * is; the next one runs on the new service and first reads what was said since the chat was last there.
+   * is; the next one runs on the new service and first reads what was said since the chat was last there. Another
+   * PC's chat never leaves that PC's Codex: another service would run it on this machine, in a folder that is the PC's.
    */
   private async pinService(e: Entry, to: PinnedService | null): Promise<void> {
     const chat = e.chat
     const from: ChatServiceKind = chat.service ?? 'claude'
     const target: ChatServiceKind = to ?? 'claude'
     if (from === target) return
+    const pc = pcOf(chat)
+    if (pc && to !== 'codex') throw new ChatError(409, onlyOnPc(pc))
     if (to === 'chatgpt' && !this.free()) throw new ChatError(409, 'ChatGPT needs Free instances, which are not running in this Desk.')
     if (to === 'codex' && !this.codexDir) throw new ChatError(409, 'Codex is not set up in this Desk.')
     chat.serviceLeftAt = { ...chat.serviceLeftAt, [from]: this.now() }
@@ -2039,7 +2049,9 @@ export class ChatManager {
       open: this.openCodex,
       pickAccount: (avoid) => (dir ? pickCodexAccount(dir, avoid, this.codexHeld, this.now()) : Promise.resolve({ why: 'Codex is not set up in this Desk.' })),
       findAccount: async (id) => {
-        const found = (await dir?.instances().catch(() => []))?.find((i) => i.id === id && i.loggedIn)
+        // AgentHydra not answering is said as such, never taken for an account gone or another PC off.
+        const list = dir ? await dir.instances().catch(() => Promise.reject(new Error(NOT_ANSWERING))) : []
+        const found = list.find((i) => i.id === id && i.loggedIn)
         return found ? codexAccount(found) : null
       },
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'codex', fresh, sentId, movedFrom),
@@ -2386,6 +2398,18 @@ export class ChatManager {
       clearTimeout(timer)
     }
   }
+}
+
+/** The PC whose Codex holds the chat's thread, as the window names it, when that is another PC's behind the hub; else null. */
+function pcOf(chat: ChatSummary): string | null {
+  const thread = chat.serviceThreads?.codex
+  return thread && isRelayAccount(thread.accountId) ? thread.label : null
+}
+
+/** A folder on another PC, as that PC names it (a Windows or a POSIX path): never looked for or rewritten here. */
+export function pcCwd(cwd: string): string {
+  if (!cwd.trim() || !(win32.isAbsolute(cwd) || posix.isAbsolute(cwd))) throw new ChatError(400, `cwd must be an absolute path, got ${JSON.stringify(cwd)}`)
+  return cwd
 }
 
 export function checkCwd(cwd: string): string {
