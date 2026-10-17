@@ -716,7 +716,19 @@ It reads Desk's own `GET /api/routines` on the page's origin, so it works embedd
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
-**A project dashboard** is a small static website per project, which its chats write. A chat builds it with
+**A project dashboard** is AgentHydra's dashboard template, filled from the project's own data. A spec in the
+checkout, `.agenthydra/dashboard.json`, lists the sections in order (stat tiles, a list of things waiting with their
+ages, grouped errors with bars, a breakdown with bars) and where each one's data comes from: an MCP tool, named by the
+server's name in the person's Claude config, or an HTTP endpoint. Desk's server reads the sources itself, at most once
+per the spec's `refreshMinutes` and only while the page or Project Hydra asks, checks each answer against the one
+contract (`shared/project-dashboard.ts`: the spec, and the feed every source answers, one typed shape per section type,
+optionally one per range of Today, 7 days and 30 days), and keeps every source's last good answer on disk, so a source
+that is down still shows its last numbers, marked late (`server/src/project-dashboard/`, `GET /api/project-dashboard`,
+`GET /api/project-dashboards`, `POST /api/project-dashboard/refresh`). The page draws it in the window's own kit
+(`web/src/components/dashboard/template/`); Project Hydra draws the same answer. No agent, port or localhost site is
+involved, so it works for anyone whose data source answers the feed.
+
+A project with no spec keeps the older kind: a small static website per project, which its chats write. A chat builds it with
 `dashboard_write` on the agenthydra MCP (any HTML, CSS, JavaScript or data), and the daemon hosts it at
 `http://<id>.localhost:<port>/` for that project. The page opens from the chat header's dashboard button, a project
 tile's "Open dashboard", the sidebar project menu, or the dashboard icon beside the project's New session +, and slides
