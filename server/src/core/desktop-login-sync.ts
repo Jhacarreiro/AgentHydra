@@ -24,12 +24,16 @@
 //   have their own tokens and both stay signed in; tying them together would let either PC's refresh
 //   sign the other out. A PC joins the store's copy only where it has none: a signed-out profile of
 //   the same folder name, or a new profile made with that name and number.
-// - From then on the copy whose tokens expire later wins, as for the CLI (a refresh pushes them out).
-//   A grant Anthropic revoked (core/revoked-grants.ts) does not count and is never landed: the dead
-//   year-long grant a profile keeps would otherwise win every comparison and put itself back.
+// - From then on the copy whose session grant (the app's own sign-in, which it refreshes) expires later
+//   wins, else the one whose latest grant does, as for the CLI (a refresh pushes them out). The latest
+//   grant alone is a year-long one where a profile has it, minted at or after a sign-in, not always
+//   anew at the next one, and it can be dead while it reads months away (accounts.ts). A grant
+//   Anthropic revoked (core/revoked-grants.ts) does not count and is never landed: the dead year-long
+//   grant a profile keeps would otherwise win every comparison and put itself back.
 // - A logout reaches every PC, as for the CLI (owner, 2026-10-02): an account this PC held and shared
 //   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
-//   their profile out of it once its app is closed, unless theirs was signed in after the logout.
+//   their profile out of it once its app is closed, unless theirs was signed in after the logout: its
+//   claude.ai sign-in cookie was made after it (a refresh keeps the cookie's creation time).
 // - So does a delete (owner, 2026-10-16): the deleting PC turns the row into the removal marker with
 //   the owner's note, and the other PCs delete their profile of that account once its app is closed
 //   and say who deleted it and why. A desktop login is never left out of sync.
@@ -110,7 +114,8 @@ export interface PortableDesktopLogin {
   tokenCache: string | null
   /** Null when the sending PC could not read them (its app was running) and the store had none. */
   cookies: DesktopCookie[] | null
-  /** The latest expiry among its grants (epoch ms): the later copy wins. */
+  /** The latest expiry among its grants (epoch ms): the later copy wins when either copy has no
+   *  session grant (newerHere). */
   expiresAt: number
   /** Digests of this account's grants the sending PC found revoked (core/revoked-grants.ts): the
    *  receiving PC drops them too. */
@@ -235,14 +240,16 @@ export async function readDesktopTokens(
   return v2 || v1 ? { uuid, v2, v1 } : null
 }
 
-/** The latest `expiresAt` among the live grants of the token caches (epoch ms; 0 when none says): a
- *  grant known revoked keeps its date but never comes back to life. */
-export function tokenExpiry(...caches: Array<string | null>): number {
+/** The latest `expiresAt` among the live grants of the token caches whose key `keep` takes (epoch ms;
+ *  0 when none says). A grant's key ends in its scopes; a grant known revoked keeps its date but never
+ *  comes back to life. */
+function latestExpiry(caches: Array<string | null>, keep: (grantKey: string) => boolean): number {
   let latest = 0
   for (const c of caches) {
     if (!c) continue
     try {
-      for (const g of Object.values(JSON.parse(c) as Record<string, unknown>)) {
+      for (const [k, g] of Object.entries(JSON.parse(c) as Record<string, unknown>)) {
+        if (!keep(k)) continue
         const grant = g as { expiresAt?: unknown; token?: unknown } | null
         if (typeof grant?.token === 'string' && isRevokedGrant(grant.token)) continue
         const e = Number(grant?.expiresAt) || 0
@@ -253,6 +260,34 @@ export function tokenExpiry(...caches: Array<string | null>): number {
     }
   }
   return latest
+}
+
+/** The latest `expiresAt` among the live grants of the token caches (epoch ms; 0 when none says). */
+export const tokenExpiry = (...caches: Array<string | null>): number =>
+  latestExpiry(caches, () => true)
+
+/** The scope only the app's own sign-in grant carries (accounts.ts). */
+const APP_SESSION_SCOPE = 'user:sessions:claude_code'
+
+/** The latest `expiresAt` among the app's own session grants (epoch ms; 0 when there is none). */
+export const sessionExpiry = (...caches: Array<string | null>): number =>
+  latestExpiry(caches, (k) => k.includes(APP_SESSION_SCOPE))
+
+/** Chromium keeps a cookie's time as microseconds since 1601. */
+const CHROMIUM_EPOCH_MS = 11_644_473_600_000
+
+/** When this claude.ai sign-in was made (epoch ms): the earliest creation time of its `sessionKey*`
+ *  cookies. Chromium keeps a cookie's creation time when the site sets the same value again, and a
+ *  token refresh never touches it, so only a new sign-in moves it. 0 when no cookie says. */
+export function signedInAt(cookies: DesktopCookie[] | null): number {
+  let first = 0
+  for (const c of cookies ?? []) {
+    const us = String(c.creation_utc ?? '')
+    if (!c.name.startsWith('sessionKey') || !/^\d+$/.test(us)) continue
+    const ms = Number(BigInt(us) / 1000n) - CHROMIUM_EPOCH_MS
+    if (ms > 0 && (!first || ms < first)) first = ms
+  }
+  return first
 }
 
 const cookieDb = (dir: string): string => join(dir, 'Network', 'Cookies')
@@ -818,6 +853,19 @@ async function syncAgreedProfile(
   ctx.out.unchanged++
 }
 
+/** Whether this profile's tokens are a newer copy than the store's: by the app's own session grant
+ *  when both hold one and they differ, else by the latest grant (see the header). Grants known revoked
+ *  never count, on either side (latestExpiry), so a dead one cannot win and put itself back. */
+function newerHere(look: ProfileLook, theirs: PortableDesktopLogin): boolean {
+  const mine = sessionExpiry(look.tokens.v2, look.tokens.v1)
+  const their = sessionExpiry(theirs.tokenCacheV2, theirs.tokenCache)
+  if (mine && their && mine !== their) return mine > their
+  return (
+    tokenExpiry(look.tokens.v2, look.tokens.v1) >
+    tokenExpiry(theirs.tokenCacheV2, theirs.tokenCache)
+  )
+}
+
 /** The store moved on since this PC last agreed with it. A decision that waits for the app to
  *  close is remembered, so a profile open for days is not downloaded again every pass. */
 async function syncMovedProfile(
@@ -827,7 +875,7 @@ async function syncMovedProfile(
   st: DesktopSyncState,
 ): Promise<void> {
   const { ctx } = pass
-  const { uuid, hash, isClosed, tokens } = look
+  const { uuid, hash, isClosed } = look
   const pending = `${remote.version}:${hash}`
   if (!isClosed && deferred.get(uuid) === pending) {
     pass.waiting.add(uuid)
@@ -850,7 +898,7 @@ async function syncMovedProfile(
   if (sameTokens && !cookiesToLand) {
     ctx.state[uuid] = { version: remote.version, hash, cookies: st.cookies }
     ctx.out.unchanged++
-  } else if (!sameTokens && tokenExpiry(tokens.v2, tokens.v1) > tokenExpiry(...theirLive))
+  } else if (!sameTokens && newerHere(look, theirs))
     await sendProfile(pass, look, remote.version, theirs.cookies)
   else if (!isClosed) {
     deferred.set(uuid, pending)
@@ -860,7 +908,9 @@ async function syncMovedProfile(
 
 /** The store says signed out (another PC logged this account out) and a profile here holds it. A
  *  login signed in here after the logout is the newer word and goes up in its place; the one this PC
- *  last shared, or any written before the logout, signs out here once its app is closed. */
+ *  last shared, or any written before the logout, signs out here once its app is closed. A running
+ *  app refreshes its grants and rewrites config.json on its own, so neither says a sign-in is new; its
+ *  sign-in cookie does (signedInAt), and is read once the app is closed. */
 async function meetSignOut(
   pass: DesktopPass,
   look: ProfileLook,
@@ -869,14 +919,15 @@ async function meetSignOut(
   const { ctx } = pass
   const st = look.st
   // This PC already took that logout, so a login here now is a new sign-in.
-  const signedInSince =
-    st?.version === remote.version ||
-    (st?.hash !== look.hash && mtimeOf(join(look.p.dir, 'config.json')) > remote.at)
-  if (signedInSince) {
+  if (st?.version === remote.version) {
     await sendProfile(pass, look, remote.version, null)
     return
   }
   if (!look.isClosed) return
+  if (st?.hash !== look.hash && signedInAt(await freshCookies(look)) > remote.at) {
+    await sendProfile(pass, look, remote.version, null)
+    return
+  }
   if (!(await logoutInstance(look.p.dir)).ok) return
   ctx.dropUsage(look.p.dir)
   ctx.state[look.uuid] = { version: remote.version, hash: '' }

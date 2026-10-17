@@ -66,8 +66,10 @@ const grants = (expiresAt: number) =>
   JSON.stringify({
     'client:org:https://api:user:inference': { token: `t-${expiresAt}`, expiresAt },
   })
-const cookie = (value: string, name = 'sessionKey') => ({
-  creation_utc: '13400000000000000',
+/** Chromium's cookie time (microseconds since 1601) of an epoch-ms time. */
+const chromiumTime = (ms: number): string => String(BigInt(ms + 11_644_473_600_000) * 1000n)
+const cookie = (value: string, name = 'sessionKey', creation = '13400000000000000') => ({
+  creation_utc: creation,
   host_key: HOST,
   top_frame_site_key: '',
   name,
@@ -96,6 +98,7 @@ async function profile(
   expiresAt: number,
   session: string,
   cookieName = 'sessionKey',
+  opts: { tokens?: string; signedInAt?: number } = {},
 ) {
   const dir = join(instancesRoot(), name)
   mkdirSync(join(dir, 'Network'), { recursive: true })
@@ -105,7 +108,7 @@ async function profile(
     JSON.stringify({
       locale: 'en-US',
       lastKnownAccountUuid: uuid,
-      'oauth:tokenCacheV2': await encryptSafeStorage(grants(expiresAt), dir),
+      'oauth:tokenCacheV2': await encryptSafeStorage(opts.tokens ?? grants(expiresAt), dir),
     }),
   )
   const d = new Database(join(dir, 'Network', 'Cookies'), { create: true })
@@ -120,7 +123,11 @@ async function profile(
     'CREATE UNIQUE INDEX cookies_unique_index ON cookies(host_key, top_frame_site_key, has_cross_site_ancestor, name, path, source_scheme, source_port)',
   )
   d.run("insert into meta values ('version', '24'), ('last_compatible_version', '24')")
-  const c = cookie(session, cookieName)
+  const c = cookie(
+    session,
+    cookieName,
+    opts.signedInAt === undefined ? undefined : chromiumTime(opts.signedInAt),
+  )
   const sealed = await encryptV10Gcm(
     key,
     new Uint8Array([
@@ -654,6 +661,122 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       deleteCliInstance(id, getCliInstance(id)?.name)
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
+  })
+
+  // Found 2026-10-16 (efficiency audit sweep). A running app refreshes its grants and rewrites config.json on its
+  // own, so after a logout on the other PC a changed token cache written after the logout went back up as a new
+  // sign-in. And the latest grant is a year-long one where a profile has it, minted at or after a sign-in but not
+  // always anew at the next one (seen 2026-10-16 on this PC's profiles), so an older copy holding one beat a newer
+  // sign-in without one.
+  describe('which copy is newer', () => {
+    const DAY = 86_400_000
+    const SESSION =
+      'c:o:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code'
+    const YEAR_LONG = 'c:o:https://api.anthropic.com:user:inference user:file_upload user:profile'
+    const tokens = (session: number, yearLong?: number) =>
+      JSON.stringify({
+        [SESSION]: { token: `s-${session}`, refreshToken: `rs-${session}`, expiresAt: session },
+        ...(yearLong ? { [YEAR_LONG]: { token: `y-${yearLong}`, expiresAt: yearLong } } : {}),
+      })
+    /** One pass's context over a store holding `id`'s row, and what this PC last agreed on for it. */
+    function passOver(
+      id: string,
+      row: { version: number; signedOut: boolean; at: number },
+      agreedVersion: number,
+      theirs: PortableDesktopLogin | null,
+    ) {
+      const uploads: PortableDesktopLogin[] = []
+      const ctx = {
+        store: new Map([[id, { ...row, num: 9, kind: 'desktop', name: 'copy' }]]),
+        state: { [id]: { version: agreedVersion, hash: 'the tokens this PC last shared' } },
+        excluded: new Set<string>(),
+        out: { pushed: 0, landed: 0, unchanged: 0, problems: [], arrived: [] },
+        upload: async (login: PortableDesktopLogin) => {
+          uploads.push(login)
+          return row.version + 1
+        },
+        download: async (uuid: string) => (uuid === id ? theirs : null),
+        markSignedOut: async () => null,
+        confirmGone: () => false,
+        clearGone: () => {},
+        dropUsage: () => {},
+        note: () => {},
+      } as unknown as DesktopSyncContext
+      return { ctx, uploads }
+    }
+    const closed = async () => new Set<string>()
+
+    test('a refresh after a logout on the other PC signs out here; a sign-in after it goes up', async () => {
+      const [stale, fresh] = [randomUUID(), randomUUID()]
+      const loggedOutAt = Date.now() - 60_000
+      // Signed in before the logout; its tokens refreshed and config.json rewritten since.
+      const a = await profile(
+        `stale-${stale.slice(0, 8)}`,
+        stale,
+        Date.now() + DAY,
+        'sk-old',
+        'sessionKey',
+        {
+          signedInAt: loggedOutAt - DAY,
+        },
+      )
+      const made = [a]
+      try {
+        const one = passOver(stale, { version: 3, signedOut: true, at: loggedOutAt }, 2, null)
+        await syncDesktopLogins(one.ctx, closed)
+        expect(one.uploads).toEqual([])
+        expect(await readDesktopTokens(a)).toBeNull()
+        expect(one.ctx.state[stale]).toEqual({ version: 3, hash: '' })
+        // Signed in again after the logout.
+        const b = await profile(
+          `fresh-${fresh.slice(0, 8)}`,
+          fresh,
+          Date.now() + DAY,
+          'sk-new',
+          'sessionKey',
+          {
+            signedInAt: loggedOutAt + 1000,
+          },
+        )
+        made.push(b)
+        const two = passOver(fresh, { version: 3, signedOut: true, at: loggedOutAt }, 2, null)
+        await syncDesktopLogins(two.ctx, closed)
+        expect(two.uploads.map((l) => l.id)).toEqual([fresh])
+        expect(await readDesktopTokens(b)).not.toBeNull()
+      } finally {
+        for (const dir of made)
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 60_000)
+
+    test('the later session grant is the newer copy, whatever a year-long grant beside it says', async () => {
+      const id = randomUUID()
+      const now = Date.now()
+      // Here: an older sign-in with its year-long grant. The store: the other PC's newer one, which has none yet.
+      const dir = await profile(`grants-${id.slice(0, 8)}`, id, 0, 'sk-mine', 'sessionKey', {
+        tokens: tokens(now + 10 * DAY, now + 365 * DAY),
+      })
+      const theirs: PortableDesktopLogin = {
+        kind: 'desktop',
+        id,
+        num: 9,
+        name: 'copy',
+        tokenCacheV2: tokens(now + 30 * DAY),
+        tokenCache: null,
+        cookies: [cookie('sk-theirs')],
+        expiresAt: now + 30 * DAY,
+      }
+      try {
+        const { ctx, uploads } = passOver(id, { version: 3, signedOut: false, at: now }, 2, theirs)
+        await syncDesktopLogins(ctx, closed)
+        expect(uploads).toEqual([])
+        expect(ctx.out.landed).toBe(1)
+        const landed = JSON.parse((await readDesktopTokens(dir))?.v2 ?? '{}')
+        expect(landed[SESSION]?.expiresAt).toBe(now + 30 * DAY)
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 60_000)
   })
 
   describe('a profile with no claude.ai sign-in cookie is signed out', () => {

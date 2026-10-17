@@ -205,7 +205,9 @@ class Jev:
 
     async def __aenter__(self) -> "Jev":
         if self._http is None:
-            self._http = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout))
+            from .client import tls
+
+            self._http = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout), verify=tls())
         return self
 
     async def __aexit__(self, *exc) -> None:

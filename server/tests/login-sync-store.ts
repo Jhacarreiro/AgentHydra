@@ -115,6 +115,11 @@ export function headNamespace(cls: new (ctx: unknown, env: unknown) => any, env:
     evict: () => {
       object = null
     },
+    /** Drop a key from the object's storage and the object with it, so the next one loads without it. */
+    forget: (k: string) => {
+      kept.delete(k)
+      object = null
+    },
   }
   return ns
 }
@@ -150,6 +155,11 @@ export const freshIsolate = () => worker.forgetIsolate()
 /** The Worker's daily Cron Trigger, run now. */
 export const cron = () => worker.scheduled({}, env)
 export const base = `http://127.0.0.1:${server.port}`
+
+/** The store forgets every PC it has seen, as if each had been away two weeks: a chat's readers are then
+ *  only the PCs a test makes poll or ack. Every file shares the one store, and a PC another test saw (and
+ *  that never acks this test's chats) would hold their chunks. */
+export const forgetPcs = () => env.HEAD!.forget('seen')
 
 /** A request to the store with the access token. */
 export const store = (method: string, path: string, body?: unknown) =>

@@ -56,7 +56,7 @@ folders.
 
 - **This PC:** the folders above. Each person is `persona.json`, an optional `brief.md`, an optional `learnings.json` (what the person has learned), and for a manager its `playbook/*.md` and `avatar.jpg|png|webp`. This is the working copy; the catalog reads it.
 - **CrAInium (owners only):** the owners' private persona store on their own server, reached over SSH by the people door, a command in the private sue-dredd checkout (`store/people-door.mjs`; `crainium.command` in `~/.agenthydra/people-store.json` overrides it). AgentHydra finds the checkout as it finds Sue and Dredd. The door prints JSON for `status`, `list`, `get <family>/<slug>` and `put` (the record on stdin), refuses another owner's rows, and never deletes. Without the door, only This PC shows. Code: `server/src/people-store/crainium-home.ts`.
-- **Sync:** the newer copy of a person wins. The older one is saved in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file. After a pull the catalog is rebuilt.
+- **Sync:** the newer copy of a person wins. The older one is saved in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file. After a pull the catalog is rebuilt. A person's time on This PC is its files' newest mtime, which a checkout, copy or restore moves without changing a word, so each sync keeps a hash of what every person synced as (`~/.agenthydra/people-sync-base.json`, no text): a copy here that still matches it is unchanged and never outranks CrAInium's.
 - **Your choice** is kept in `~/.agenthydra/people-store.json`.
 
 ## Managers: two folders, one manager

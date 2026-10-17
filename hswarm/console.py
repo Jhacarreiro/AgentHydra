@@ -413,7 +413,8 @@ DECIDE_ARGS = {"items", "escalate_below", "fallback_model", "batch", "model"}
 
 # (method, path) -> handler(body). Names travel in the body, never the path: a model name may hold a '/' or ':'.
 ROUTES = {
-    ("GET", "state"): lambda b: settings.snapshot(),
+    # Off the event loop: every provider's keys, 9,525 of them in 45 pools, read 0.06-0.18 s per call (2026-10-16).
+    ("GET", "state"): lambda b: asyncio.to_thread(settings.snapshot),
     ("GET", "keys"): lambda b: {"provider": b.get("provider"), "rows": settings.key_rows(b.get("provider") or "")},
     ("POST", "keys/add"): _key_change(lambda b: settings.add_key(b.get("provider") or "", b.get("key") or "", _reload=False)),
     ("POST", "keys/remove"): _key_change(lambda b: settings.remove_key(b.get("provider") or "", b.get("fingerprint") or "", _reload=False)),

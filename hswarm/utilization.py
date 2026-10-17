@@ -31,6 +31,7 @@ import platform
 import secrets
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 from . import claude_usage, config, ledgerstore
@@ -226,6 +227,10 @@ def _mode(values: list[str]) -> str:
     return max(set(values), key=values.count) if values else ""
 
 
+SESSION_RECHECK_S = 60.0  # a session the account cache does not know reads AgentHydra's tables again at most this often
+_rechecked: dict[str, float] = {}  # session id -> when caller_account last read them again for it (monotonic)
+
+
 def caller_account(caller: dict | None) -> str:
     """The stable hashed id of the account that ordered a run: by its session first, by the instance folder it
     ran under otherwise (folder names are reused, so the session is the better key). "" when nothing knows it."""
@@ -234,10 +239,25 @@ def caller_account(caller: dict | None) -> str:
     c = caller or {}
     sid = c.get("session_id") or ""
     res = accounts.resolver()
-    if sid and sid not in res["by_session"]:  # a session started since the cache was read is not "unknown" yet
+    if sid and sid not in res["by_session"] and _recheck_due(sid):  # a session started since the cache was read is not "unknown" yet
         res = accounts.resolver(fresh=True)
     found = accounts.of_session(sid, res) or accounts.of_instance(c.get("instance") or "", res)
     return found["account"] if found else ""
+
+
+def _recheck_due(sid: str) -> bool:
+    """Whether a session the account cache does not know may read it again now. Every ledger line looks its caller up,
+    and such a session read AgentHydra's session table and caches again for each one: about 12 ms a line on the shared
+    server's event loop (2026-10-16)."""
+    now = time.monotonic()
+    at = _rechecked.get(sid)
+    if at is not None and now - at < SESSION_RECHECK_S:
+        return False
+    if len(_rechecked) > 1024:  # a long-lived server meets many sessions: forget those whose window has passed
+        for old in [s for s, t in list(_rechecked.items()) if now - t >= SESSION_RECHECK_S]:
+            _rechecked.pop(old, None)
+    _rechecked[sid] = now
+    return True
 
 
 def _caller_fields(caller: dict | None) -> dict:

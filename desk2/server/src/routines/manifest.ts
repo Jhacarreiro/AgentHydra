@@ -5,7 +5,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { RoutineDefinition, RoutineKind, RoutineProposal } from '@shared/routines'
+import { CAMPAIGN_ID, CAMPAIGNS_MAX, GROUP_MAX, type RoutineDefinition, type RoutineKind, type RoutineProposal } from '@shared/routines'
 import { momentOf, parseCron, systemZone } from './cron'
 
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
@@ -53,7 +53,7 @@ const text = (v: unknown, key: string): string => {
 }
 
 /** The keys this contract knows; `tick` is refused with its replacement. */
-const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes']
+const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes', 'group', 'campaigns']
 /** A mode option: what the card shows (first letter capitalised) and what `modes.set` is handed. */
 export const MODE_OPTION = /^[a-z][a-z0-9-]{0,19}$/
 const MODES_MIN = 2
@@ -138,6 +138,47 @@ function setModes(def: RoutineDefinition, o: Record<string, unknown>, when: stri
   def.modes = { options: options as string[], set: modes.set }
 }
 
+/** A routine's group (the Tools tab's Routines folder), checked: 1 to GROUP_MAX characters on one line. Throws with the reason. */
+export function checkGroup(value: unknown): string {
+  if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('"group" must be a name on one line')
+  const group = value.trim()
+  if (!group || group.length > GROUP_MAX) throw new Error(`"group" must be 1 to ${GROUP_MAX} characters`)
+  return group
+}
+
+/** A routine's campaigns, checked: 1 to CAMPAIGNS_MAX distinct campaign ids (CAMPAIGN_ID). Throws with the reason. */
+export function checkCampaigns(value: unknown): string[] {
+  const shape = `"campaigns" must be a list of 1 to ${CAMPAIGNS_MAX} campaign ids (a-z, 0-9 and -, starting with a letter or digit)`
+  if (!Array.isArray(value) || value.length < 1 || value.length > CAMPAIGNS_MAX) throw new Error(shape)
+  if (!value.every((x) => typeof x === 'string' && CAMPAIGN_ID.test(x))) throw new Error(shape)
+  if (new Set(value).size !== value.length) throw new Error('"campaigns" must not name one campaign twice')
+  return value as string[]
+}
+
+/** The values a POST meta names, checked: a key it names is set (null removes it), an absent one is left alone. Throws with the
+ *  reason. */
+export interface MetaValues {
+  group?: string | null
+  campaigns?: string[] | null
+}
+
+export function checkMeta(meta: Record<string, unknown>): MetaValues {
+  for (const key of Object.keys(meta)) if (!['id', 'group', 'campaigns'].includes(key)) throw new Error(`unknown key "${key}"`)
+  const values: MetaValues = {}
+  if (meta.group !== undefined) values.group = meta.group === null ? null : checkGroup(meta.group)
+  if (meta.campaigns !== undefined) values.campaigns = meta.campaigns === null ? null : checkCampaigns(meta.campaigns)
+  return values
+}
+
+/** Sets the keys `values` names on an object (a routine's file, or its document's front matter), removing those it names as null. */
+export function applyMeta(into: Record<string, unknown>, values: MetaValues): void {
+  for (const key of ['group', 'campaigns'] as const) {
+    if (values[key] === undefined) continue
+    if (values[key] === null) delete into[key]
+    else into[key] = values[key]
+  }
+}
+
 /** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
 export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
   if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
@@ -161,6 +202,8 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
   setUntil(def, o)
   setDescribe(def, o, when)
   setModes(def, o, when)
+  if (o.group !== undefined) def.group = checkGroup(o.group)
+  if (o.campaigns !== undefined) def.campaigns = checkCampaigns(o.campaigns)
   return def
 }
 

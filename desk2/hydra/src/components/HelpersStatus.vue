@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The header's always-on helpers chip (owner, 2026-10-12: the background servers and watchers were
 // "random PowerShells that sit on their own, and Pythons that sit on their own"; the daemon owns them
-// now, server/src/helpers.ts). At a glance: how many run and the memory they hold, amber when one is
+// now, server/src/helpers.ts). At a glance: the helper count, amber when one is
 // down. Open: each helper with its memory drawn against the largest, a restart on each, and Stop all,
 // which acts at once and offers Undo. Hidden on a PC with no helpers.json.
 import { Boxes, Power, PowerOff, RotateCw } from '@lucide/vue'
@@ -106,7 +106,7 @@ function note(h: HelperRow): string | null {
             :aria-label="label"
           >
             <Boxes class="size-3.5" />
-            <span class="hidden tabular-nums sm:inline">{{ label }}</span>
+            <span class="hidden tabular-nums sm:inline">{{ rows.length }}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" class="w-72">

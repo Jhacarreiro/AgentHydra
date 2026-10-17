@@ -106,6 +106,7 @@ import { deleteCliInstance, listCliInstances } from './cli-instances'
 import {
   cliLoginEmail,
   credentialExpiry,
+  credentialSignIn,
   credPath,
   landLogin,
   type PortableLogin,
@@ -149,6 +150,9 @@ interface SyncState {
   hash: string
   /** A desktop login: its cookie database's mtime when last read or written. */
   cookies?: number
+  /** A CLI login: which sign-in it was then (credentialSignIn). Another file of the same sign-in is a
+   *  refresh of it, never a new sign-in. */
+  signIn?: number
 }
 
 /** An instance deleted here, waiting for its row's removal marker to reach the store. */
@@ -214,6 +218,21 @@ function writeConfig(c: SyncConfig): void {
 }
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+
+/** Two credential files whose sign-ins (credentialSignIn) are this close are one sign-in: a refresh
+ *  writes it as its own clock's now plus what the server says is left, so it moves by the request's
+ *  time and, for a login another PC refreshed, by the two clocks' difference. */
+const SAME_SIGN_IN_MS = 5 * 60_000
+const sameSignIn = (a: number, b: number | undefined): boolean =>
+  !!a && !!b && Math.abs(a - b) <= SAME_SIGN_IN_MS
+
+/** What this PC and the store agree on for a CLI login: the store's version and this credential file. */
+const agreed = (version: number, credentials: string): SyncState => {
+  const signIn = credentialSignIn(credentials)
+  return signIn
+    ? { version, hash: sha256(credentials), signIn }
+    : { version, hash: sha256(credentials) }
+}
 
 /** Encrypt one login for the store: base64 of {iv, tag, data}, its id (a CLI instance's, a desktop
  *  account's uuid) bound in as AAD. */
@@ -770,7 +789,7 @@ async function uploadLogin(
     meta: { num: login.num, acct, expiresAt, by, at },
   })
   if (r.status === 200 && typeof r.json?.version === 'number') {
-    c.state[login.id] = { version: r.json.version, hash: sha256(login.credentials) }
+    c.state[login.id] = agreed(r.json.version, login.credentials)
     store.set(login.id, {
       version: r.json.version,
       num: login.num,
@@ -826,7 +845,7 @@ async function landPortableLogin(
   if (row.written) {
     // The hash of what was landed, not of the file now: `claude auth status` (landLogin's check)
     // can refresh the login, and that newer file must read as a change here and go up.
-    c.state[slot] = { version, hash: sha256(login.credentials) }
+    c.state[slot] = agreed(version, login.credentials)
     out.landed++
     note(
       c,
@@ -1108,7 +1127,9 @@ async function syncWithoutLogin(
 
 /** The row says signed out (another PC logged it out) and this PC holds a live login for it. A login
  *  signed in here after the logout is the newer word and goes up in its place; the one this PC last
- *  shared, or any written before the logout, signs out here (once no session runs on it). */
+ *  shared, or any written before the logout, signs out here (once no session runs on it). A running
+ *  session keeps refreshing the login it is on, so the file changes and is written after the logout
+ *  without being a new sign-in: a file of the sign-in this PC last agreed on is that login, refreshed. */
 async function meetSignOut(
   l: Live,
   c: SyncConfig,
@@ -1117,14 +1138,15 @@ async function meetSignOut(
   by: string,
   inst: CliInstance,
   slot: string,
-  hash: string,
+  text: string,
 ): Promise<void> {
   const remote = store.get(slot)!
   const st = c.state[slot]
+  const refreshed = sameSignIn(credentialSignIn(text), st?.signIn)
   // This PC already took that logout, so any login here now is a new sign-in.
   const signedInSince =
     st?.version === remote.version ||
-    (st?.hash !== hash && mtimeOf(credPath(inst.configDir)) > remote.at)
+    (st?.hash !== sha256(text) && !refreshed && mtimeOf(credPath(inst.configDir)) > remote.at)
   if (signedInSince) {
     await uploadHere(l, c, store, out, by, inst, slot, remote.version)
     return
@@ -1156,6 +1178,12 @@ async function syncCliInstance(
   const remote = store.get(slot)
   const st = c.state[slot]
   const hash = sha256(text)
+  // A sync state written before states said which sign-in they agreed on learns it from the file it
+  // agreed on (meetSignOut).
+  if (st?.hash === hash && st.signIn === undefined) {
+    const signIn = credentialSignIn(text)
+    if (signIn) st.signIn = signIn
+  }
   // The CLI keeps the file but empties its tokens when Anthropic ends the login (revoked, or its
   // refresh refused): signed out here, and nothing to share. Its row says so (loginSyncStatus); it is
   // no sync failure, so it never takes the dialog's error line (owner, 2026-10-02: one dead login read
@@ -1167,7 +1195,7 @@ async function syncCliInstance(
     return
   }
   if (remote?.signedOut) {
-    if (!hollow) await meetSignOut(l, c, store, out, by, inst, slot, hash)
+    if (!hollow) await meetSignOut(l, c, store, out, by, inst, slot, text)
     return
   }
   if (remote && st && st.version === remote.version) {
@@ -1184,7 +1212,7 @@ async function syncCliInstance(
   const theirs = await downloadLogin(l, store, c, out, slot)
   if (!theirs) return
   if (theirs.credentials === text) {
-    c.state[slot] = { version: remote.version, hash }
+    c.state[slot] = agreed(remote.version, text)
     out.unchanged++
     return
   }
@@ -1194,7 +1222,7 @@ async function syncCliInstance(
   else if (mine === their) {
     // The same login written two ways (one expiry): neither is newer. Agree on it, or this pass and
     // the landing's newer-copy check would refuse each other every 30 seconds (#125, 2026-10-03).
-    c.state[slot] = { version: remote.version, hash }
+    c.state[slot] = agreed(remote.version, text)
     out.unchanged++
   } else await landPortableLogin(c, out, { ...theirs, id: inst.id }, remote.version, slot)
 }

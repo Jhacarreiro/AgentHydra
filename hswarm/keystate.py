@@ -25,8 +25,9 @@ from . import config
 
 LOCK_WAIT_S = 2.0          # a write waits this long for another process's write before giving up (the pool keeps its own copy)
 TOMBSTONE_KEEP_S = 86400.0 # an emptied row is kept this long so every process sees it go (readers re-sync every few seconds)
-# What a recovery keeps: the last balance reading, and the region the key is served on (client.find_region).
-_READINGS = ("balance_usd", "balance_at", "probed_at", "free_left", "base_url")
+# What a recovery keeps: the last balance reading, the region the key is served on (client.find_region), and the models
+# whose daily allowance it has spent (client.KeyPool.spend): a 200 on one model says nothing about another's cap.
+_READINGS = ("balance_usd", "balance_at", "probed_at", "free_left", "base_url", "spent")
 _KEEP = (*_READINGS, "tools_refused_at")  # what a key's row keeps once its rest has run out (prune)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS keys (fp TEXT PRIMARY KEY, entry TEXT NOT NULL, rev INTEGER NOT NULL, ts REAL NOT NULL) WITHOUT ROWID;
@@ -285,7 +286,12 @@ def prune(live: set[str]) -> dict:
                     out["tombstones"] += 1
             elif (not e.get("disabled") and not e.get("broke") and not e.get("strikes")
                   and float(e.get("rest_until") or 0.0) < now):
-                tx.put(fp, {k: e[k] for k in _KEEP if k in e})
+                kept = {k: e[k] for k in _KEEP if k in e}
+                if "spent" in kept:  # only the models still waiting for their refill
+                    kept["spent"] = {m: t for m, t in kept["spent"].items() if t > now}
+                    if not kept["spent"]:
+                        del kept["spent"]
+                tx.put(fp, kept)
                 out["expired"] += 1
             else:
                 out["kept"] += 1

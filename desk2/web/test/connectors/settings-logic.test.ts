@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConnectorView } from '@shared/connectors'
-import { note, pollDelay, rowButtons, stateLabel, stateTone, versionLabel } from '@/components/connectors/settings-logic'
+import { canTurnOn, note, pollDelay, rowButtons, stateLabel, stateTone, typeLabel, versionLabel } from '@/components/connectors/settings-logic'
 
 const view = (o: Partial<ConnectorView>): ConnectorView => ({
   id: 'repoyeti', name: 'RepoYeti', blurb: 'b', homepage: 'https://example.com', installable: true, pane: false,
@@ -10,11 +10,11 @@ const view = (o: Partial<ConnectorView>): ConnectorView => ({
 describe('connector row', () => {
   test('words and tones per state', () => {
     expect(stateLabel(view({ state: 'running' }))).toBe('Running')
-    expect(stateLabel(view({ state: 'installed' }))).toBe('Installed, not running')
+    expect(stateLabel(view({ state: 'installed' }))).toBe('Stopped')
     expect(stateLabel(view({ state: 'absent' }))).toBe('Not installed')
-    expect(stateLabel(view({ state: 'installing', reason: 'Downloading 1 / 2 MB' }))).toBe('Installing… Downloading 1 / 2 MB')
+    expect(stateLabel(view({ state: 'installing', reason: 'Downloading 1 / 2 MB' }))).toBe('Installing…')
     expect(stateLabel(view({ state: 'starting' }))).toBe('Starting…')
-    expect(stateLabel(view({ state: 'failed', reason: 'bad checksum' }))).toBe('Failed: bad checksum')
+    expect(stateLabel(view({ state: 'failed', reason: 'bad checksum' }))).toBe('Failed')
     expect(['running', 'installing', 'failed', 'absent'].map((s) => stateTone(view({ state: s as ConnectorView['state'] })))).toEqual(['ok', 'busy', 'bad', 'idle'])
   })
 
@@ -26,6 +26,12 @@ describe('connector row', () => {
     expect(rowButtons(view({ state: 'installed' })).start).toBe(true)
     expect(rowButtons(view({ state: 'running', pane: true, url: 'http://127.0.0.1:1' })).open).toBe(true)
     expect(rowButtons(view({ state: 'running', pane: false, url: 'http://127.0.0.1:1' })).open).toBe(false)
+  })
+
+  test('the switch: a connector not on this PC (or still installing) cannot be turned on; the type says built in or app', () => {
+    expect(['absent', 'installing', 'installed', 'starting', 'running', 'failed'].map((s) => canTurnOn(view({ state: s as ConnectorView['state'] })))).toEqual([false, false, true, true, true, true])
+    expect(typeLabel(view({ builtIn: true }))).toBe('Built in')
+    expect(typeLabel(view({}))).toBe('App')
   })
 
   test('version, note and poll speed', () => {

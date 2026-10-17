@@ -1,6 +1,7 @@
 // Routines (shared/routines.ts says what a routine is and what its file holds). GET /api/routines answers what its last look
-// saw (?fresh=1 looks first); POST /api/routines does one action: run, pause, propose, approve, move (any caller), resume,
-// discard, edit, mode (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
+// saw (?fresh=1 looks first); POST /api/routines does one action: run, pause, propose, approve, move, meta (any caller), resume,
+// discard, edit, mode (the window only), and turns the manager on or off with `enabled` (the window only). GET
+// /api/routines/:id/campaigns answers the ledgers of the campaigns a routine names (routines/campaigns.ts). A look reads each routine's
 // file, runs each status command, reads each Windows task in one call, judges (routines/decide.ts) and starts the runs that
 // fell due. Its memory (each routine's last 30 runs, the one running, the newest slot it ran for, paused) is
 // <home>/routines.json, so a restart goes on watching a run it had not seen end (a command run's runner, routines/runner.ts,
@@ -22,6 +23,7 @@ import { describeCaller } from '../caller'
 import { ConnectionsClient } from '../connectors/connections-client'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { mainConfigFile } from '../engine/chat-runtime'
+import { campaignsReader } from '../routines/campaigns'
 import { sdkDescriber } from '../routines/describe'
 import { openCentral } from '../routines/manager-central'
 import { ROUTINE_ID } from '../routines/manifest'
@@ -48,7 +50,9 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   let made: ConnectionsClient | null = null
   const connections = (): ConnectionsClient =>
     given ?? (made ??= new ConnectionsClient(mainConfigFile(ctx.deps.mainClaudeJson as string | null | undefined, ctx.deps.agentHydraMcp)))
-  const central = openCentral(ctx.home, (tool, params) => connections().call({ cwd: ctx.home, sessionId: null }, tool, params), platform)
+  const call = (tool: string, params: Record<string, unknown>) => connections().call({ cwd: ctx.home, sessionId: null }, tool, params)
+  const central = openCentral(ctx.home, call, platform)
+  const campaigns = campaignsReader(call, opts.now ?? Date.now)
   const m: Manager = {
     ctx,
     routinesDir,
@@ -96,6 +100,14 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const id = c.req.param('id')
     const details = ROUTINE_ID.test(id) ? detailsFor(m, id, c.req.query('before'), c.req.query('limit')) : null
     return details ? c.json(details) : c.json({ error: 'no such routine' }, 404)
+  })
+
+  // A routine's campaigns, read from the CrAInium's Campaigns arm (routines/campaigns.ts): the ledger of each one it names.
+  app.get('/api/routines/:id/campaigns', async (c) => {
+    const id = c.req.param('id')
+    const seen = ROUTINE_ID.test(id) ? m.seen.find((x) => x.entry.id === id) : undefined
+    if (!seen) return c.json({ error: 'no such routine' }, 404)
+    return c.json(await campaigns.read(id, seen.entry.def?.campaigns ?? [], c.req.query('fresh') === '1'))
   })
 
   app.get('/api/routines', async (c) => c.json(await readRoutines(m, c.req.query('fresh') === '1')))

@@ -23,11 +23,15 @@ const LABEL = /^[a-z0-9][a-z0-9._-]{0,62}$/
 const REPO = /^[a-z0-9][\w.-]{0,99}\/[\w.-]{1,100}$/
 const KEY = /^ed25519:[A-Za-z0-9_-]{43}$/
 
-/** The local contract's keys a routine document's front matter carries (its name is `title`, its prompt the body). */
-const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes']
-const CENTRAL_KEYS = ['kind', 'format', 'title', 'description', 'why', 'timeZone', 'workdir', 'runsOn', 'approval']
-/** What an approval does not sign: the approval itself, and the one-line description a store's page shows. */
-const UNSIGNED = ['approval', 'description']
+/** The local contract's keys a routine document's front matter carries (its name is `title`, its prompt the body). `group` and
+ *  `campaigns` (shared/routines.ts, GROUP AND CAMPAIGNS) are contract keys too. Rollout order: a Desk older than this code
+ *  refuses a document that carries either one ('unknown key'), so every runner gets this code before any document carries
+ *  them (one runner today). */
+const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes', 'group', 'campaigns']
+const CENTRAL_KEYS = ['kind', 'format', 'title', 'description', 'why', 'timeZone', 'workdir', 'runsOn', 'eachRunner', 'approval']
+/** What an approval does not sign: the approval itself, the one-line description a store's page shows, and the group and
+ *  campaigns a routine works for, so setting them leaves the routine approved and running. */
+const UNSIGNED = ['approval', 'description', 'group', 'campaigns']
 
 export interface Approval {
   by: string
@@ -58,6 +62,8 @@ export interface RoutineDoc {
   sha: string
   name: string
   runsOn: string[]
+  /** Every runner carrying its labels runs it for itself, with no claim: work each computer does on its own data. */
+  eachRunner: boolean
   why: string | null
   approval: Approval | null
 }
@@ -195,6 +201,8 @@ export function parseDoc(id: string, text: string): RoutineDoc {
   if (front.format !== FORMAT) throw new Error(`"format" must be "${FORMAT}", the only one this AgentHydra reads`)
   const name = nonEmpty(front.title, 'title')
   const runsOn = labelsOf(front.runsOn)
+  if (front.eachRunner !== undefined && typeof front.eachRunner !== 'boolean') throw new Error('"eachRunner" must be true or false')
+  const eachRunner = front.eachRunner === true
   const why = front.why === undefined ? null : nonEmpty(front.why, 'why')
   if (why !== null && why.length > WHY_MAX) throw new Error(`"why" must be at most ${WHY_MAX} characters`)
   if (front.description !== undefined && typeof front.description !== 'string') throw new Error('"description" must be a string')
@@ -207,7 +215,7 @@ export function parseDoc(id: string, text: string): RoutineDoc {
   if (front.workdir !== undefined && front.cwd !== undefined) throw new Error('a routine has "workdir" (a folder in a repo) or "cwd" (a folder on its computer), not both')
   const approval = front.approval === undefined ? null : approvalOf(front.approval)
   checkDefinition(id, contractOf({ front, body, name }, placeText(front)))
-  return { id, front, body, sha: contentSha(front, body), name, runsOn, why, approval }
+  return { id, front, body, sha: contentSha(front, body), name, runsOn, eachRunner, why, approval }
 }
 
 /** A path with a leading ~/ in this runner's home folder, forward slashes. */
@@ -243,11 +251,12 @@ export function definitionOf(doc: RoutineDoc): RoutineDefinition {
 }
 
 /** Where a routine whose runsOn is these labels runs, seen from this runner. It runs only on a runner that carries every label
- *  it names: `here` when one of them is this runner's name (pinned: no other runner runs it, so it needs no claim), `shared`
- *  when none is (any runner carrying them may run it, one per slot by a claim on the run board), else `elsewhere`, with why. */
-export function placementOf(runsOn: string[], runner: Runner): { placement: Placement; why: string | null } {
+ *  it names: `here` when one of them is this runner's name (pinned: no other runner runs it, so it needs no claim) or when
+ *  it is an eachRunner routine (every such runner runs its own, so none claims), `shared` when neither (any runner carrying
+ *  them may run it, one per slot by a claim on the run board), else `elsewhere`, with why. */
+export function placementOf(runsOn: string[], runner: Runner, eachRunner = false): { placement: Placement; why: string | null } {
   if (!runsOn.every((l) => runner.labels.includes(l))) return { placement: 'elsewhere', why: `it runs on ${runsOn.join(', ')}, not on this computer` }
-  return { placement: runsOn.includes(runner.id) ? 'here' : 'shared', why: null }
+  return { placement: eachRunner || runsOn.includes(runner.id) ? 'here' : 'shared', why: null }
 }
 
 /** The part of `path` inside folder `root` ('' for the folder itself), forward slashes, or null when it is not inside. A

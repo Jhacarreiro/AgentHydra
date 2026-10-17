@@ -60,9 +60,6 @@
     "desk2/server/src/devservers/takeover.ts": {
       "asymptotic-waste/quadratic-accumulate": 1
     },
-    "desk2/server/src/engine/chat-manager-helpers.ts": {
-      "asymptotic-waste/membership-scan-in-loop": 1
-    },
     "desk2/server/src/engine/chat-manager-moves.ts": {
       "asymptotic-waste/nested-data-loop": 1
     },

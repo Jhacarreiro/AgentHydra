@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import sys
 from pathlib import Path
@@ -376,7 +377,7 @@ def test_a_disabled_key_is_re_read_only_on_its_long_window_and_a_top_up_still_he
     assert not c.pool.status()[0]["disabled"] and c.pool.available() == 3
 
 
-def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order():
+def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order(monkeypatch):
     flight = {"now": 0, "peak": 0}
 
     async def handler(req: httpx.Request):
@@ -387,10 +388,17 @@ def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order():
         return _balance("-1.00", available=False) if _key_of(req) == K[1] else _balance("2.00")
 
     c = _client_with_transport(handler)
+    writes = []
+    real = keystate.txn
+    monkeypatch.setattr(keystate, "txn", lambda: writes.append(1) or real())
     rows = asyncio.run(c.balances())
     assert flight["peak"] == 3, flight  # one by one, sixteen real keys took 7 s
+    # Every reading in one write: one per key held the shared server's event loop for most of a doctor (2026-10-16).
+    assert len(writes) == 1
     assert [r["fingerprint"] for r in rows] == [config.fingerprint(k) for k in K]
     assert [r["usable"] for r in rows] == [True, False, True]
+    st = KeyPool(K).status()
+    assert [s["disabled"] for s in st] == [False, True, False] and st[0]["balance_usd"] == 2.0
     assert [r["fingerprint"] for r in asyncio.run(c.balances([K[2]]))] == [config.fingerprint(K[2])]
 
 
@@ -488,6 +496,44 @@ def test_pools_in_one_process_read_each_row_from_the_database_once(monkeypatch):
     assert 500 <= sum(map(len, fetched)) < 1000  # ...read from the database once
 
 
+def test_a_pool_nobody_holds_is_freed_once_its_queued_writes_are_out():
+    """The process kept every KeyPool it ever built so a queued write would be flushed at exit, and the shared server
+    builds dozens per doctor and per console read: its RSS reached 1.25 GB (2026-10-16). A pool is kept only while
+    it has a write queued."""
+    import gc
+    import weakref
+
+    p = KeyPool(K)
+    p.rest(K[0], 60.0, status=429)  # the first rest after a quiet spell is written at once
+    p.rest(K[1], 60.0, status=429)  # the next one waits for the process's merged write
+    pool = weakref.ref(p)
+    del p
+    gc.collect()
+    assert pool() is not None  # its owner let go, but its queued rest still has to be written
+    pool().flush()
+    assert {config.fingerprint(K[0]), config.fingerprint(K[1])} <= set(keystate.read_all())
+    gc.collect()
+    assert pool() is None
+
+
+def test_the_keys_list_is_read_off_the_event_loop(monkeypatch):
+    """hswarm_keys list reads every provider's pool, 0.3 s for 45 of them, and ran on the shared server's event loop,
+    where GET /health waited for it (2026-10-16)."""
+    import threading
+
+    from hswarm import keys, mcp_server
+
+    read_on = []
+    monkeypatch.setattr(keys, "report", lambda *a, **kw: read_on.append(threading.get_ident()) or {"providers": {}})
+
+    async def listed():
+        assert await mcp_server.hswarm_keys() == {"providers": {}}
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(listed())
+    assert read_on and read_on != [loop_thread]
+
+
 def test_a_failed_probe_counts_as_a_probe_and_leaves_every_record_alone():
     gets = []
 
@@ -533,19 +579,95 @@ def test_the_providers_own_flag_decides_and_the_number_only_when_there_is_none()
     assert p.note_balance(K[2], 0.0, None) is False and p.status()[2]["broke"]  # no flag: at or under zero is empty
 
 
-def test_a_key_whose_daily_quota_is_spent_rests_until_the_reset_not_twenty_seconds():
-    """2026-09-24 (jobs 20260924-154437-ebda, 20260924-205816-dd94): Gemini's free tier answers the 21st request of
-    the day with a 429 whose quotaId says PerDay. Rested 20 s, the spent key was handed straight back to every task;
-    rested until the reset, the pool reads empty, so route_plan drops the leg and the task fails over at once."""
+def _gemini_day_spent(model: str, retry_s: int | None = 66566) -> dict:
+    """Gemini's 21st request of the day for one model on one project, as its OpenAI-compatible endpoint words it
+    (2026-10-17, 05:30 UTC: limit 20, and RetryInfo 66,566 s, which is 00:00 UTC)."""
+    details = [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{
+        "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+        "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+        "quotaDimensions": {"model": model, "location": "global"}, "quotaValue": "20"}]}]
+    if retry_s is not None:
+        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": f"{retry_s}s"})
+    return [{"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota",
+                       "details": details}}]
+
+
+def _gemini_client(handler, keys) -> "ChatClient":
+    from hswarm.client import ChatClient
+
+    c = ChatClient(api_keys=keys, provider="gemini")
+    c._http = httpx.AsyncClient(base_url="https://gemini.test", transport=httpx.MockTransport(handler), headers={"Content-Type": "application/json"})
+    return c
+
+
+# Contract: a day-spent answer benches the key for THAT model only, until the moment Google's own RetryInfo names; the
+# key's other models keep serving, and the spent model is not asked on it again before then. Regression: the free tier's
+# daily cap is per project PER MODEL (quotaId ...PerDayPerProjectPerModel, quotaDimensions.model), measured 2026-10-17 on
+# one key: the 21st 3.8 Flash request answered 429 and 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite then answered 200 on the
+# same key. The whole key rested until 07:00 UTC, so three of its four daily allowances went unused, and seven hours
+# after Google had already given the fourth back.
+def test_a_day_spent_model_benches_that_key_for_that_model_only_until_google_says():
+    spent_key, other = "AIza-test-spent-0001", "AIza-test-other-0002"
+    sent = []
+
+    def handler(req):
+        key, model = req.headers["Authorization"].split()[-1], json.loads(req.content)["model"]
+        sent.append((key, model))
+        return httpx.Response(429, json=_gemini_day_spent(model)) if (key, model) == (spent_key, "gemini-3.8-flash") else _ok(model)
+
+    c = _gemini_client(handler, [spent_key, other])
+    ask = lambda model: asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], model=model, rest_budget_s=5), timeout=5))
+    ask("gemini-3.8-flash")  # the spent key refuses, the other serves
+    ask("gemini-3.7-flash")
+    ask("gemini-3.7-flash")
+    ask("gemini-3.8-flash")
+    assert (spent_key, "gemini-3.7-flash") in sent  # its other model still serves
+    assert sent.count((spent_key, "gemini-3.8-flash")) == 1  # the spent model is not asked on it again
+    row = c.pool.status()[0]
+    assert row["state"] == "ok" and row["spent"]["gemini-3.8-flash"] == pytest.approx(66566, abs=60)
+    assert c.pool.soonest_wake(model="gemini-3.8-flash") == 0  # the other key still serves 3.8 Flash
+
+    # A pool whose every key has spent the model: nothing is sent, the leg fails over (NoUsableKey), and the route
+    # health reads the wait Google named, for that model only.
+    from hswarm.client import NoUsableKey
+
+    lone_sent = []
+    lone = _gemini_client(lambda req: lone_sent.append(1) or httpx.Response(429, json=_gemini_day_spent("gemini-3.8-flash")),
+                          ["AIza-test-lone-0003"])
+    for _ in range(2):
+        with pytest.raises(NoUsableKey):
+            asyncio.run(asyncio.wait_for(lone.chat([{"role": "user", "content": "x"}], model="gemini-3.8-flash", rest_budget_s=5), timeout=5))
+    assert len(lone_sent) == 1  # the second call sent nothing
+    assert lone.pool.soonest_wake(model="gemini-3.8-flash") == pytest.approx(66566, abs=60)
+    assert lone.pool.soonest_wake(model="gemini-3.7-flash") == 0
+
+
+# Contract: Gemini's daily allowance comes back at 00:00 UTC, the moment its own refusal names ("Please retry in
+# 18h29m26s" and RetryInfo 66,566 s at 05:30 UTC, 2026-10-17), so a spent key with no usable hint rests until then.
+# Regression: it rested until 07:00 UTC (midnight Pacific, per the docs), seven hours past the refill every day.
+@pytest.mark.parametrize("now,seconds", [
+    (dt.datetime(2026, 10, 17, 5, 29, 25, tzinfo=dt.timezone.utc), 66635.0),
+    (dt.datetime(2026, 10, 17, 23, 59, 0, tzinfo=dt.timezone.utc), 60.0),
+    (dt.datetime(2026, 11, 2, 7, 30, 0, tzinfo=dt.timezone.utc), 59400.0),
+])
+def test_the_daily_quota_clock_turns_at_midnight_utc(now, seconds):
     from hswarm import client as client_mod
 
-    body = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [{"violations": [
-        {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}
-    c = _client_with_transport(lambda req: httpx.Response(429, headers={"retry-after": "37"}, json=body), keys=K[:1])
-    with pytest.raises(ApiError):
-        asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
-    assert c.pool.available() == 0
-    assert c.pool.soonest_wake() == pytest.approx(client_mod._until_quota_reset(), abs=60)
+    assert client_mod._until_quota_reset(now) == seconds
+
+
+def test_a_day_spent_refusal_with_no_long_hint_rests_until_midnight_utc():
+    """A PerDay 429 whose RetryInfo is missing, or names seconds (seen 2026-09-24), is not believed for a daily cap:
+    the model waits for the clock instead of being handed straight back."""
+    from hswarm import client as client_mod
+
+    from hswarm.client import NoUsableKey
+
+    c = _gemini_client(lambda req: httpx.Response(429, headers={"retry-after": "37"}, json=_gemini_day_spent("gemini-3.8-flash", 41)),
+                       ["AIza-test-short-0004"])
+    with pytest.raises(NoUsableKey):
+        asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], model="gemini-3.8-flash", rest_budget_s=5), timeout=5))
+    assert c.pool.soonest_wake(model="gemini-3.8-flash") == pytest.approx(client_mod._until_quota_reset(), abs=60)
 
 
 _GEMINI_ZERO = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [{"metadata": {
@@ -556,45 +678,69 @@ _GEMINI_ZERO = {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details"
     ({"retry-after": "7"}, _GEMINI_ZERO),  # Gemini says it in the body
     ({"x-ratelimit-limit-req-minute": "0", "x-ratelimit-remaining-req-minute": "0"}, {"message": "Requests rate limit exceeded"}),  # Mistral, in a header
 ])
-def test_a_key_with_a_zero_quota_where_the_call_landed_rests_half_an_hour_not_twenty_seconds(headers, body):
+def test_a_key_with_a_zero_quota_where_the_call_landed_rests_until_the_daily_reset(headers, body):
     """2026-09-26: every Gemini key answered 429 with quota_limit_value "0" for its project in us-south1. Rested 20 s,
-    the pool was rotated for 34 minutes per task by 124 builders, all of which died; rested long, the leg leaves the
-    plan until the keys wake. The same day every sampled Mistral key answered 429 with a request limit of 0 a minute."""
+    the pool was rotated for 34 minutes per task by 124 builders, all of which died. Rested 30 minutes, each of the
+    549 such keys (of 726, 2026-10-17) was asked again 48 times a day; the zero held on 60 of 60 re-asks that morning,
+    on another model too. Rested until the daily reset, the leg leaves the plan until the keys wake. The same day in
+    September every sampled Mistral key answered 429 with a request limit of 0 a minute."""
     from hswarm import client as client_mod
 
     c = _client_with_transport(lambda req: httpx.Response(429, headers=headers, json=body), keys=K[:1])
     with pytest.raises(ApiError):
         asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
     assert c.pool.available() == 0
-    assert c.pool.soonest_wake() == pytest.approx(client_mod.ZERO_QUOTA_REST_S, abs=60)
+    assert c.pool.soonest_wake() == pytest.approx(client_mod._until_quota_reset(), abs=60)
 
 
-# Contract: a zero quota said by ZERO_QUOTA_POOL_KEYS distinct keys with no 200 between rests the whole pool after that
-# many requests, and fewer keys saying it before a 200 rest only themselves. Regression: 2026-10-13, every Gemini key
-# answered a zero quota in us-south1 and each call could try every one of the 715 keys before failing over (4,095
-# Gemini requests in an hour for one job).
-def test_a_zero_quota_said_by_several_keys_rests_the_whole_pool_without_trying_every_key():
-    from hswarm import client as client_mod
-
-    keys = [f"sk-zero{i:04d}" for i in range(12)]
+# Contract: a zero quota rests only the key that said it; a key that serves keeps serving, however many zero answers come
+# first, and a zero key is not asked again before the reset. Regression: 2026-10-13 to 10-17, five zero answers in a row
+# rested every key in the pool for 30 minutes. 549 of the 726 Gemini keys answer a zero quota and 76 answer 200 (census,
+# 2026-10-17), so a run of five zeros came before a 200 about half the time: all 726 keys, the 76 live ones included,
+# sat resting, and Gemini answered no HSwarm call from 07:00 UTC on 10-13 to 10-17.
+def test_a_zero_quota_rests_only_the_keys_that_said_it_and_the_live_ones_keep_serving():
+    zero = [f"sk-zero{i:04d}" for i in range(8)]
+    live = [f"sk-live{i:04d}" for i in range(4)]
     sent = []
 
-    def zero(req):
-        sent.append(req.headers["Authorization"])
-        return httpx.Response(429, json=_GEMINI_ZERO)
+    def handler(req):
+        key = req.headers["Authorization"].split()[-1]
+        sent.append(key)
+        return httpx.Response(429, json=_GEMINI_ZERO) if key in zero else _ok()
 
-    c = _client_with_transport(zero, keys=keys)
+    c = _client_with_transport(handler, keys=zero + live)
+    for _ in range(3):
+        asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
+    assert sorted(k for k in sent if k in zero) == zero  # each asked once, and not again before the reset
+    assert c.pool.available() == len(live)
+
+    # A pool where every key says it: each is asked once, and the pool then reads empty until the reset, which takes the
+    # leg out of route_health; nothing is asked again every half hour.
+    keys = [f"sk-none{i:04d}" for i in range(12)]
+    sent.clear()
+    c = _client_with_transport(lambda req: sent.append(req.headers["Authorization"]) or httpx.Response(429, json=_GEMINI_ZERO), keys=keys)
     with pytest.raises(ApiError):
         asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
-    assert len(sent) == client_mod.ZERO_QUOTA_POOL_KEYS
-    assert c.pool.available() == 0 and c.pool.soonest_wake() == pytest.approx(client_mod.ZERO_QUOTA_REST_S, abs=60)
+    assert len(sent) == len(keys) and len(set(sent)) == len(keys)
+    from hswarm import client as client_mod
 
-    keys = [f"sk-live{i:04d}" for i in range(12)]  # fresh keys: the first pool's rests are in the shared key state
-    few = set(keys[:client_mod.ZERO_QUOTA_POOL_KEYS - 1])  # fewer dead keys, then a live one: only they rest
-    c = _client_with_transport(lambda req: httpx.Response(429, json=_GEMINI_ZERO) if req.headers["Authorization"].split()[-1] in few
-                               else _ok(), keys=keys)
-    asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
-    assert c.pool.available() == len(keys) - len(few)
+    assert c.pool.available() == 0 and c.pool.soonest_wake() == pytest.approx(client_mod._until_quota_reset(), abs=60)
+
+
+# Contract: a key the provider says was leaked is disabled at its first refusal; another key takes the call. Regression:
+# 86 of the 726 Gemini keys answer 403 "Your API key was reported as leaked" (census, 2026-10-17), a block that does not
+# lift, and each sat on the 401/403 strike ladder (ten minutes, then twenty, forty...) to be asked again, none disabled.
+def test_a_key_google_reports_as_leaked_is_disabled_at_its_first_refusal():
+    from hswarm.client import REVOKED
+
+    leaked = {"error": {"code": 403, "message": "Your API key was reported as leaked. Please use another API key.",
+                        "status": "PERMISSION_DENIED"}}
+    c = _client_with_transport(lambda req: httpx.Response(403, json=leaked) if req.headers["Authorization"].endswith(K[0]) else _ok(),
+                               keys=K[:2])
+    r = asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
+    assert r.content == "OK"
+    row = c.pool.status()[0]
+    assert row["disabled"] and row["disabled_reason"] == REVOKED
 
 
 # Contract: "ready" in the console means the provider accepted the key. A key it refuses (401) goes to the disabled

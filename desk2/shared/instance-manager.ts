@@ -8,7 +8,7 @@
 // those chats there through AgentHydra's own move, confirms they landed, and starts each one again with a note saying
 // why. A chat that only ever ran in AgentHydra's own window is not its business: nothing is opened for it. The server
 // keeps it (server/src/plugins/74-instance-manager.ts, deciding in server/src/instance-manager/); GET
-// /api/instance-manager answers what it saw last and Settings > Managers draws it. Plain types only.
+// /api/instance-manager answers what it saw last and AgentHydra's Tools > Instance manager draws it. Plain types only.
 
 /** How often it looks. A look is two local reads of AgentHydra (about 0.2 s). */
 export const INSTANCE_MANAGER_EVERY_MS = 20_000

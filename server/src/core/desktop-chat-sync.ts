@@ -35,6 +35,15 @@
 // matches a fresh stream. The Worker refuses chunks past its room for chats (400 MB by default, under
 // D1's 500 MB free-plan database the logins share), which the dialog reports as such.
 //
+// THE STORE IS A RELAY (owner, 2026-10-14): each PC keeps its own copy, and the store holds a chunk only
+// until every PC reading the chat has it. Keeping every live chat whole filled the 400 MB room on
+// 2026-10-16 and again on 10-17 (385 MB of one PC's 122 chats, no orphans left). A PC acks what it took
+// once its state is saved (ackTaken) and the Worker deletes what every reader holds; a PC that finds the
+// chunks gone (410: it joined later, lost its copy or was away two weeks) asks for the chat again like
+// one that finds chunks missing (askAgain). Each stream is named (meta.o): a PC that started a chat over
+// gives it a new name, and a PC reading it takes the new stream from its first chunk unless what it holds
+// is already the whole of it. When the room runs short, a PC sends its most recently active chats first.
+//
 // A STREAM IS ONE SESSION'S. A record can move to another session (a Hydra Desk chat or a desktop record
 // whose session changed): the agreed position belongs to the old session's stream, so the chat starts
 // over in the store and the new session goes up from byte 0, archived or not. Builds before 2026-10-16
@@ -48,7 +57,7 @@
 // The state file keeps, per chat, what the last pass agreed with the store, so the next pass can tell
 // who changed what. Failures are the chat sync's own: the caller keeps them apart from the logins'.
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { CONFIG_DIR } from '../config'
@@ -129,6 +138,11 @@ interface ChatState {
   /** Another PC's chat whose chunks the store lacks: this PC asked the PC it started on to send it again
    *  (askAgain) and takes nothing from the row while it still carries the ask. */
   asked?: boolean
+  /** The stream (the row's meta.o): the one this PC writes of its own chat, a new one each time it starts
+   *  over, or the one it took of another PC's. None for a stream a build before the relay began. */
+  stream?: string
+  /** Another PC's chat: the store was told this PC holds every chunk below this seq (ackTaken). */
+  acked?: number
 }
 
 interface StateFile {
@@ -139,9 +153,17 @@ interface StateFile {
 interface StoreRow {
   id: string
   version: number
-  /** Plain: kind, session id, the PC it started on, stream bytes, archived, and `rs` when a reading PC
-   *  found chunks missing and asked for the chat again. */
-  meta: { k?: string; s?: string; pc?: string; b?: number; a?: number; rs?: number } | null
+  /** Plain: kind, session id, the PC it started on, stream bytes, archived, the stream's name, and `rs`
+   *  when a reading PC found chunks missing and asked for the chat again. */
+  meta: {
+    k?: string
+    s?: string
+    pc?: string
+    b?: number
+    a?: number
+    o?: string
+    rs?: number
+  } | null
   updatedAt?: number
 }
 
@@ -386,7 +408,11 @@ async function sendAll(
 ): Promise<void> {
   let budget = PASS_READ_MAX
   const foreign = foreignSessions(io, state, rows)
-  for (const c of local) {
+  // The most recently active first: when the pass's budget or the store's room runs out, the chats the
+  // other PCs' AIs need now are the ones that went.
+  const recency = (c: LocalChat) =>
+    typeof c.record.lastActivityAt === 'number' ? c.record.lastActivityAt : 0
+  for (const c of [...local].sort((x, y) => recency(y) - recency(x))) {
     if (!UUID_RE.test(c.id) || !UUID_RE.test(c.sessionId)) continue
     if (foreign.has(c.sessionId)) continue
     if (!c.archived && sharer.get(c.sessionId) !== c) continue
@@ -433,6 +459,7 @@ async function dropUnanswerable(
         note: null,
         retry: false,
         again: true,
+        stream: randomUUID(),
       })
     } catch (err) {
       fail(err)
@@ -452,10 +479,12 @@ async function takeAll(
     const st = state.chats[row.id]
     // This PC's own chat: only this PC writes it, so nothing in the store is taken back.
     if ((st?.origin.pc ?? row.meta?.pc) === io.pc) continue
-    // In step, unless the row moved to another session: a chat that started over can come back at the
-    // version this PC last took.
+    // In step, unless the row moved to another session or carries another stream: a chat that started
+    // over can come back at the version this PC last took.
     const sameSession = row.meta?.s === undefined || st?.sessionId === row.meta.s
-    if (st && st.version === row.version && sameSession && !st.retry && !st.gone) continue
+    const sameStream = (row.meta?.o ?? null) === (st?.stream ?? null)
+    if (st && st.version === row.version && sameSession && sameStream && !st.retry && !st.gone)
+      continue
     if (st?.asked && row.meta?.rs !== undefined) continue
     try {
       await takeChat(io, state, row, opened.get(row.id), now)
@@ -483,7 +512,7 @@ async function retireLanded(
       }
       st.viewer = true
       st.retry = st.state === 'waiting'
-      if (out.kept) Object.assign(st, { bytes: 0, chunks: 0, version: 0 })
+      if (out.kept) Object.assign(fromStart(st), { version: 0 })
     } catch (err) {
       fail(err)
     }
@@ -527,8 +556,46 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> 
       moved = true
     }
   }
+  // Only once what was taken is saved: a PC that lost its state after an ack would need the chat again.
+  if (await ackTaken(io, state, fail)) writeState(io.statePath, state)
   if (problem) throw problem
   return moved
+}
+
+/** This PC's copy of another PC's chat is read again from its first chunk; none of it is acked. */
+function fromStart(st: ChatState): ChatState {
+  return Object.assign(st, { bytes: 0, chunks: 0, acked: 0 })
+}
+
+/** Tell the store which chunks this PC holds of the other PCs' chats it took into the viewer, so it can
+ *  delete what every reader has (the relay). A chat is acked again only once it grew, and a state from a
+ *  build before the relay acks what it already holds. An older Worker has no such route: nothing is
+ *  told. Returns whether an ack was noted (the state needs saving). */
+async function ackTaken(
+  io: ChatIo,
+  state: StateFile,
+  fail: (err: unknown) => void,
+): Promise<boolean> {
+  let noted = false
+  for (const [id, st] of Object.entries(state.chats)) {
+    if (st.origin.pc === io.pc || !st.viewer || st.gone || st.chunks <= (st.acked ?? 0)) continue
+    try {
+      const r = await io.call('POST', `/v1/chats/${id}/ack`, {
+        pc: io.pc,
+        next: st.chunks,
+        ...(st.stream === undefined ? {} : { o: st.stream }),
+      })
+      if (r.status === 404) return noted
+      // The row started over or left since this pass read it: the next pass takes it as it is now.
+      if (r.status === 409) continue
+      if (r.status !== 200) throw chatFailure('Telling the store what this PC holds', r)
+      st.acked = st.chunks
+      noted = true
+    } catch (err) {
+      fail(err)
+    }
+  }
+  return noted
 }
 
 type SendOutcome = 'done' | 'stopped'
@@ -695,7 +762,15 @@ async function putRecord(
   const r = await io.call('PUT', `/v1/chats/${c.id}`, {
     version: st.version,
     blob: sealRecord(io.key, c.id, sealed),
-    meta: { k: 'r', s: c.sessionId, pc: st.origin.pc, b: at.bytes, a: c.archived ? 1 : 0, at: now },
+    meta: {
+      k: 'r',
+      s: c.sessionId,
+      pc: st.origin.pc,
+      b: at.bytes,
+      a: c.archived ? 1 : 0,
+      at: now,
+      ...(st.stream === undefined ? {} : { o: st.stream }),
+    },
   })
   state.chats[c.id] = st // on a 409 or failure, chunks written stay noted in `up`
   if (r.status === 409) return
@@ -767,6 +842,7 @@ async function sendChat(
 }
 
 const newState = (io: ChatIo, c: LocalChat): ChatState => ({
+  stream: randomUUID(),
   sessionId: c.sessionId,
   title: titleOf(c.record),
   version: 0,
@@ -825,7 +901,7 @@ async function takeChat(
   // later pass): a new stream, read from its first chunk, and listed again.
   if (st.gone) {
     delete st.gone
-    Object.assign(st, { bytes: 0, chunks: 0 })
+    fromStart(st)
   }
   st.title = titleOf(rec.record)
   st.archived = rec.archived
@@ -840,7 +916,14 @@ async function takeChat(
   // Only the sync writes the viewer's copy, so one that is not the agreed length (removed, or a store
   // stream shorter than what this PC took) starts over from the first chunk.
   if (io.local.viewSize(rec.project, rec.sessionId) !== st.bytes || rec.stream.bytes < st.bytes)
-    Object.assign(st, { bytes: 0, chunks: 0 })
+    fromStart(st)
+  // Another stream (the PC it started on started it over): its chunks are cut anew, so what the viewer
+  // holds lines up with them only when it is the whole of what the record counts.
+  if ((row.meta?.o ?? null) !== (st.stream ?? null)) {
+    if (st.bytes === rec.stream.bytes) Object.assign(st, { chunks: rec.stream.chunks, acked: 0 })
+    else fromStart(st)
+    st.stream = row.meta?.o
+  }
   if (rec.stream.bytes > st.bytes) {
     st.state = 'receiving'
     if (!(await receive(io, st, rec))) return await askAgain(io, row, st)
@@ -862,9 +945,7 @@ async function takeChat(
  *  from the row while it still carries the ask. The viewer keeps what it has until the fresh stream is
  *  written over it from byte 0. */
 async function askAgain(io: ChatIo, row: StoreRow, st: ChatState): Promise<void> {
-  Object.assign(st, {
-    bytes: 0,
-    chunks: 0,
+  Object.assign(fromStart(st), {
     state: 'waiting',
     note: `The store is missing part of this chat’s transcript; ${st.origin.name} is asked to send it again.`,
     retry: true,
@@ -887,11 +968,13 @@ async function askAgain(io: ChatIo, row: StoreRow, st: ChatState): Promise<void>
 }
 
 /** Download the chunks from the agreed position up to the record's stream, in order, into the viewer.
- *  False when the store does not hold them all (a gap, or the chunks end before the record's count);
- *  nothing past the gap is written, so the viewer never holds one. */
+ *  False when the store does not hold them all (a gap, the chunks end before the record's count, or 410:
+ *  they left once every PC reading the chat had them); nothing past the gap is written, so the viewer
+ *  never holds one. */
 async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<boolean> {
   while (st.bytes < rec.stream.bytes && st.chunks < rec.stream.chunks) {
     const r = await io.call('GET', `/v1/chats/${rec.sessionId}/chunks?from=${st.chunks}`)
+    if (r.status === 410) return false
     if (r.status !== 200 || !Array.isArray(r.json?.chunks))
       throw chatFailure('Downloading a chat’s transcript', r)
     const page = r.json.chunks as Array<{ seq: number; blob: string }>

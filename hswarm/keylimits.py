@@ -145,13 +145,14 @@ def describe(provider: str) -> dict | None:
 
 
 def keys_at_limit(provider: str, keys: Collection[str]) -> int:
-    """How many of these keys are full right now under any of the provider's limits. Counts only, never a key."""
+    """How many of these keys are full right now under any of the provider's limits. Counts only, never a key. It reads
+    copies of the slots and changes none (_until trims them), so keys.report can run it off the event loop."""
     fingerprints = {config.fingerprint(k) for k in keys}
     now = _clock()
     full: set[str] = set()
-    for (p, fp, name), slot in _SLOTS.items():
+    for (p, fp, name), slot in list(_SLOTS.items()):
         if p == provider and fp in fingerprints:
             conc, rpm = limits_for(provider, name)
-            if _until(slot, conc, rpm, now) is not None:
+            if (conc is not None and slot.inflight >= conc) or (rpm is not None and sum(now - t < WINDOW_S for t in list(slot.starts)) >= rpm):
                 full.add(fp)
     return len(full)
