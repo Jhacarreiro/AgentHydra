@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, hitsOnThisPc, localOnly, parseScopes, pcKept, pickApp, remoteSessions, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudOnlyNarrowed, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, hitsOnThisPc, localOnly, parseScopes, pcKept, pickApp, remoteSessions, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -32,6 +32,28 @@ describe('cloudQuery', () => {
     const narrowed: CloudScopes = { ...DEFAULT_SCOPES, apps: ['claude'], period: '7d' }
     expect(params(narrowed, ' kit ')).toEqual({ period: 'all', archived: 'active,archived', othersPass: '1', title: 'kit' })
     expect(params({ ...narrowed, onlyThisView: true }, 'kit')).toEqual({ period: '7d', archived: 'active', source: 'claude', othersPass: '1', title: 'kit' })
+  })
+})
+
+// Owner, 2026-10-17: "I chose only archived. It's not showing archived". The cloud button draws the desk list, which
+// cannot apply these filters, so a changed one has to put the cloud list on screen; Apps and Computer it applies itself.
+describe('cloudOnlyNarrowed', () => {
+  test('the defaults, Apps and Computer keep the desk list', () => {
+    expect(cloudOnlyNarrowed(DEFAULT_SCOPES)).toBe(false)
+    expect(cloudOnlyNarrowed({ ...DEFAULT_SCOPES, apps: ['claude', 'codex'], pcs: ['THIS-PC'] })).toBe(false)
+  })
+
+  test('each filter only the cloud list applies, changed, draws the cloud list', () => {
+    const changed: Partial<CloudScopes>[] = [
+      { archived: ['archived'] },
+      { archived: [] },
+      { instance: ['default'] },
+      { dispatched: ['queued'] },
+      { rateLimit: ['pending'] },
+      { shape: ['quick'] },
+      { period: '7d' }
+    ]
+    for (const patch of changed) expect([patch, cloudOnlyNarrowed({ ...DEFAULT_SCOPES, ...patch })]).toEqual([patch, true])
   })
 })
 

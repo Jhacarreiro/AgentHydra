@@ -323,7 +323,10 @@ const remoteRows = computed(() => {
   return new Map(cloud.sessions.value.filter((r) => ids.has(r.id)).map((r) => [r.id, r]))
 })
 const cloudSearching = computed(() => cloud.on.value && cloud.searching.value && cloud.search.value.trim() !== '')
-const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && cloud.selectMode.value))
+// Also while a filter only the cloud list applies (Archived, Queued work, Session shape, ...) is changed: the desk list
+// cannot apply it, so it would change nothing on screen (owner, 2026-10-17: "I chose only archived. It's not showing
+// archived"). Back at their defaults, the desk list is drawn again.
+const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && (cloud.selectMode.value || cloud.narrowed.value)))
 /** The CloudList is what the sidebar draws: the template's chain puts Hydra's tree and the dev servers first. */
 const cloudShown = computed(() => cloudListShown.value && !hydraModel.value && !devServers.on.value)
 
@@ -470,8 +473,8 @@ watch(
   },
   { immediate: true }
 )
-// The cloud list as drawn (cloudListShown): a search's answer, AgentHydra's best matches, or the list Select multiple
-// sessions ticks rows in.
+// The cloud list as drawn (cloudListShown): a search's answer, AgentHydra's best matches, the list Select multiple
+// sessions ticks rows in, or the list a cloud-only filter narrows.
 const cloudGroups = computed(() => {
   const groups = cloud.groups.value
   if (!activeOnly.value) return groups

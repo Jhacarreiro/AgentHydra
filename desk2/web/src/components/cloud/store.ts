@@ -8,7 +8,7 @@ import { useShellSource } from '@/components/shell/source'
 import { dropHidden, recordCloudOrder } from '@/components/sidebar/logic'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useSidebarOrder } from '@/components/sidebar/order'
-import { cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, rowOrderKey, type CloudScopes } from './logic'
+import { cloudOnlyKeys, cloudOnlyNarrowed, cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, rowOrderKey, type CloudScopes } from './logic'
 
 /** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
 interface CachedCloud {
@@ -164,12 +164,14 @@ ${rows}`
   const groups = computed(() => visible.value.shown)
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
 
-  // The sidebar draws this list itself only for a search's answer and while Select multiple sessions ticks rows
-  // (Sidebar.vue); with the cloud on otherwise it draws the desk list with the other PCs' sessions added. While it
-  // draws the plain list, the rows only this list has join the saved order at its end, newest first, and keep their
-  // places from then on; the desk list records its own (Sidebar.vue). A search's answer records nothing.
+  // The sidebar draws this list itself for a search's answer, while Select multiple sessions ticks rows, and while a
+  // filter only this list applies is changed (`narrowed`, Sidebar.vue); with the cloud on otherwise it draws the desk
+  // list with the other PCs' sessions added. While it draws the plain list, the rows only this list has join the saved
+  // order at its end, newest first, and keep their places from then on; the desk list records its own (Sidebar.vue). A
+  // search's answer records nothing.
+  const narrowed = computed(() => cloudOnlyNarrowed(scopes.value))
   watch(
-    () => (on.value && selectMode.value && !searching.value ? groups.value : null),
+    () => (on.value && (selectMode.value || narrowed.value) && !searching.value ? groups.value : null),
     (shown) => {
       if (!shown) return
       saveOrder(recordCloudOrder(order.value, cloudOnlyKeys(shown, placed.value)))
@@ -206,6 +208,8 @@ ${rows}`
     /** The groups Hide left out of `groups`. */
     hiddenOut: computed(() => visible.value.out),
     pcs,
+    /** A filter only this list applies is off its default, so the sidebar draws this list (logic.ts cloudOnlyNarrowed). */
+    narrowed,
     selectMode,
     selected,
     refresh,
