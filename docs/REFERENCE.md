@@ -824,7 +824,10 @@ needed to recover already existed and nothing ever called it.
 ### Why it froze: the `STALL` lines
 
 The daemon runs on one thread, and the tray reaps it after three missed health probes in a row with a kill
-that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the thread was doing, in
+that leaves nothing behind. Since 2026-10-17 a daemon whose port still takes connections (Windows completes the
+handshake while the event loop is blocked) is busy, not dead: the tray gives it up to 120 s before that kill
+(`BUSY_PATIENCE`, `misc/tray-host-native/src/main.rs`), and writes `its port still takes connections` to
+`misc/Tray.log` once. `server/src/stall-sentinel.ts` writes down what the thread was doing, in
 `logs/daemon.log`:
 
 - `STALL main thread unresponsive for N s ... in flight: ...` comes from a worker thread while the main thread
