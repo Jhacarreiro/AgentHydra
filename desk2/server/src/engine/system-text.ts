@@ -375,10 +375,32 @@ function personTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): U
   const item = preface ? { ...raw, text: raw.text.replace(preface, '') } : raw
   const note = noteOf(item.text)
   if (note) {
-    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
-    return { ...rest, kind: 'note', from: note.from, text: note.text, ...(note.advisor && { advisor: true as const }) }
+    const { kind: _k, text: _t, images: _i, queued, ...rest } = item
+    // The advisor's message waiting behind a running turn keeps its queued state: his bubble, not the owner's.
+    return { ...rest, kind: 'note', from: note.from, text: note.text, ...(note.advisor && { advisor: true as const, ...(queued && { queued: true }) }) }
   }
   return withNamedFiles(item, media)
+}
+
+/**
+ * A CliMayte chat's stand-in as the transcript shows it: the Urgency Advisor's is his queued bubble (a note), never
+ * the owner's plain one; any other is the owner's bubble, as typed. Its id stays the stand-in's, so the drop finds it.
+ */
+export function standInShown(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+  const note = noteOf(item.text)
+  if (!note?.advisor) return withNamedFiles(item, media)
+  const { kind: _k, text: _t, images: _i, queued, sendFailed: _f, ...rest } = item
+  return { ...rest, kind: 'note', from: note.from, text: note.text, advisor: true, ...(queued && { queued: true }) }
+}
+
+/** The stand-in a worker's copy of the Urgency Advisor's message replaces (matched by its words); -1 when none. */
+export function advisorStandInFor(sent: UserItem[], real: NoteItem): number {
+  if (!real.advisor) return -1
+  const said = real.text.replace(/\s+/g, ' ').trim()
+  return sent.findIndex((s) => {
+    const n = noteOf(s.text)
+    return !!n?.advisor && !!said && n.text.replace(/\s+/g, ' ').trim() === said
+  })
 }
 
 /**

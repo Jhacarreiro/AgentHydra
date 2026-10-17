@@ -230,7 +230,7 @@ export type TranscriptItem =
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean; sendFailed?: string })
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble.
    * advisor: the Urgency Advisor's nudge sent on the owner's behalf (`from` is its name): drawn as an orange bubble on the owner's side. */
-  | (ItemBase & { kind: 'note'; from: string; text: string; advisor?: true })
+  | (ItemBase & { kind: 'note'; from: string; text: string; advisor?: true; queued?: boolean }) // queued: an advisor's message still waiting for the chat
   /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest).
    * media: pictures and videos the finished reply only names (a path in backticks, prose or a link), shown under it; the text is unchanged. */
   | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string; media?: ImageRef[] })

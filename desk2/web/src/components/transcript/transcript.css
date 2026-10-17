@@ -901,3 +901,17 @@ button.tx-file-card:hover {
   background: var(--advisor-bg);
   color: var(--advisor-text);
 }
+
+/* The advisor's face beside his name: his photo, else his initial on his bubble's orange. */
+.tx-advisor-face {
+  display: flex;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--advisor-bg);
+  color: var(--advisor-text);
+}

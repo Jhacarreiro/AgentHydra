@@ -65,7 +65,7 @@ import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, ST
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, SERVER_ERROR_TRIES, sleep } from './send-retry'
 import { mediaCache, toStoredImage } from '../media/cache'
-import { withNamedFiles } from './system-text'
+import { standInShown, withNamedFiles } from './system-text'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
@@ -357,7 +357,7 @@ export class ChatManager {
         else if (item.status === 'running' && !isLongLived(item)) (e.bgTasks ??= new Set()).add(item.taskId)
       }
     }
-    return e.sent?.length ? [...items, ...e.sent.map((s) => withNamedFiles(s, mediaCache(this.store.home)))] : items
+    return e.sent?.length ? [...items, ...e.sent.map((s) => standInShown(s, mediaCache(this.store.home)))] : items
   }
 
   /** The messages waiting for another service's reply to end (waitForReply), shown queued after the rest. */
@@ -887,7 +887,7 @@ export class ChatManager {
     const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued || chat.waiting ? { queued: true } : {}) }
     ;(e.sent ??= []).push(standIn)
     this.store.saveChats(this.stored())
-    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
+    this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standInShown(standIn, mediaCache(this.store.home)) })
     if (behind) {
       this.holdForRetry(e, standIn, text, false)
       return { queued: true }
@@ -956,7 +956,7 @@ export class ChatManager {
     if (i >= 0 && !standIn.queued) {
       const held: UserItem = { ...standIn, queued: true }
       e.sent![i] = held
-      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: withNamedFiles(held, mediaCache(this.store.home)) })
+      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(held, mediaCache(this.store.home)) })
     }
     this.store.saveChats(this.stored())
     if (first) this.systemLine(e.chat.id, 'send-retry', 'info', 'AgentHydra did not answer in time, so this message is kept and sent again shortly. It is never sent twice.')
@@ -1284,7 +1284,7 @@ export class ChatManager {
     const { queued: _q, ...sent } = standIn!
     e.sent![i] = sent
     this.store.saveChats(this.stored())
-    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
+    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(sent, mediaCache(this.store.home)) })
   }
 
   async interrupt(id: string): Promise<void> {
@@ -2335,7 +2335,7 @@ export class ChatManager {
       return { ...s, queued: true }
     })
     this.store.saveChats(this.stored())
-    for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item })
+    for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: standInShown(item, mediaCache(this.store.home)) })
   }
 
   /** A failed worker never reached the messages still held for it: they are dropped and the chat says so. One the chat
