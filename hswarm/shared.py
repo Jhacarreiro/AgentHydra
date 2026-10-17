@@ -326,9 +326,9 @@ def _take(lock: Path) -> bool:
     return True
 
 
-def _detached(argv: list[str], out, package: Path = PACKAGE.parent) -> int:
+def _detached(argv: list[str], out, package: Path = PACKAGE.parent, extra_env: dict | None = None) -> int:
     """Start argv detached from the caller, with no window, output to `out`. Returns its pid."""
-    env = dict(os.environ)  # cwd is HSWARM_HOME, so the package's folder must be put on the path for `-m hswarm`
+    env = dict(os.environ, **(extra_env or {}))  # cwd is HSWARM_HOME, so the package's folder must be put on the path for `-m hswarm`
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(package), env.get("PYTHONPATH", "")) if p)
     kw: dict = {"env": env, "cwd": str(config.HOME), "stdin": subprocess.DEVNULL, "stdout": out, "stderr": subprocess.STDOUT, "close_fds": True}
     if os.name != "nt":
@@ -347,7 +347,11 @@ def _spawn(port: int) -> int:
     exe = Path(sys.executable)
     if os.name == "nt" and exe.with_name("pythonw.exe").exists():
         exe = exe.with_name("pythonw.exe")
-    package = livecode.target() or PACKAGE.parent
+    copy = livecode.target()
+    package = copy or PACKAGE.parent
+    # 2026-10-17: a copy two clones share names only the clone that exported it first; the server is told the clone
+    # this start followed, or a start from the other clone reports and follows the wrong one (livecode.SOURCE_ENV).
+    follows = {livecode.SOURCE_ENV: str(livecode.source())} if copy else None
     argv = [str(exe), "-c", config._BOOTSTRAP, str(package), "mcp", "--http", "--port", str(port)]
     log = log_path(port)
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -357,7 +361,7 @@ def _spawn(port: int) -> int:
     except OSError:  # no log yet, or Windows refusing the rename while a busy or deaf server still holds it open: append
         pass
     with open(log, "ab") as out:
-        return _detached(argv, out, package)
+        return _detached(argv, out, package, follows)
 
 
 def _wait(port: int, wait_s: float) -> dict | None:

@@ -170,7 +170,10 @@ def test_a_started_server_runs_the_committed_copy(monkeypatch, tmp_path):
     seen = {}
     copy = tmp_path / "code" / "615b0cacff15"
     monkeypatch.setattr(livecode, "target", lambda: copy)
+    monkeypatch.setattr(livecode, "source", lambda: Path("C:/Users/me/worktree"))
     monkeypatch.setattr(shared.subprocess, "Popen", lambda argv, **kw: seen.update(argv=argv, env=kw["env"]) or types.SimpleNamespace(pid=4242))
     assert shared._spawn(7793) == 4242
     assert seen["argv"][-5:] == [str(copy), "mcp", "--http", "--port", "7793"]
     assert seen["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(copy)
+    # 2026-10-17: the copy may be shared with a clone that exported it first; the server follows this start's clone
+    assert seen["env"][livecode.SOURCE_ENV] == str(Path("C:/Users/me/worktree"))
