@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Restarting AgentHydra's window server no longer cuts off a Free message on its way.** A message sent to a Free account now goes on by itself while the server restarts or updates, and the restarted server picks it up and returns its reply. Asking again for the same message returns that send instead of sending it twice.
+
 - **VS Code Copilot Chat counts in Stats and Analytics.** Copilot chats in VS Code are now their own source, one call per request, and Cost by project places them by the folder the VS Code window had open. Copilot bills requests rather than tokens and most requests record no token count, so its row is there so every tool you use is counted, not for its volume.
 
 - **Chat search finds what was said in every account's chats, and answers from its index.** Searching chat contents now covers the chats of every CLI account, CliMayte's workers included, and each hit says which store and account it is in. It answers from the conversation index even while chats are running, instead of falling back to a slow scan that gave up after a few dozen files. The index now keeps itself up to date in the background.
