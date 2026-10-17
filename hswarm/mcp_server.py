@@ -219,7 +219,8 @@ async def hswarm_run(
     payload = job_payload(job, max_answer_chars, include_pending=True)
     if outlook:
         payload["route_outlook"] = outlook
-    if behind := shared.behind():
+    # On a thread: behind() asks git for the clone's HEAD, three subprocesses at most every 10 s (0.1-0.9 s, 2026-10-16).
+    if behind := await asyncio.to_thread(shared.behind):
         # The sentence once per chat, then a flag: it rode on 38 of 51 sampled run answers (15.5% of their characters)
         # and no caller can act on it per call. hswarm_doctor always carries it in full.
         chat = (shared.REQUEST.get() or {}).get("mcp_session") or ""  # a stdio server has one chat
@@ -661,7 +662,7 @@ async def hswarm_keys(action: str = "list", fingerprint: str | None = None, prov
     from . import keys as keymod
 
     if action == "list":
-        return keymod.report(provider, verbose=verbose)
+        return await asyncio.to_thread(keymod.report, provider, verbose=verbose)
     if action == "probe":
         return await keymod.probe(provider)
     if action in ("enable", "disable"):

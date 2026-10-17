@@ -272,6 +272,10 @@ def serve(port: int = PORT) -> None:
     # The first account lookup asks AgentHydra for its plan prices and waits (accounts._agenthydra_prices); made here, the
     # wait is this thread's and not the event loop's, where every ledger line looks its caller's account up.
     threading.Thread(target=accounts.resolver, name="hswarm-accounts-warm", daemon=True).start()
+    from .client import tls
+
+    # The process's one TLS context loads the CA bundle once (0.35 s cold); made here, not in the first doctor's client.
+    threading.Thread(target=tls, name="hswarm-tls-warm", daemon=True).start()
     mcp.run(transport="streamable-http", host=HOST, port=port, session_idle_timeout=IDLE_SESSION_S)
 
 

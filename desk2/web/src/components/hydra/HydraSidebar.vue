@@ -17,6 +17,8 @@ import {
   ListChecks,
   LoaderCircle,
   Network,
+  Pause,
+  Play,
   PictureInPicture2,
   PiggyBank,
   Plug,
@@ -27,6 +29,7 @@ import {
   Search,
   Server,
   TriangleAlert,
+  Wrench,
   X
 } from '@lucide/vue'
 import type { EmbedIcon, EmbedTone, SidebarModel, SidebarRow } from '@shared/hydra-embed'
@@ -69,7 +72,10 @@ const ICONS: Record<EmbedIcon, Component> = {
   'list-checks': ListChecks,
   'circle-check': CircleCheck,
   'circle-x': CircleX,
-  ban: Ban
+  ban: Ban,
+  pause: Pause,
+  play: Play,
+  wrench: Wrench
 }
 const icon = (name: EmbedIcon | undefined): Component | null => (name ? (ICONS[name] ?? null) : null)
 const TONE: Record<EmbedTone, string> = {
@@ -246,12 +252,12 @@ const FOOT_BTN =
     </div>
 
     <div ref="list" role="tree" :aria-label="model.title" class="flex flex-col">
-      <section v-for="sec in model.sections" :key="sec.key" :aria-label="sec.label || undefined">
+      <div v-for="sec in model.sections" :key="sec.key" role="group" :aria-label="sec.label || undefined">
         <Tip v-if="sec.label" :label="sec.hint ?? ''">
           <header class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-ui-sm leading-4 text-text-muted">
             <span class="truncate">{{ sec.label }}</span>
             <span class="flex-1" />
-            <span class="tnum">{{ sec.rows.length }}</span>
+            <span class="tnum">{{ sec.count ?? sec.rows.length }}</span>
           </header>
         </Tip>
         <div class="flex flex-col gap-[1.5px] pt-[1.5px]">
@@ -326,7 +332,7 @@ const FOOT_BTN =
           </div>
           </Tip>
         </div>
-      </section>
+      </div>
     </div>
 
     <div v-if="empty && model.loading" class="flex flex-col gap-1.5 px-1.5 pt-2" aria-busy="true">

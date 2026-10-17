@@ -1,6 +1,7 @@
 """ChatGPT Temporary Chats with current first-party preparation and HTTP readback."""
 
 from functools import partial
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -125,6 +126,15 @@ class ChatGPTClient(Client):
         if command == "auth":
             with connection(self._state, args.request_timeout) as http:
                 value = {"authenticated": True, "account_label": http.account_label, "account_email": http.account_email}
+            # The connection has saved any rotated cookies; _run still holds the session lock.
+            # Bind this authenticated identity to the exact persisted login without exposing cookies.
+            try:
+                value["login_fingerprint"] = hashlib.sha256(self._state.session_file.read_bytes()).hexdigest()
+            except OSError:
+                raise ClaudeError(
+                    "The verified login could not be read back. Keep the pool import pending.",
+                    code="session_save_failed",
+                ) from None
         elif command == "usage":
             with connection(self._state, args.request_timeout) as http:
                 value = http.usage()

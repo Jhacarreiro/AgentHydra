@@ -20,7 +20,8 @@ between server/ and web/.
   (removed 2026-10-04): Desk's cloud list and its session header (`web/src/components/session-header`)
   replace it, and the copy's "open this chat" goes to Desk (`hydra/src/lib/desk-embed.ts`). Desk owns the one
   sidebar: a copy tab with a sidebar of its own (HSwarm's tree, whose nodes include Routing and CliMayte,
-  `hydra/src/components/HSwarmView.vue`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
+  `hydra/src/components/HSwarmView.vue`, or the Tools tab's Managers and Routines groups,
+  `hydra/src/lib/tools-sidebar.ts`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
   the tab's AppView, and only the tab on screen (App.vue's `setDeskView`) is sent; Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.

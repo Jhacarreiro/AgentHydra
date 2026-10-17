@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreePoolAdmission, type FreePoolCommit, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -8,13 +9,14 @@ import { failure, parseResult } from './results'
 import { runFree, type FreeRunner } from './runner'
 import { ManagedFreeRuntime, SetupRefused, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
-import type { FreeSyncHost } from './sync'
+import { readLogin, type FreeSyncHost } from './sync'
+import { poolCount, poolPlan, poolVictims } from './pool-policy'
 import { addStat, statRows } from './stats'
 import { addTokens, estimateTokens, type TokenEntry, tokenWindows } from './tokens'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export class FreeError extends Error {
-  constructor(message: string, public status: 400 | 404 | 409 | 503 = 400) { super(message) }
+  constructor(message: string, public status: 400 | 404 | 409 | 503 = 400, public code?: string) { super(message) }
 }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new FreeError('A JSON operation is required.')
@@ -70,6 +72,8 @@ export class FreeInstances {
   private controllers = new Map<string, AbortController>()
   /** Accounts whose log out is running: no operation may start on them meanwhile. */
   private forgetting = new Set<string>()
+  private poolTail: Promise<unknown> = Promise.resolve()
+  private poolCommits = new Map<string, Promise<FreePoolCommit>>()
   private stopping = false
   /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
   private keeper: ReturnType<typeof setTimeout>
@@ -115,6 +119,263 @@ export class FreeInstances {
     const r = record(value)
     if (Object.keys(r).some(k => !['provider', 'name'].includes(k)) || !FREE_PROVIDERS.includes(r.provider as FreeInstance['provider'])) throw new FreeError('Choose Claude or ChatGPT.')
     return this.store.create(r.provider as FreeInstance['provider'], r.name === undefined ? undefined : name(r.name))
+  }
+  private poolSerial<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.poolTail.then(work)
+    this.poolTail = next.then(() => undefined, () => undefined)
+    return next
+  }
+  private poolEntry(requestId: string): FreeInstance {
+    if (!isUuid(requestId)) throw new FreeError('An admission UUID is required.')
+    const instance = this.store.data.instances.find(i => i.poolAdmission?.requestId === requestId)
+    if (!instance) throw new FreeError('Pool admission not found.', 404, 'pool_not_found')
+    return instance
+  }
+  private async poolSaved(): Promise<void> {
+    if (!await this.store.saveDurable()) throw new FreeError('The pool change could not be confirmed on disk. Keep the imported login and resolve the same admission before changing it.', 503, 'pool_persist_failed')
+  }
+  /** Release an idle Free slot while preserving the account's saved login and history. */
+  retirePool(id: string): Promise<{ ok: true; id: string; retired: true; count: number }> {
+    return this.poolSerial(async () => {
+      if (this.stopping) throw new FreeError('Desk is stopping. Retire this account after reconnecting.', 503)
+      const instance = this.instance(id)
+      if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish before retiring it.', 409, 'pool_busy')
+      if (instance.poolState === 'pending' || instance.poolAdmission?.state === 'pending')
+        throw new FreeError('Resolve this account’s pending import before retiring it.', 409, 'pool_pending')
+      if (poolPlan(instance) !== 'free') throw new FreeError('Only a verified Free account can be retired from the pool.', 409, 'pool_changed')
+      const retired = instance.poolState === 'retired'
+      if (!retired) {
+        if (!instance.loggedIn || !instance.email || instance.checkedAt == null || (instance as FreeInstance & { movedAway?: unknown }).movedAway)
+          throw new FreeError('Verify this Free account before retiring it from the pool.', 409, 'pool_verification_failed')
+        this.poolLogin(instance)
+      }
+      this.forgetting.add(id)
+      try {
+        instance.poolState = 'retired'
+        try { await this.poolSaved() }
+        catch (error) {
+          if (!retired) { delete instance.poolState; this.store.save() }
+          throw error
+        }
+        return { ok: true, id, retired: true, count: poolCount(this.store.data.instances, instance.provider) }
+      } finally { this.forgetting.delete(id) }
+    })
+  }
+  /** Staging precedes the caller's cookie export. No pending account can generate or sync a login. */
+  admitPool(value: unknown): Promise<{ requestId: string; instance: FreeInstance; existing: boolean; pending: true }> {
+    const r = record(value)
+    if (Object.keys(r).some(k => !['requestId', 'provider', 'email', 'plan', 'limit', 'instanceId'].includes(k)) ||
+      !isUuid(r.requestId) || !FREE_PROVIDERS.includes(r.provider as FreeInstance['provider']) ||
+      typeof r.email !== 'string' || r.email.length > 254 || !/^[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+$/.test(r.email) ||
+      !['free', 'go'].includes(r.plan as string) || (r.plan === 'go' && r.provider !== 'chatgpt') ||
+      !Number.isInteger(r.limit) || (r.limit as number) < 0 || (r.limit as number) > 500 ||
+      (r.instanceId !== undefined && !isUuid(r.instanceId))) throw new FreeError('A request UUID, provider, email, Free/Go plan and limit from 0 to 500 are required.')
+    const requestId = r.requestId as string
+    const email = r.email.toLowerCase()
+    return this.poolSerial(async () => {
+      if (this.stopping) throw new FreeError('Desk is stopping. Resume the admission after reconnecting.', 503)
+      const previous = this.store.data.instances.find(i => i.poolAdmission?.requestId === requestId)
+      if (previous) {
+        const a = previous.poolAdmission!
+        if (previous.provider !== r.provider || a.email !== email || a.plan !== r.plan || a.limit !== r.limit || a.targetId !== r.instanceId)
+          throw new FreeError('That admission UUID already identifies another import.', 409, 'pool_changed')
+        if (a.state !== 'pending') throw new FreeError('That admission has already ended. Read its commit receipt or use a new request UUID.', 409, 'pool_changed')
+        await this.poolSaved()
+        return { requestId, instance: previous, existing: a.existing, pending: true }
+      }
+      if (this.jobs.has(requestId)) throw new FreeError('That request UUID already identifies an operation.', 409, 'pool_changed')
+      const matches = this.store.data.instances.filter(i => i.provider === r.provider && i.email?.toLowerCase() === email)
+      let instance: FreeInstance | undefined
+      if (r.instanceId) {
+        instance = this.instance(r.instanceId as string)
+        if (instance.provider !== r.provider || instance.email?.toLowerCase() !== email ||
+          (instance as FreeInstance & { movedAway?: unknown }).movedAway)
+          throw new FreeError('The selected pool account no longer matches this email and provider.', 409, 'pool_changed')
+      } else {
+        if (matches.length > 1 || matches.some(i => i.poolState))
+          throw new FreeError('Select the exact existing pool account before renewing this email.', 409, 'pool_changed')
+        instance = matches[0]
+      }
+      if (instance?.poolState === 'pending') throw new FreeError('This account already has a pending import.', 409, 'pool_busy')
+      if (instance && (instance as FreeInstance & { movedAway?: unknown }).movedAway)
+        throw new FreeError('A moved-away account cannot be renewed into this pool.', 409, 'pool_changed')
+      if (instance) {
+        await this.autoSettled(instance.id)
+        if (this.stopping || this.busy(instance.id) || this.instance(instance.id) !== instance || instance.email?.toLowerCase() !== email)
+          throw new FreeError('This pool account changed or has an operation running. Try after it finishes.', 409, 'pool_busy')
+      }
+      const existing = !!instance
+      const before = instance ? structuredClone(Object.fromEntries(Object.entries(instance).filter(([k]) => k !== 'poolAdmission'))) as Omit<FreeInstance, 'poolAdmission'> : undefined
+      const admission: FreePoolAdmission = { requestId, email, plan: r.plan as 'free' | 'go', limit: r.limit as number,
+        existing, state: 'pending', ...(r.instanceId ? { targetId: r.instanceId as string } : {}), ...(before ? { before } : {}) }
+      if (instance) { instance.poolState = 'pending'; instance.poolAdmission = admission }
+      else instance = this.store.create(r.provider as FreeInstance['provider'], email, { poolState: 'pending', poolAdmission: admission })
+      this.forgetting.add(instance.id)
+      try { await this.poolSaved() } finally { this.forgetting.delete(instance.id) }
+      return { requestId, instance, existing, pending: true }
+    })
+  }
+  abortPool(requestId: string): Promise<{ ok: true; id: string; existing: boolean; aborted: true }> {
+    return this.poolSerial(async () => {
+      const instance = this.poolEntry(requestId)
+      const a = instance.poolAdmission!
+      if (this.stopping || this.busy(instance.id) || this.poolCommits.has(requestId))
+        throw new FreeError('This admission is still being checked. Resolve it before restoring a login.', 409, 'pool_busy')
+      if (a.state === 'committed') throw new FreeError('This admission was committed and cannot be aborted.', 409, 'pool_changed')
+      this.forgetting.add(instance.id)
+      try {
+        if (a.state === 'pending') {
+          if (a.existing) {
+            if (!a.before || a.before.id !== instance.id) throw new FreeError('The original pool metadata is unavailable. Keep this import pending for review.', 409, 'pool_changed')
+            for (const key of Object.keys(instance)) delete (instance as unknown as Record<string, unknown>)[key]
+            Object.assign(instance, structuredClone(a.before))
+          } else instance.poolState = 'retired'
+          a.state = 'aborted'; delete a.before
+          instance.poolAdmission = a
+        }
+        await this.poolSaved()
+        return { ok: true, id: instance.id, existing: a.existing, aborted: true }
+      } finally { this.forgetting.delete(instance.id) }
+    })
+  }
+  commitPool(requestId: string): Promise<FreePoolCommit> {
+    if (this.stopping) throw new FreeError('Desk is stopping. Resolve this admission after reconnecting.', 503)
+    const running = this.poolCommits.get(requestId)
+    if (running) return running
+    const instance = this.poolEntry(requestId)
+    const a = instance.poolAdmission!
+    if (a.state === 'committed' && a.result) return this.poolSerial(async () => {
+      if (this.stopping) throw new FreeError('Desk is stopping. Resolve this admission after reconnecting.', 503)
+      await this.poolSaved(); return structuredClone(a.result!)
+    })
+    if (a.state !== 'pending' || instance.poolState !== 'pending') throw new FreeError('This admission is no longer pending.', 409, 'pool_changed')
+    if (this.stopping || this.busy(instance.id)) throw new FreeError('This account has an operation running. Try after it finishes.', 409, 'pool_busy')
+    if ([...this.jobs.values()].filter(job => job.state === 'running').length >= MAX_RUNNING)
+      throw new FreeError(`Desk already has ${MAX_RUNNING} operations running.`, 409, 'pool_busy')
+    this.forgetting.add(instance.id)
+    const controller = new AbortController()
+    this.controllers.set(`pool:${requestId}`, controller)
+    const job: FreeJob = { id: requestId, instanceId: instance.id, provider: instance.provider,
+      command: 'auth', state: 'running', phase: 'working', startedAt: Date.now() }
+    this.jobs.set(requestId, job)
+    const deadline = setTimeout(() => controller.abort(), 120_000)
+    const work = this.verifyPool(instance, a, controller.signal).then(result => {
+      job.result = { ok: true, authenticated: true, account_email: a.email }
+      return result
+    }, error => {
+      job.result = failure(error instanceof FreeError ? error.code ?? 'pool_verification_failed' : 'pool_verification_failed',
+        error instanceof FreeError ? error.message : 'The pool verification did not finish. Resolve the pending admission before changing its login.')
+      throw error
+    }).finally(() => {
+      job.state = 'done'; job.finishedAt = Date.now()
+      clearTimeout(deadline); this.controllers.delete(`pool:${requestId}`)
+      this.forgetting.delete(instance.id); this.poolCommits.delete(requestId)
+    })
+    this.poolCommits.set(requestId, work)
+    this.runs.set(`pool:${requestId}`, work.then(() => undefined, () => undefined))
+    void work.then(() => this.runs.delete(`pool:${requestId}`), () => this.runs.delete(`pool:${requestId}`))
+    return work
+  }
+  private poolLogin(instance: FreeInstance): string {
+    const file = join(this.runtime.config(instance.id).stateDir, instance.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi')
+    const login = readLogin(file, instance.provider)
+    if (!login || (instance.provider === 'chatgpt' && !login.fresh))
+      throw new FreeError('The imported login is missing a complete browser sign-in. Keep this account pending.', 503, 'pool_verification_failed')
+    // GPT's locked auth result proves the exact post-save file, including rotations.
+    return createHash('sha256').update(instance.provider === 'chatgpt' ? readFileSync(file) : JSON.stringify(login.cookies)).digest('hex')
+  }
+  private async verifyPool(instance: FreeInstance, a: FreePoolAdmission, signal: AbortSignal): Promise<FreePoolCommit> {
+    await this.runtime.ensure(instance.provider)
+    const config = this.runtime.config(instance.id)
+    let planCheckedAt: string | undefined
+    let authLoginProof: string | undefined
+    const read = async (command: 'auth' | 'usage'): Promise<FreeResult> => {
+      signal.throwIfAborted()
+      const output = await this.runner(config, { requestId: randomUUID(), instanceId: instance.id, provider: instance.provider, command }, signal)
+      const result = parseResult(command, output)
+      if (command === 'auth' && instance.provider === 'chatgpt') {
+        authLoginProof = undefined
+        try {
+          const raw = JSON.parse(output.stdout)
+          if (typeof raw.login_fingerprint === 'string' && /^[a-f0-9]{64}$/.test(raw.login_fingerprint)) authLoginProof = raw.login_fingerprint
+        } catch { /* Missing or malformed auth proof fails closed below. */ }
+      }
+      if (command === 'usage' && instance.provider === 'claude') {
+        try { const raw = JSON.parse(output.stdout); planCheckedAt = typeof raw.checked_at === 'string' ? raw.checked_at : undefined } catch { /* parseResult fails closed */ }
+      }
+      signal.throwIfAborted()
+      if (!result.ok) throw new FreeError('The imported login could not be verified. Keep it pending or restore the previous login before aborting.', 503, 'pool_verification_failed')
+      return result
+    }
+    const auth = async (): Promise<void> => {
+      const result = await read('auth')
+      if (!result.authenticated || result.account_email?.toLowerCase() !== a.email)
+        throw new FreeError('The imported login did not verify the expected account email.', 503, 'pool_verification_failed')
+      if (instance.provider === 'chatgpt') {
+        if (!authLoginProof) throw new FreeError('The ChatGPT runtime did not return its saved-login proof. Update its runtime before resolving this import.', 503, 'pool_verification_failed')
+        if (this.poolLogin(instance) !== authLoginProof) throw new FreeError('The saved login changed after authentication. Resolve this pending admission again.', 409, 'pool_changed')
+      }
+    }
+    this.poolLogin(instance)
+    await auth()
+    const authenticated = this.poolLogin(instance)
+    const started = Date.now()
+    const result = await read('usage')
+    const usage = result.usage
+    // Claude's plan is read from fresh organization capabilities even when quota counters are unavailable/cached.
+    const observed = instance.provider === 'claude' ? planCheckedAt : usage?.observed_at
+    if (!usage || (instance.provider === 'chatgpt' && (!usage.available || usage.is_snapshot)) || !observed || Date.parse(observed) < started - 60_000 ||
+      Date.parse(observed) > Date.now() + 60_000 || !Number.isFinite(Date.parse(observed)) ||
+      usage.plan?.toLowerCase() !== a.plan)
+      throw new FreeError('A fresh matching Free/Go plan reading was not available. No account was replaced.', 503, 'pool_verification_failed')
+    let verified = this.poolLogin(instance)
+    // Auth may legitimately rotate cookies. Reconfirm identity if the usage read rotated them again.
+    if (verified !== authenticated) {
+      await auth()
+      if (instance.provider === 'chatgpt') verified = authLoginProof!
+      else if (this.poolLogin(instance) !== verified) throw new FreeError('The saved login changed during verification. Resolve this pending admission again.', 409, 'pool_changed')
+    }
+    return this.poolSerial(async () => {
+      signal.throwIfAborted()
+      if (this.stopping || this.poolEntry(a.requestId) !== instance || instance.poolAdmission !== a ||
+        a.state !== 'pending' || instance.poolState !== 'pending' || this.poolLogin(instance) !== verified)
+        throw new FreeError('The pending account changed before the pool commit.', 409, 'pool_changed')
+      const before = a.before
+      if (a.existing && (!before || before.id !== instance.id || before.provider !== instance.provider ||
+        before.email?.toLowerCase() !== a.email || before.poolState === 'pending' ||
+        (before as FreeInstance & { movedAway?: unknown }).movedAway))
+        throw new FreeError('The original pool account no longer matches this renewal.', 409, 'pool_changed')
+      // Refreshing an existing managed identity is not a new admission, even if its old login
+      // expired or it was retired. The configured cap must never block it or evict a bystander.
+      const renewal = a.existing
+      const projected = { ...instance, email: a.email, loggedIn: true, plan: a.plan, usage }
+      const victims = renewal ? [] : poolVictims(this.store.data.instances, projected, a.plan, a.limit, id => this.busy(id))
+      if (!victims) throw new FreeError('The web pool is full. No idle lower-priority Free account can be replaced.', 409, 'pool_full')
+      for (const victim of victims) this.forgetting.add(victim.id)
+      const old = { email: instance.email, loggedIn: instance.loggedIn, checkedAt: instance.checkedAt,
+        lastSignedInAt: instance.lastSignedInAt, usage: instance.usage, usageReadAt: instance.usageReadAt, plan: instance.plan }
+      try {
+        const now = Date.now()
+        Object.assign(instance, { email: a.email, loggedIn: true, checkedAt: now, lastSignedInAt: now, usage, usageReadAt: now, plan: a.plan })
+        delete instance.poolState
+        for (const victim of victims) victim.poolState = 'retired'
+        const receipt: FreePoolCommit = { ok: true, id: instance.id, existing: a.existing, replaced: victims.map(i => i.id), count: poolCount(this.store.data.instances, instance.provider), limit: a.limit }
+        a.state = 'committed'; a.result = receipt
+        try { await this.poolSaved() }
+        catch (error) {
+          // A failed/late write is uncertain. Queue a newer safe pending snapshot; never remove either login.
+          Object.assign(instance, old); instance.poolState = 'pending'
+          for (const victim of victims) delete victim.poolState
+          a.state = 'pending'; delete a.result
+          this.store.save()
+          throw error
+        }
+        delete a.before
+        this.store.save()
+        this.onLoginChange?.()
+        return structuredClone(receipt)
+      } finally { for (const victim of victims) this.forgetting.delete(victim.id) }
+    })
   }
   rename(id: string, value: unknown): FreeInstance {
     const r = record(value)
@@ -210,7 +471,7 @@ export class FreeInstances {
   keepWindows(): void {
     const settings = this.settings()
     for (const instance of [...this.store.data.instances]) {
-      if (!nudgeDue(instance, settings, Date.now()) || this.busy(instance.id)) continue
+      if (instance.poolState || !nudgeDue(instance, settings, Date.now()) || this.busy(instance.id)) continue
       try { this.start({ requestId: randomUUID(), instanceId: instance.id, provider: 'claude', command: 'nudge' }, true) } catch { /* Desk is stopping or its jobs are full; the next pass tries again */ }
     }
   }
@@ -220,7 +481,7 @@ export class FreeInstances {
     // Recovery replies keep the same expiry even when no account needs a read.
     this.prune()
     const now = Date.now()
-    const read = nextRead(this.store.data.instances, id => this.busy(id) || now - (this.refreshed.get(id) ?? 0) < USAGE_EVERY_MS, now)
+    const read = nextRead(this.store.data.instances, id => !!this.instance(id).poolState || this.busy(id) || now - (this.refreshed.get(id) ?? 0) < USAGE_EVERY_MS, now)
     if (!read) return
     this.refreshed.set(read.id, now)
     try { this.start({ requestId: randomUUID(), instanceId: read.id, provider: this.instance(read.id).provider, command: read.command }, true) } catch { /* its jobs are full; a later tick reads it */ }
@@ -232,11 +493,12 @@ export class FreeInstances {
       deleted: () => this.store.data.deleted ?? [],
       settled: id => this.store.settle(id),
       remove: async id => { await this.remove(id, { tombstone: false }) },
-      busy: id => this.busy(id),
+      busy: id => !!this.store.data.instances.find(i => i.id === id)?.poolState || this.busy(id),
       sessionFile: i => join(this.runtime.config(i.id).stateDir, i.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi'),
       adopt: shared => this.store.adopt(shared),
       landed: id => {
         const instance = this.instance(id)
+        if (instance.poolState || this.occupied(id)) return
         instance.loggedIn = true
         instance.checkedAt = instance.lastSignedInAt = Date.now()
         this.store.save()
@@ -345,6 +607,9 @@ export class FreeInstances {
     if (this.stopping) throw new FreeError('Desk is stopping. Read the chat after reconnecting.', 503)
     const instance = this.instance(r.instanceId)
     if (instance.provider !== r.provider) throw new FreeError('The provider does not match this instance.')
+    if (instance.poolState === 'pending') throw new FreeError('This account has a pending pool import. Resolve it before starting another operation.', 409, 'pool_pending')
+    if (instance.poolState === 'retired' && ['chat', 'resume', 'nudge', 'login'].includes(r.command))
+      throw new FreeError('This account is retired from the web pool. Renew its login before sending again.', 409, 'pool_retired')
     const running = [...this.jobs.values()].filter(j => j.instanceId === r.instanceId && j.state === 'running')
     if (this.forgetting.has(r.instanceId) || (running.length && (auto || running.some(j => !j.auto)))) throw new FreeError('This account already has an operation running.', 409)
     this.prune()

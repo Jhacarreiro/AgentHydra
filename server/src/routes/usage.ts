@@ -599,9 +599,7 @@ app.get('/api/cli-instances', async (c) => {
     rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })),
   )
   const liveSessions = await Promise.all(
-    rows.map(
-      async ({ i }) => (await readLiveRegistryAsync(i.configDir, { transcripts: false })).length,
-    ),
+    rows.map(async ({ i }) => await readLiveRegistryAsync(i.configDir, { transcripts: false })),
   )
   // Someone else is on the account now (CliMayte's accountInUse): CliMayte leaves it out for new work.
   const busy = cliInstancesInUse(rows.map((r) => r.i))
@@ -618,7 +616,9 @@ app.get('/api/cli-instances', async (c) => {
         : null,
       inUse: busy.has(i.id),
       lastNudge: nudges[i.id] ?? null,
-      liveSessions: liveSessions[k],
+      liveSessions: liveSessions[k].length,
+      // Their pids, for the Instances tab's exit watch (GET /api/instances/alive): a closed session leaves "Now" in seconds.
+      livePids: liveSessions[k].map((s) => s.pid),
       // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
       // keepalive nudge, whichever is newer: one stat, no transcript walk.
       lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,

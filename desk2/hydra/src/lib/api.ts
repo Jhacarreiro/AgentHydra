@@ -437,6 +437,9 @@ export const listInstances = () => j<CMInstance[]>('/api/instances')
 /** Each profile's signed-in login off disk, without the list's process scan: cheap enough to ask every few seconds. */
 export const listInstanceLogins = () =>
   j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
+/** Which of these app pids still run, by a signal-0 probe and no process scan; a gone one makes the next list scan fresh. */
+export const instancesAlive = (pids: number[]) =>
+  j<{ alive: Record<string, boolean> }>(`/api/instances/alive?pids=${pids.join(',')}`)
 export interface ClaudeNativeProfileConfig {
   port: number
   mode: 'native-only' | 'prefer-native'

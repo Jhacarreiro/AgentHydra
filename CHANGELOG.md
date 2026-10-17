@@ -7,9 +7,35 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
-- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
+- **Rejected and cleared logins no longer look available.** Empty CLI and decrypted Desktop credentials report signed out. An explicit authentication rejection marks only the unchanged CLI or Codex login it checked; network failures and verification refusals do not mark accounts dead.
+
+- **A fresh Desktop login can restore its linked CLI.** An idle linked CLI with an expired or rejected login can take the Desktop's fresh grant, and a verified account check clears its signed-out state. Healthy independent CLI logins and active work stay protected.
+
+- **See available accounts and a quieter status header.** The account kind counts exclude signed-out and inactive entries while keeping those rows available for repair. Scheduler status is shorter and the helper indicator shows its count, with details still available on demand.
+
+- **Renew existing Free and Go accounts without a capacity limit.** Refreshing a saved account, including a signed-out or retired one, keeps its existing entry and never displaces another account. The configured limit still applies to new imports, and every renewal still verifies the account and its plan.
+
+- **Make room in the Free pool without losing saved logins.** An idle Free account can leave the active pool while keeping its login and history. Busy, pending and paid accounts stay protected.
+
+- **Claude verification refusals preserve saved logins.** A temporary verification page no longer marks an account signed out. Explicit expired or invalid sessions still require renewal.
+
+- **Fresh ChatGPT logins finish importing when cookies refresh.** The account check now proves the saved login after a legitimate refresh, while still rejecting a different account or a later change. A valid renewal no longer stays pending just because ChatGPT rotated its cookies.
+- **Logging out on one PC is no longer undone by another.** A Claude session or Desktop app still running on the other PC refreshes its login, and login sync took that refresh for a new sign-in and signed the account back in everywhere; now only a real sign-in after the logout does. A Desktop copy is also judged newer by its own sign-in grant, not by a year-long one beside it.
+- **People sync keeps a newer CrAInium edit over an unchanged copy here.** A checkout, copy or restore that rewrote a person's files without changing them made that old copy look newer and replace the edit; now a copy unchanged since the last sync never wins.
+- **Much more work goes to your Free accounts.** Read and web tasks try your Free accounts before CliMayte and paid models, and a task that fails on one Free account moves to another, keeping its progress, instead of going straight to a paid model. Tool-free work asks the Free model that suits it (Sonnet for decisions and research), and a task with nowhere to go waits briefly for a Free account before paying.
+- **ChatGPT Free sends work again.** A send no longer fails when the ChatGPT page changes the typed text or is slow to switch to Temporary Chat: the message that goes out is your exact prompt, sent only once the page shows Temporary Chat on, and the chat is still checked to be temporary afterwards. A failure now says which check failed.
+- **Claude Free accounts are not overloaded.** Each takes one HSwarm task at a time, an account whose 5-hour window has reset counts as having room again, and a finished answer is no longer thrown away when Claude is slow to store it.
+- **A Free outage shows up.** `hswarm doctor` warns when a Free provider is resting or failing most of its sends, and AgentHydra keeps a failing provider's rest across restarts.
+- **A chat with a background task still running no longer looks idle in the sidebar.** A Claude Desktop or CLI chat whose reply has finished while its background command, watcher or workflow still runs now shows the orange running dot at full brightness, as AgentHydra's own chats do, instead of the dim idle ring.
+- **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
+- **Connectors is a compact table.** Settings → Connectors lists each connector on one line with its type, status, action and switch; details open under it. A connector that is not installed can no longer be switched on.
 - **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
+- **A Tools tab.** Managers and routines in one place: an overview of each at a glance, the sidebar split into Managers and Routines, and each one's page. The managers moved here from HSwarm.
+- **Routines show the campaigns they work for.** A routine names its campaigns, and its page shows each one's sent, replied, bounced and ready counts, its last run, and what is happening now and next.
+- **The Instances filter applies to every row.** CLI, Free and DeepSeek harness rows now follow the plan and status filters, and the plan list offers their plans too.
+- **A login warning clears itself after you sign in.** A running app whose login could not be confirmed is checked again every few seconds, so its warning goes away soon after you sign back in.
+- **A closed app shows as closed within seconds.** Closing a Claude, Codex or CLI session outside AgentHydra now shows on its row in a few seconds instead of at the next refresh. A process check that times out no longer shows every Codex app as closed.
+- **Shared chats no longer fill the sync store.** Each PC keeps its own copy, so the store now lets go of a chat's transcript as soon as your other PCs have it, instead of keeping every chat whole until the store is full. A PC that joins later or lost its copy asks for the chat again and gets it whole, and when room is short your most recently active chats go first.
 - **A CliMayte dispatch sent again answers with its workers' own group.** A dispatch retried with the same request ids and no group name returned the workers it had already started, but under a new group name that held none of them, so checking or cancelling that group found nothing. The retry now answers with the group they are in, and a task new in it joins that group.
 
 ## [2.0.5] - 2026-10-16
@@ -33,6 +59,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in 2.0.5**
 
+- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
+- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
 - **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
 - **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
 - **Stuck shared chats finish, and a full chat store clears itself.** A shared chat whose transcript moved to a new session no longer sits at "receiving" on your other PC: it is sent again from the start, and a PC that finds pieces of a chat missing asks for it again. Once a day the sync store also frees transcript pieces no chat uses anymore, which had filled its room and stopped new chats from being shared.

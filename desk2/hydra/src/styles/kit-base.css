@@ -245,6 +245,10 @@ html.theme-transitioning *::after {
 .scroll-slim { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .scroll-slim::-webkit-scrollbar { width: 8px; height: 8px; }
 .scroll-slim::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+/* A row of tabs that may outgrow its space scrolls sideways under a fade at its end (a longer label or another tab
+   never breaks it). The end padding keeps the fade on empty space until the row overflows. */
+.scroll-fade-x { overflow-x: auto; scrollbar-width: none; padding-inline-end: 16px; mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
+.scroll-fade-x::-webkit-scrollbar { display: none; }
 
 /* --- shell/ExpandTransition.vue: grid-rows 0fr<->1fr expand/collapse (Transition name="kit-expand") --- */
 .kit-expand-grid {
