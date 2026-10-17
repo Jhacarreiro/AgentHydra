@@ -171,14 +171,15 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
 <template>
   <section class="flex h-full min-w-0 flex-1 flex-col bg-(--bg-page)" data-testid="dashboard-page" :aria-label="`Dashboard for ${title}`">
     <!-- The window's title row when it draws its own (lib/host-window.ts): it drags the window, and keeps clear of its buttons.
-         In a narrow row the Open buttons show only their icons, and their tooltips say which is which. -->
+         In a narrow row the Open buttons show only their icons, and their tooltips say which is which; in a phone-wide
+         one the glyph and Copy step aside so the project's name stays readable. -->
     <header class="@container title-drag flex h-10.25 shrink-0 items-center gap-2 pe-[calc(0.75rem+var(--caption-w))]" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip label="Back to the chat">
         <button type="button" aria-label="Back to the chat" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="closeDashboard()">
           <ArrowLeft class="size-4" aria-hidden="true" />
         </button>
       </Tip>
-      <span class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-2">
+      <span class="hidden size-6 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-2 @sm:flex">
         <DashboardGlyph class="size-3.5" aria-hidden="true" />
       </span>
       <div class="flex min-w-0 flex-1 items-baseline gap-2">
@@ -203,7 +204,7 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
         </Tip>
       </template>
       <Tip :label="copied ? 'Copied' : 'Copy folder path'">
-        <button type="button" aria-label="Copy folder path" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="copyFolder">
+        <button type="button" aria-label="Copy folder path" class="hidden size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text @sm:flex" @click="copyFolder">
           <Copy class="size-3.5" aria-hidden="true" />
         </button>
       </Tip>
