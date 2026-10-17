@@ -491,8 +491,10 @@ export async function capturePipedProc(
   // had printed and exited.) Accumulating as the bytes arrive means the text we already have is
   // still ours the moment the deadline fires.
   const held = { stdout: '', stderr: '' }
+  const readers = new Set<{ cancel(): Promise<void> }>()
   const drain = async (stream: ReadableStream<Uint8Array>, into: 'stdout' | 'stderr') => {
     const reader = stream.getReader()
+    readers.add(reader)
     // An unwanted stream still has to drain, but its text need never occupy memory.
     const decoder = into === 'stdout' || wantStderr ? new TextDecoder('utf-8') : null
     try {
@@ -505,6 +507,7 @@ export async function capturePipedProc(
     } catch {
       // Killed mid-write, or the pipe closed under us: what arrived is still the honest answer.
     } finally {
+      readers.delete(reader)
       try {
         reader.releaseLock()
       } catch {
@@ -549,6 +552,15 @@ export async function capturePipedProc(
   } finally {
     if (timer) clearTimeout(timer)
     if (proc.exitCode === null && !proc.killed && proc.pid) void killProcessTreesAsync([proc.pid])
+    // A pipe held after the grace period no longer belongs to an answered capture. Cancellation
+    // closes its pending read even if the underlying cancel never settles; never await that hook.
+    for (const reader of readers) {
+      try {
+        void reader.cancel().catch(() => {})
+      } catch {
+        // The stream may have closed while the capture was returning.
+      }
+    }
   }
 }
 

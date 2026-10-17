@@ -438,11 +438,11 @@ export class FreeInstances {
     }
   }
   private async afterAuth(r: FreeRequest, result: FreeResult, instance: FreeInstance, config: ReturnType<FreeRuntime['config']>, signal: AbortSignal): Promise<void> {
-    // Only an answer moves the login: the site took it, or said it needs one (login_required). A check that failed
+    // Only an answer moves the login: the site took it, or said it needs one (login_required or login_expired). A check that failed
     // on its own (offline after sleep, a crashed harness) leaves it as it was: Desk checks in the background now
     // (refresh.ts), and a working login read as signed out would never be checked again.
     const signedIn = result.ok && result.authenticated === true
-    if (result.ok || r.command === 'login' || result.error?.code === 'login_required') instance.loggedIn = signedIn
+    if (result.ok || r.command === 'login' || result.error?.code === 'login_required' || result.error?.code === 'login_expired') instance.loggedIn = signedIn
     instance.checkedAt = Date.now()
     if (!signedIn) return
     instance.lastSignedInAt = instance.checkedAt
