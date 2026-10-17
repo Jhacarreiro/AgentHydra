@@ -1,8 +1,11 @@
 """Free web accounts first: a task may be answered by one of the owner's signed-in Free claude.ai or chatgpt.com
-accounts, which AgentHydra manages, before any paid API leg is used: a tool-free task in one message, and a routine or
-general task offered only reading tools (config.ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES) as a thread that
-runs them through a text protocol (free_client.py). `consult` reads `free_status`, sends one `free_chat`
-task and polls `free_results` over AgentHydra's MCP endpoint (POST /api/mcp, stateless JSON-RPC).
+accounts, which AgentHydra manages, before any paid API leg is used: a tool-free task in one message, and a tool task
+offered only the tools its profile may use there (config.ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, and the edit
+and shell tools for ROUTE_VIA_FREE_EDIT_PROFILES and ROUTE_VIA_FREE_SHELL_PROFILES) as a thread that runs them through a
+text protocol (free_client.py). A task that may edit or run a shell works in a scratch copy of its folder (scratch.py):
+its changes land in the real folder only when its answer is accepted, so a try that fails leaves nothing behind.
+`consult` reads `free_status`, sends one `free_chat` task and polls `free_results` over AgentHydra's MCP endpoint
+(POST /api/mcp, stateless JSON-RPC).
 
 Never a failure of its own: the daemon down or slow, not ready, no idle signed-in account, a refused send, a failed or
 timed-out task, or an answer that is not the JSON the schema asks for keeps the task on its API route, logged once per job.
@@ -14,13 +17,14 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import re
 import time
 import urllib.error
 import urllib.request
 from collections import Counter
 
-from . import config
+from . import config, scratch
 from .climayte_route import base_url
 from .free_client import FreeChatClient, TurnError, redo, tool_names_allowed, turn
 from .spec import Result, Task, inline_files, now_iso
@@ -56,6 +60,9 @@ MOVE_CODES = ("rate_limited", "answer_not_confirmed", "generation_error", "opera
 MOVE_TEXT = ("free accounts unavailable", "No signed-in Free")
 NOT_SENT = ("browser_preparation_", "browser_pool_unavailable", "browser_busy")
 _PROBED: dict[str, float] = {}  # provider -> when a task was last sent past its health gate (_pick)
+EDIT_TOOLS = frozenset({"write_file", "edit_file", "bash", "bash_start"})  # a task offered any of these works in a scratch copy
+# Off only in the A/B (free_ab.py): an accepted scratch leg's changes go on its route note as a diff instead of landing.
+LAND = True
 
 
 def eligible(task: Task) -> bool:
@@ -78,9 +85,30 @@ def eligible(task: Task) -> bool:
     if task.tools != "none":
         if task.profile not in config.ROUTE_VIA_FREE_TOOL_PROFILES or not tool_names_allowed(task):
             return False
+        if editing(task) and not _scratchable(task):
+            return False
     elif task.profile not in config.ROUTE_VIA_FREE_PROFILES:
         return False
     return len(shape(task)) <= MAX_PROMPT_CHARS
+
+
+def editing(task: Task) -> bool:
+    """Whether a task is offered a tool that changes its folder (EDIT_TOOLS), so its Free legs work in a scratch copy."""
+    from .toolspecs import tool_names
+
+    try:
+        return task.tools != "none" and bool(set(tool_names(task.tools)) & EDIT_TOOLS)
+    except ValueError:
+        return False
+
+
+def _scratchable(task: Task) -> bool:
+    """Whether an edit or shell task can work in a scratch copy: its tools run on this host (a runtime's run elsewhere),
+    it has no shell_grants (they allow git writes, and a worktree shares its checkout's refs, so a commit there would not
+    stay in the copy), no capability grant and no scripted replay (both judge the real folder), and its folder was not
+    just refused a copy (scratch.refused_recently)."""
+    return (task.runtime in ("", "host") and not task.shell_grants and not task.capability and not task.scripted
+            and bool(task.cwd) and os.path.isabs(task.cwd) and not scratch.refused_recently(task.cwd))
 
 
 def shape(task: Task) -> str:
@@ -393,19 +421,24 @@ async def _serve(job_id: str, task: Task, ask: tuple[str, str | None], accounts:
 
 
 async def _serve_tools(job_id: str, task: Task, accounts: list | None, ask: tuple[str, str | None], exclude: list[int],
-                       timeout_s: float, resume: list[dict] | None, moved: int):
+                       timeout_s: float, resume: list[dict] | None, moved: int, scr: scratch.Scratch | None = None):
     """A tool task on one Free thread: the API loop itself (agent.run_api_task) with a FreeChatClient for its wire, so the
     sandbox, receipts, schema check, loop guard and wall are the API route's own. Returns (result, None, None, messages)
     when it was answered; else (None, the miss, the daemon's error when the account or its thread is at fault, the
-    messages so far: the next account resumes them). Its tools only read, so a failed thread leaves nothing behind."""
+    messages so far: the next account resumes them). An edit or shell task's thread works in the scratch copy `scr`, with
+    the same sandbox and shell rules rooted there and its shell kept off the real folder (scratch.SHELL_GUARD); what it
+    changed stays in the copy until consult lands it."""
     from .agent import run_api_task
 
     model, provider = ask
     client = FreeChatClient(job_id, task, model, call=_call, provider=provider, exclude=exclude, moved=moved)
-    leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, timeout_s))
+    leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, timeout_s),
+                              **(scr.leg_fields(task) if scr is not None else {}))
+    guard = scratch.SHELL_GUARD.set(scr.real_rx if scr is not None else None)
     try:
         res, msgs = await run_api_task(client, leg, user_tag=job_id, resume_messages=resume)
     finally:
+        scratch.SHELL_GUARD.reset(guard)
         await client.aclose()
     one = {"account": client.account, "model": client.model, "chat_id": client.chat_id}
     if res.status != "ok":
@@ -422,14 +455,42 @@ async def _serve_tools(job_id: str, task: Task, accounts: list | None, ask: tupl
     return res, None, None, msgs
 
 
+def _land(task: Task, scr: scratch.Scratch, res: Result) -> None:
+    """An accepted scratch leg's changes into the real folder (scratch.land: all or none), and its answer, data and paths
+    written as the real folder's. With LAND off (the A/B) the changes go on its route note as a diff instead."""
+    changes = scr.changes(res.files_changed)
+    route = res.selection.setdefault("route", {})
+    if LAND:
+        route["landed"] = len(scr.land(changes))
+    else:
+        route["diff"] = scr.diff(changes)
+    real_cwd = scr.real / scr.cwd.relative_to(scr.base)
+    res.files_changed = sorted(c.real.relative_to(real_cwd).as_posix() if c.real.is_relative_to(real_cwd) else c.real.as_posix()
+                               for c in changes)
+    res.answer, res.data, res.error = scr.restore(res.answer), scr.restore(res.data), scr.restore(res.error)
+    res.acceptance = scr.restore(res.acceptance)
+    res.edit_snapshot = [{**e, "path": scr.restore(e.get("path"))} for e in res.edit_snapshot or [] if isinstance(e, dict)]
+
+
 async def consult(job_id: str, task: Task, wait: bool = False) -> tuple[Result | None, dict | None]:
     """(a finished Result, notes) when a free account served the task, the notes being the earlier Free tries that failed
     (`earlier`: jobs books each one); (None, note) when the API route runs and the note says why (the last try that
     failed, or no account free to take it); (None, None) when nobody was asked or nothing is worth noting. A job task with
-    `wait` whose Free accounts have no room waits up to config.ROUTE_VIA_FREE_WAIT_S for one (ROOM_POLL_S apart)."""
-    global _ACTIVE
+    `wait` whose Free accounts have no room waits up to config.ROUTE_VIA_FREE_WAIT_S for one (ROOM_POLL_S apart). An edit or
+    shell task's tries share one scratch copy, made for its first try and dropped when consult ends."""
     if not eligible(task):
         return None, None
+    scr: list[scratch.Scratch] = []
+    try:
+        return await _tries(job_id, task, wait, scr)
+    finally:
+        if scr:
+            await asyncio.to_thread(scr[0].drop)
+
+
+async def _tries(job_id: str, task: Task, wait: bool, scr: list) -> tuple[Result | None, dict | None]:
+    """consult's tries: the Free accounts in turn until one serves the task or none can. `scr` holds the scratch copy."""
+    global _ACTIVE
     asked = time.monotonic()
     try:
         status = await _call("free_status", {}, STATUS_TIMEOUT_S)
@@ -477,12 +538,31 @@ async def consult(job_id: str, task: Task, wait: bool = False) -> tuple[Result |
                 res, miss, fail = await _serve(job_id, task, ask, status.get("accounts"), left, exclude, len(failed))
                 msgs = None
             else:
+                if not scr and editing(task):
+                    try:
+                        scr.append(await asyncio.to_thread(scratch.open_scratch, task.cwd))
+                    except (scratch.ScratchRefused, OSError) as e:
+                        scratch.note_refused(task.cwd, str(e))  # eligible() leaves this folder's tasks alone for a while
+                        _say(job_id, f"no scratch copy of {task.cwd} for a Free edit leg ({str(e)[:160]}); the task keeps its other routes")
+                        return None, _last(failed, None)
+                    left = deadline - time.monotonic()
                 res, miss, fail, msgs = await _serve_tools(job_id, task, status.get("accounts"), ask, exclude, left,
-                                                           carried, len(failed))
+                                                           carried, len(failed), scr[0] if scr else None)
         finally:
             _ACTIVE -= 1
             if started_at in _SENT:  # a finished task's account is free again, however recently it was sent
                 _SENT.remove(started_at)
+        if res is not None and scr:
+            try:
+                await asyncio.to_thread(_land, task, scr[0], res)
+            except (scratch.EditConflict, scratch.ScratchRefused, OSError) as e:
+                # Not the account's fault: no other Free account is tried, and the task's other routes start from the
+                # real folder as it is, none of this leg's changes in it.
+                _say(job_id, f"a Free edit leg's changes did not land ({str(e)[:160]}); the task runs on its other routes")
+                route = (res.selection or {}).get("route") or {}
+                one = {"account": route.get("account"), "model": res.model.removeprefix("free:")}
+                failed.append(_miss(task, "free edits did not land", "error", "conflict", one, status.get("accounts"), str(e)[:200]))
+                return None, _last(failed, None)
         if res is not None:
             return res, ({"earlier": failed} if failed else None)
         failed.append(miss)

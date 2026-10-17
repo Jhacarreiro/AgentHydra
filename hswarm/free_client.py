@@ -488,8 +488,8 @@ def _since(updated, started: float) -> bool:
 
 
 def tool_names_allowed(task: Task) -> bool:
-    """Whether every tool the task is offered is one a Free task may use (config.ROUTE_VIA_FREE_TOOLS, and the web tools
-    for a profile in config.ROUTE_VIA_FREE_WEB_PROFILES)."""
+    """Whether every tool the task is offered is one a Free task may use (config.ROUTE_VIA_FREE_TOOLS, and the web, edit
+    and shell tools for a profile in config.ROUTE_VIA_FREE_WEB_PROFILES, _EDIT_PROFILES and _SHELL_PROFILES)."""
     from .toolspecs import tool_names
 
     try:
@@ -499,4 +499,8 @@ def tool_names_allowed(task: Task) -> bool:
     allowed = set(config.ROUTE_VIA_FREE_TOOLS)
     if task.profile in config.ROUTE_VIA_FREE_WEB_PROFILES:
         allowed |= set(config.FREE_WEB_TOOLS)
+    if task.profile in config.ROUTE_VIA_FREE_EDIT_PROFILES:
+        allowed |= set(config.FREE_EDIT_TOOLS)
+    if task.profile in config.ROUTE_VIA_FREE_SHELL_PROFILES:
+        allowed |= set(config.FREE_SHELL_TOOLS)
     return bool(names) and names <= allowed

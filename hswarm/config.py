@@ -318,6 +318,17 @@ _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT = ("research",)
 ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
 _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general", "decision", "research", "critical", "code")
 ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
+# `route_via_free_edit_profiles` / `route_via_free_shell_profiles`: the profiles whose tool tasks may also be offered the
+# edit tools (FREE_EDIT_TOOLS) / the shell (FREE_SHELL_TOOLS) on Free. Such a leg works in a scratch copy of its folder
+# (scratch.py): a git worktree at HEAD with the checkout's dirty and small ignored files on top, or a copy of a folder that
+# is no checkout. Its changes land in the real folder only when its answer is accepted and every file it touched is
+# still what the copy started from; a failed or refused leg drops the copy, so the task's next route starts clean.
+FREE_EDIT_TOOLS = ("write_file", "edit_file")
+FREE_SHELL_TOOLS = ("bash",)
+_ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT: tuple[str, ...] = ()
+ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
+_ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT: tuple[str, ...] = ()
+ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
 # whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
@@ -604,6 +615,7 @@ def _apply_free_settings(doc: dict) -> None:
 def _apply_free_lists(doc: dict) -> None:
     global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
     global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S
+    global ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
     if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
@@ -612,6 +624,11 @@ def _apply_free_lists(doc: dict) -> None:
     fwp = doc.get("route_via_free_web_profiles")
     if _is_str_list(fwp):
         ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
+    fep, fsp = doc.get("route_via_free_edit_profiles"), doc.get("route_via_free_shell_profiles")
+    if _is_str_list(fep):
+        ROUTE_VIA_FREE_EDIT_PROFILES = tuple(p.strip().lower() for p in fep)
+    if _is_str_list(fsp):
+        ROUTE_VIA_FREE_SHELL_PROFILES = tuple(p.strip().lower() for p in fsp)
     fcp = doc.get("route_via_free_check_profiles")
     if _is_str_list(fcp):
         ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)
