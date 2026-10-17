@@ -24,6 +24,7 @@ test.skipIf(process.platform !== 'win32')(
     // worker straight after it started was traced as "an unidentified process").
     nativeProcessTable({ fresh: true })
     const child = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 5000)', marker], {
+      windowsHide: true,
       stdout: 'ignore',
       stderr: 'ignore',
     })

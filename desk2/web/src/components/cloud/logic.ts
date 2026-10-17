@@ -7,6 +7,7 @@
 // and computer narrow the rows already fetched.
 import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
 import { folderKey, folderLabel, NO_FOLDER, namesakeFolder, sortFolders, stableOrder, type SidebarOrder } from '../sidebar/logic'
+import { sortRows, type RowFacts, type SidebarSort } from '../sidebar/sort'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 export function modelName(m: string | null | undefined): string | null {
@@ -428,6 +429,8 @@ export interface GroupCloudOptions {
   desk?: ReadonlyMap<string, DeskPlace>
   /** The order both lists keep (sidebar/order.ts); without one, groups by their newest row and rows newest first. */
   order?: SidebarOrder
+  /** How the rows sort (sidebar/sort.ts; the default, by date started). 'manual' keeps `order`. */
+  sort?: SidebarSort
 }
 
 /**
@@ -477,12 +480,21 @@ export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string,
   }
   for (const g of groups) g.rows.sort(newestFirst)
   const sorted = sortFolders(groups)
+  // The sort is the desk list's too (sidebar/sort.ts), so both lists order their rows the same way.
+  const mode = opts.sort ?? 'started'
+  if (mode !== 'manual') {
+    for (const g of sorted) g.rows = sortRows(g.rows, mode, cloudFacts)
+    return sorted
+  }
   const order = opts.order
   if (!order) return sorted
   const cloudOnly = (r: CloudSession) => !desk.has(r.id)
   for (const g of sorted) g.rows = stableOrder(g.rows, (r) => rowOrderKey(r, desk), order.rows, cloudOnly)
   return sorted
 }
+
+/** What the sort reads of a cloud row (sidebar/sort.ts): its title, when it started, its last activity. */
+const cloudFacts = (r: CloudSession): RowFacts => ({ title: r.title, started: r.createdAt ?? null, activity: r.lastActivityAt ?? 0 })
 
 /**
  * What the cloud list adds to the saved order, at its end (sidebar/logic.ts recordCloudOrder): its rows the desk
@@ -500,18 +512,28 @@ export function summarize(selected: readonly string[], universe: readonly string
   return shown.length === 1 ? (shown[0] ?? '') : `${shown[0]} +${shown.length - 1}`
 }
 
+const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((v) => b.includes(v))
+
 /** Any filter narrowing the list, so the filter button shows it is on. */
 export function scopesNarrowed(s: CloudScopes): boolean {
+  return !same(s.apps, DEFAULT_SCOPES.apps) || s.pcs !== null || cloudOnlyNarrowed(s)
+}
+
+/**
+ * Whether a filter only the cloud list can apply is off its default: Instance, Queued work, Usage limits, Session shape,
+ * Archived or Time period. The desk list applies Apps and Computer itself but none of these, so while one is changed
+ * the sidebar draws the cloud list, which applies them all (Sidebar.vue). Before, the cloud button drew the desk list
+ * whatever they said, and they changed nothing on screen (owner, 2026-10-17: "I chose only archived. It's not showing
+ * archived").
+ */
+export function cloudOnlyNarrowed(s: CloudScopes): boolean {
   const d = DEFAULT_SCOPES
-  const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((v) => b.includes(v))
   return (
-    !same(s.apps, d.apps) ||
     s.instance !== null ||
     !same(s.dispatched, d.dispatched) ||
     !same(s.rateLimit, d.rateLimit) ||
     !same(s.shape, d.shape) ||
     !same(s.archived, d.archived) ||
-    s.period !== d.period ||
-    s.pcs !== null
+    s.period !== d.period
   )
 }

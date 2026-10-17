@@ -27,7 +27,7 @@ from .grep import GREP_LINE_RX, py_grep, relative_hits, rg_lines
 from .guard import restore
 from .outfilters import filter_output, strip_raw
 from .redaction import RESTORE_TOOLS, Redactor, restore as restore_tags
-from . import config, receipts, walk
+from . import config, receipts, scratch, walk
 from .procs import CREATE_NO_WINDOW, TIMEOUT_EXIT, find_bash, kill_tree, run_hidden, scrubbed_env  # noqa: F401 - re-exported
 from .survival import MAX_BYTES, read_text
 from .outline import LANGS, language_of, render_outline, render_unfold
@@ -342,6 +342,8 @@ class Sandbox:
         self.receipts: list[dict] = []  # r1..rN, one per call in call order
         # PII/secret redaction of every tool output before it reaches the provider (redaction.py); None sends it as read.
         self.redactor = redactor
+        # A Free leg in a scratch copy (scratch.py): the real folder's path, which its shell may not name.
+        self.real_guard = scratch.SHELL_GUARD.get()
 
     def spill(self, text: str) -> str | None:
         """Keep `text` where fetch_output can return it; the handle, or None with no spill directory."""
@@ -857,8 +859,19 @@ class Sandbox:
             env[ENVELOPE_VAR] = json.dumps(self.envelope, separators=(",", ":"))
         return env
 
+    def scratch_refusal(self, command: str) -> str | None:
+        """The refusal for a scratch leg's command that names the real folder: the leg's changes must stay in the copy,
+        which is checked and landed as a whole (scratch.py)."""
+        hit = self.real_guard.search(command) if self.real_guard is not None else None
+        if hit is None:
+            return None
+        return (f"ERROR: this run works in a copy of the project at {self.cwd}; a shell command may not name the real folder "
+                f"({hit.group(0)}). Use paths in the copy (relative to the working folder), and read_file, grep or list_dir "
+                "for a file that is only at its real path.")
+
     async def t_bash(self, command: str, timeout_s: int = 120) -> str:
-        refusal = shellpolicy.refusal(command, self.shell_grants) or await self.permit("run", command)
+        refusal = (self.scratch_refusal(command) or shellpolicy.refusal(command, self.shell_grants)
+                   or await self.permit("run", command))
         if refusal:
             return refusal
         sh = find_bash()
@@ -884,7 +897,8 @@ class Sandbox:
     # and read its sanitized output in bounded windows while the worker keeps going.
 
     async def t_bash_start(self, command: str, stdin: bool = False) -> str:
-        refusal = shellpolicy.refusal(command, self.shell_grants) or await self.permit("run", command)  # the same checks as t_bash
+        refusal = (self.scratch_refusal(command) or shellpolicy.refusal(command, self.shell_grants)
+                   or await self.permit("run", command))  # the same checks as t_bash
         if refusal:
             return refusal
         sh = find_bash()

@@ -94,7 +94,9 @@ function ensureWorker(): Worker {
   const w = new Worker(URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' })))
   // Never what keeps the process alive: the daemon has its server for that, and a test run or a
   // one-shot CLI must be free to exit.
-  w.unref()
+  // Desk also typechecks this module with DOM's Worker declaration. Runtime is Bun,
+  // whose workers provide unref even though the browser declaration does not.
+  ;(w as Worker & { unref(): void }).unref()
   w.onmessage = (e: MessageEvent<{ id: number; rows?: unknown[]; error?: string }>) => {
     if (worker !== w || !inFlight || e.data.id !== inFlight.id) return
     const job = inFlight

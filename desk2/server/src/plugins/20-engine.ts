@@ -272,7 +272,7 @@ function itemsRoute(c: Context, manager: ChatManager, id: string): Response {
 function chatRoutes(app: Hono, manager: ChatManager): void {
   app.get('/api/chats', (c) => {
     const flag = c.req.query('archived')
-    return c.json(manager.list({ archived: flag === '1' || flag === 'true' }))
+    return c.json(manager.list({ archived: flag === '1' || flag === 'true', stamps: c.req.query('stamps') === '1' }))
   })
   app.post('/api/chats', (c) => answer(c, async () => manager.create(parseCreate(await body(c)))))
   // Before /api/chats/:id so 'import' is never read as a chat id.

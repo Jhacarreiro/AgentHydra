@@ -39,7 +39,13 @@ import {
   workers,
 } from './climayte-core'
 import { copySessionToCwd } from './climayte-cwd'
-import { etaBandCalibrations, etaCalibration, etaNote, MAX_PAST_ETAS } from './climayte-eta'
+import {
+  etaBandCalibrations,
+  etaCalibration,
+  etaNote,
+  MAX_PAST_ETAS,
+  SEAT_ETA_INSTRUCTION,
+} from './climayte-eta'
 import { allEtaSamples } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
 import {
@@ -51,6 +57,7 @@ import {
   DRONE_BRIEF,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
+  isCoreSeat,
   keepReport,
   LIGHT_BRIEF,
   NO_COMMIT_BRIEF,
@@ -751,9 +758,12 @@ export function leadPickPending(w: CliMayteWorker): boolean {
   return true
 }
 
+/** A seat's estimating sentences (SEAT_ETA_INSTRUCTION), which its Prime shows as the time left; empty for any other chat. */
+const seatEtaNote = (w: CliMayteWorker): string => (isCoreSeat(w) ? SEAT_ETA_INSTRUCTION : '')
+
 /** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
 function corePromptText(w: CliMayteWorker, cli: CliSession): string {
-  const head = [CORE_CHAT_NOTE, w.desk?.append]
+  const head = [CORE_CHAT_NOTE, seatEtaNote(w), w.desk?.append]
   // Keyed as the hook keys it: the Desk chat, else the session being launched (a handoff's new one, not w.sessionId).
   const chat = w.desk?.chatId ?? cli.id
   const placement = packPlacement(w)
@@ -778,7 +788,9 @@ function corePromptText(w: CliMayteWorker, cli: CliSession): string {
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
 export function chatPromptText(w: CliMayteWorker, cli: CliSession): string {
   if (coreModeOn()) return corePromptText(w, cli)
-  const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
+  const note = [w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE, seatEtaNote(w)]
+    .filter(Boolean)
+    .join('\n\n')
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
   let owner = ''
@@ -1004,7 +1016,7 @@ function journalLaunch(
   activeOnAccount: number,
 ): void {
   if (p.fromId) {
-    const left = [...w.attempts].reverse().find((a) => a.account.id === p.fromId)?.account
+    const left = w.attempts.findLast((a) => a.account.id === p.fromId)?.account
     journal(w, 'moved', {
       from: left ? acctLabel(left) : p.fromId,
       account: acctLabel(acct),

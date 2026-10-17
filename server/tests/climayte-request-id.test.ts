@@ -3,7 +3,7 @@
 // and the owner sent it again: AgentHydra had started the first worker anyway, so two ran the same
 // message. Desk now names each start and each message with a requestId and retries with the same one.
 
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, setSystemTime, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -94,6 +94,56 @@ describe('a start or a message sent again with its requestId is taken once', () 
     expect(workers.get(id)?.pending).toEqual(['a follow-up', 'a follow-up'])
     expect(climayteList({ id })[0]?.sendIds).toBeUndefined()
     expect(climayteList({ id })[0]?.requestId).toBe('desk-sent:4:d')
+  })
+
+  test('a message id is kept ten minutes however many other messages come, then forgotten', () => {
+    setCliMayteAccountsProvider(() => [])
+    const run = climayteRun({ group: 'request-id-window', tasks: [chat('busy worker')] })
+    groups.add(run.group)
+    const id = run.workers[0]?.id as string
+    const t0 = Date.now()
+    setSystemTime(new Date(t0))
+    try {
+      expect(climayteSend(id, 'the slow one', { requestId: 'desk-sent:10:slow' }).ok).toBe(true)
+      // Kept by count (the 50 newest), the slow retry below was queued a second time.
+      for (let i = 0; i < 60; i++)
+        expect(climayteSend(id, `other ${i}`, { requestId: `desk-sent:other:${i}` }).ok).toBe(true)
+      setSystemTime(new Date(t0 + 9 * 60_000))
+      expect(climayteSend(id, 'the slow one', { requestId: 'desk-sent:10:slow' })).toMatchObject({
+        ok: true,
+        message: expect.stringContaining('Already taken'),
+      })
+      expect(workers.get(id)?.pending.filter((p) => p === 'the slow one')).toHaveLength(1)
+      // Past the window the id is a new message again, and the expired ids are dropped.
+      setSystemTime(new Date(t0 + 11 * 60_000))
+      const late = climayteSend(id, 'the slow one', { requestId: 'desk-sent:10:slow' })
+      expect(late.ok).toBe(true)
+      expect(late.message).not.toContain('Already taken')
+      expect(workers.get(id)?.pending.filter((p) => p === 'the slow one')).toHaveLength(2)
+      expect(workers.get(id)?.sendIds).toEqual([{ id: 'desk-sent:10:slow', at: t0 + 11 * 60_000 }])
+    } finally {
+      setSystemTime()
+    }
+  })
+
+  test('ids saved before they carried their time still answer a retry', () => {
+    setCliMayteAccountsProvider(() => [])
+    const run = climayteRun({ group: 'request-id-old-shape', tasks: [chat('saved before')] })
+    groups.add(run.group)
+    const id = run.workers[0]?.id as string
+    const w = workers.get(id)
+    if (!w) throw new Error('no worker')
+    w.sendIds = ['desk-sent:20:old']
+    expect(climayteSend(id, 'from before', { requestId: 'desk-sent:20:old' })).toMatchObject({
+      ok: true,
+      message: expect.stringContaining('Already taken'),
+    })
+    expect(climayteSend(id, 'a new one', { requestId: 'desk-sent:21:new' }).ok).toBe(true)
+    expect(w.sendIds?.map((s) => (typeof s === 'string' ? s : s.id))).toEqual([
+      'desk-sent:20:old',
+      'desk-sent:21:new',
+    ])
+    expect(w.pending).toEqual(['a new one'])
   })
 
   test('a request id that is not one is refused, and nothing is made or queued', () => {

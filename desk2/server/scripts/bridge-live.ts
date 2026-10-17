@@ -23,7 +23,7 @@ console.log(
     `either window >= 85% ${instances.filter((a) => (a.fiveHourPct ?? 0) >= 85 || (a.weeklyPct ?? 0) >= 85).length}`,
 )
 const pick = await b.pickAccount()
-console.log(`pickAccount: ${pick.id === 'default' ? 'the default login' : `CLI instance #${pick.number}`}`)
+console.log(`pickAccount: ${pick ? `CLI instance #${pick.number}` : 'no account has room'}`)
 
 const sessions = await b.externalSessions()
 console.log(`external sessions: ${sessions.length}; by source ${JSON.stringify(count(sessions, (s) => s.source))}; by status ${JSON.stringify(count(sessions, (s) => s.status))}`)

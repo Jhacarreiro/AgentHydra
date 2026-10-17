@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+from itertools import chain
 import json
 import re
 import time
@@ -38,11 +39,68 @@ _VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
 PER_CHAT_COOKIES_KEPT = 20  # of each family
 CONFIRMED_CONVERSATION_MAX_BYTES = 512 * 1024
+_SNAPSHOT_INSPECTION_NODES = 1024
+_LINK_TOKEN = re.compile(r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201")
+
+
+def _render_links(text):
+    # No match can end after the last closing delimiter. Exclude that unfinished
+    # suffix before matching: repeated open URL tokens otherwise rescan it for
+    # every opener, making even a bounded browser snapshot quadratic to render.
+    end = text.rfind("\ue201")
+    if end < 0:
+        return text
+    prefix = text if end == len(text) - 1 else text[:end + 1]
+    rendered = _LINK_TOKEN.sub(r"[\1](\2)", prefix)
+    return rendered if end == len(text) - 1 else rendered + text[end + 1:]
+
+
+def _snapshot_certainly_oversize(body):
+    """Reject only a proven lower bound, without copying large JSON strings.
+
+    Inspection is bounded and lazy. Shared containers can only undercount; the
+    ordinary encoder still decides every answer not already proven oversized.
+    """
+    remaining = CONFIRMED_CONVERSATION_MAX_BYTES
+    stack = [iter((body,))]
+    seen = set()
+    for _ in range(_SNAPSHOT_INSPECTION_NODES):
+        while stack:
+            try:
+                value = next(stack[-1])
+                break
+            except StopIteration:
+                stack.pop()
+        else:
+            return False
+        kind = type(value)
+        if kind is str:
+            # UTF-8/JSON need at least one byte per Python string character.
+            remaining -= len(value)
+        elif kind is dict or kind is list or kind is tuple:
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            # Each member requires at least one output byte, independently of
+            # the character bytes counted in its keys or string values.
+            remaining -= len(value)
+            children = chain.from_iterable(value.items()) if kind is dict else value
+            stack.append(iter(children))
+        elif value is not None and kind is not int and kind is not float and kind is not bool:
+            # Subclass/custom iteration may differ from len()/items(). Let the
+            # existing encoder handle it rather than inferring an invalid size.
+            return False
+        if remaining < 0:
+            return True
+    return False
 
 
 def bounded_confirmed_conversation(body):
     """An optional in-memory readback; large conversations keep the normal GET."""
     if not isinstance(body, dict):
+        return None
+    if _snapshot_certainly_oversize(body):
         return None
     try:
         size = len(json.dumps(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
@@ -130,7 +188,17 @@ def thread_model(conversation):
     """The model a continued chat is sent on: the one its latest reply came from, when it is one AgentHydra sends, else
     Luna Instant. Before 2026-10-13 every continued message went to Luna Instant, so a thread started on GPT-6 answered
     only its first message there: a Free tool task, whose every tool result is a continued message, ran on Luna mini."""
-    for message in reversed(visible_messages(conversation, rich=False)):
+    return _model_from_messages(visible_messages(conversation, rich=False))
+
+
+def continuation_summary(conversation):
+    """Select the model and prior IDs once, retaining no projected messages or transcript."""
+    messages = visible_messages(conversation, rich=False)
+    return _model_from_messages(messages), [message['id'] for message in messages]
+
+
+def _model_from_messages(messages):
+    for message in reversed(messages):
         if message["role"] == "assistant" and message.get("model"):
             sent = message["model"]
             return sent if isinstance(sent, str) and SLUG.fullmatch(sent) else TEXT_MODEL
@@ -223,11 +291,7 @@ def _visible_message(message, *, rich=True):
         return None
     # The web app's visible link token is rendered as an ordinary Markdown
     # link. Its private-use delimiters must not become part of a source URL.
-    text = re.sub(
-        r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201",
-        r"[\1](\2)",
-        text,
-    )
+    text = _render_links(text)
     result = {
         "id": message.get("id"),
         "role": role,

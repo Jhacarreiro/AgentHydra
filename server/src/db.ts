@@ -270,6 +270,20 @@ create index if not exists idx_agent_status_at on agent_status(at);
   if (!cols.includes('allow_headless'))
     db.exec('alter table queue_items add column allow_headless integer not null default 0')
 }
+
+// queue_items is never pruned (the only delete is per-id in routes/queue.ts), so the monitor and the
+// retry/import sweeps must not read it whole every tick (2026-10-16). After the alters above, so the
+// columns these index exist on an old database too.
+db.exec('create index if not exists idx_queue_items_status on queue_items(status)')
+db.exec('create index if not exists idx_queue_items_session on queue_items(session_id)')
+db.exec(
+  'create index if not exists queue_items_retry_due on queue_items (not_before) ' +
+    "where status = 'queued' and retry_attempts > 0",
+)
+db.exec(
+  'create index if not exists queue_items_import_pending on queue_items (position) ' +
+    "where import_state = 'pending'",
+)
 {
   // --- the analytics tier (server/src/analytics.ts) --------------------------------------------
   // Per-session TOTALS, on the row that already describes this exact file revision, so a transcript
@@ -345,6 +359,13 @@ create index if not exists idx_agent_status_at on agent_status(at);
   // wall", which is a silent wrong answer rather than a missing one. The stamp makes an old row a
   // cache MISS instead: bump SCAN_VERSION in sessions.ts whenever parseMeta learns something new.
   add('scan_version', 'integer')
+  // Where the list scanner's fold stopped when it wrote this row (sessions.ts ParseState): the byte
+  // offset it had read to and the (up to) 64 bytes ending there. A transcript past the 12 MB window
+  // is only ever folded from its window, so after a restart these let message_count carry on from
+  // the whole history this row already counted instead of dropping to the window's share. NULL (old
+  // rows, shared stores) means nothing to carry; no SCAN_VERSION bump, since NULL is that answer.
+  add('fold_bytes', 'integer')
+  add('fold_check', 'blob')
 }
 
 // --- THE PERMANENT RECORD ------------------------------------------------------------------------

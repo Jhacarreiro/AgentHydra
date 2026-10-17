@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
-// left-handed sidebar"). A tree on the left (Overview, Savings, CliMayte, Managers > Babysitter, Orchestrator, Routines > its
-// agents, Providers > each provider > its models, All models,
+// left-handed sidebar"). A tree on the left (Overview, Savings, CliMayte, Providers > each provider > its models, All models,
 // Routing & roles, Clients > each client, Jobs (HSwarm jobs, CliMayte workers and waves), Help) picks what the right
 // pane shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
 // is a drawer, as in the console.
@@ -12,7 +11,8 @@
 // AgentHydra's cost routing between API keys and subscriptions; CliMayte lists its tasks in the pane, as
 // a manager, and its Waves child lists the manager waves (owner, 2026-10-06: "Move the waves section into
 // a subsection called waves underneath CLI Mate, instead of having it be in the same window"). Both are
-// AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
+// AgentHydra's own as well, so they stay in the tree and work while HSwarm is down. The managers (Babysitter,
+// Orchestrator, the routines) are not HSwarm's: they live in the Tools tab (components/tools/).
 //
 // In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, the other owner, 2026-10-04: one
 // sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
@@ -45,14 +45,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useFreeInstances } from '@/composables/useFreeInstances'
-import { useManagers } from '@/composables/useManagers'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
 import { deskSwarmAsk, deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
-import { managerDot, routineDot } from '@/lib/managers'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmCostRouting from './hswarm/HSwarmCostRouting.vue'
@@ -63,11 +61,6 @@ import HSwarmProviders from './hswarm/HSwarmProviders.vue'
 import HSwarmRouting from './hswarm/HSwarmRouting.vue'
 import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
-import HSwarmManagers from './hswarm/HSwarmManagers.vue'
-import HSwarmBabysitter from './hswarm/HSwarmBabysitter.vue'
-import HSwarmOrchestrator from './hswarm/HSwarmOrchestrator.vue'
-import HSwarmRoutines from './hswarm/HSwarmRoutines.vue'
-import HSwarmRoutine from './hswarm/HSwarmRoutine.vue'
 
 // CliMayte's page loads the first time its node is opened (its task detail is most of it); a pane left
 // open across a Desk update that asks for the old chunk takes lazyView's stale-pane path.
@@ -87,7 +80,9 @@ const jobsRunning = computed(
 const { activeCount: freeRunning } = useFreeInstances()
 const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
-type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
+// 'rest': every key is resting after a limit, which ends by itself, so the usage-limit pink and not yellow (owner,
+// 2026-10-17: yellow only for what needs him).
+type Dot = 'ok' | 'rest' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
   id: string
   label: string
@@ -125,7 +120,7 @@ interface TreeRow {
 
 const DOT_CLASS: Record<Dot, string> = {
   ok: 'bg-success',
-  warn: 'bg-warning',
+  rest: 'bg-limited',
   nokey: 'border border-muted-foreground',
   off: 'bg-muted-foreground/50',
   run: 'bg-primary animate-pulse',
@@ -165,9 +160,6 @@ const dec = (s: string) => {
 
 const sel = ref<string>(load('sel', 'overview'))
 const cur = ref<string>(sel.value)
-// The managers' state is read while the Managers node or one of its pages is on screen (useManagers polls it then).
-const managersShown = computed(() => sel.value === 'managers' || sel.value.startsWith('managers/'))
-const managers = useManagers(managersShown)
 const expanded = ref(new Set<string>(load<string[]>('exp', ['providers'])))
 const query = ref('')
 const adding = ref(false)
@@ -184,7 +176,7 @@ function provDot(p: any): [Dot, string] {
   if (!p.enabled) return ['off', t('hswarm.nav.switchedOff')]
   if (!p.keys) return ['nokey', t('hswarm.nav.noKeys')]
   if (p.ready > 0) return ['ok', t('hswarm.nav.ready')]
-  if (p.resting > 0) return ['warn', t('hswarm.nav.restingOnly')]
+  if (p.resting > 0) return ['rest', t('hswarm.nav.restingOnly')]
   return ['bad', t('hswarm.nav.allKeysDisabled')]
 }
 function jobDot(s: string): Dot {
@@ -195,46 +187,6 @@ function jobDot(s: string): Dot {
 
 const hasKeys = computed(() => !!state.value?.providers?.some((p: any) => p.keys > 0))
 const climayteActive = climayteRunning
-
-// The Managers node (owner, 2026-10-12: "the managers in general should" have a tab in HSwarm): Babysitter, Orchestrator
-// and Routines, whose kids are its routines, each with its state dot. Desk keeps them, so the node is the
-// same whether or not HSwarm runs (standalone, Desk's routes do not answer: the node stays, its pages say so).
-function managersNode(): TreeNode {
-  const bs = managers.babysitter
-  const orc = managers.orchestrator
-  const rt = managers.routines
-  return {
-    id: 'managers',
-    label: t('hswarm.v.managers.title'),
-    icon: ListChecks,
-    kids: [
-      {
-        id: 'managers/babysitter',
-        label: t('hswarm.v.managers.babysitter.title'),
-        dot: managerDot(bs?.enabled, !!bs?.error),
-        dotTitle: bs ? (bs.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')) : undefined,
-      },
-      {
-        id: 'managers/orchestrator',
-        label: t('hswarm.v.managers.orchestrator.title'),
-        dot: managerDot(orc ? orc.mode === 'armed' : undefined, false),
-        dotTitle: orc ? (orc.mode === 'armed' ? t('hswarm.v.managers.orchestrator.armed') : t('hswarm.v.managers.orchestrator.shadow')) : undefined,
-      },
-      {
-        id: 'managers/routines',
-        label: t('hswarm.v.managers.routines.title'),
-        dot: managerDot(rt?.enabled, !!rt?.error),
-        dotTitle: rt ? (rt.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')) : undefined,
-        kids: (rt?.routines ?? []).map((r) => ({
-          id: `managers/routines/${enc(r.id)}`,
-          label: r.name,
-          dot: routineDot(r.state),
-          dotTitle: t(`hswarm.v.managers.state.${r.state}`),
-        })),
-      },
-    ],
-  }
-}
 
 // The console's tree: a model is part of its provider, so each provider opens onto its models. Routing and
 // CliMayte are there before HSwarm's state is (or while HSwarm is down): their pages are AgentHydra's.
@@ -249,7 +201,7 @@ const nodes = computed<TreeNode[]>(() => {
     count: active || null,
     dotTitle: active ? t('hswarm.nav.climayteActive', { n: active }) : undefined,
   }
-  if (!s) return [routing, climayte, managersNode()]
+  if (!s) return [routing, climayte]
   const provs = [...(s.providers ?? [])].sort(
     (a, b) => Number(b.keys > 0) - Number(a.keys > 0) || a.name.localeCompare(b.name),
   )
@@ -265,7 +217,6 @@ const nodes = computed<TreeNode[]>(() => {
     { id: 'overview', label: t('hswarm.overview'), icon: LayoutGrid },
     { id: 'savings', label: t('hswarm.savings'), icon: PiggyBank },
     climayte,
-    managersNode(),
     {
       id: 'providers',
       label: t('hswarm.providers'),
@@ -424,13 +375,6 @@ const page = computed(() => {
       return { component: HSwarmJobs, props: { jobId: a } }
     case 'climayte':
       return { component: CliMayteView, props: {} }
-    case 'managers':
-      // The Managers node's pages: Desk's managers, read-only. The Run now button and the work list are the routine page's.
-      if (a === 'babysitter') return { component: HSwarmBabysitter, props: { managers } }
-      if (a === 'orchestrator') return { component: HSwarmOrchestrator, props: { managers } }
-      if (a === 'routines' && b) return { component: HSwarmRoutine, props: { routine: b, managers, state: state.value } }
-      if (a === 'routines') return { component: HSwarmRoutines, props: { managers } }
-      return { component: HSwarmManagers, props: { managers } }
     case 'help':
       return { component: HSwarmTools, props: {} }
     default:
@@ -655,7 +599,7 @@ async function askIcons() {
 // Hydra Desk 2: the tree as Desk's sidebar draws it (shared/hydra-embed.ts).
 const DOT_TONE: Record<Dot, EmbedTone | 'hollow'> = {
   ok: 'success',
-  warn: 'warning',
+  rest: 'limited',
   nokey: 'hollow',
   off: 'muted',
   run: 'info',
@@ -736,7 +680,7 @@ useDeskSidebar(
     legend: running.value
       ? [
           { dot: 'success', label: t('hswarm.nav.ready') },
-          { dot: 'warning', label: t('hswarm.nav.resting') },
+          { dot: 'limited', label: t('hswarm.nav.resting') },
           { dot: 'hollow', label: t('hswarm.nav.noKey') },
           { dot: 'muted', label: t('hswarm.nav.off') },
         ]
@@ -782,7 +726,7 @@ watch(
 
 // Desk asked for one job (its sidebar's job rows): selected once the jobs list is in, which shows its detail
 // (HSwarmJobs opens the job it is given). The job is selected even when the list shows only the newest few.
-// An ask without a job wanted only the tab, which App.vue already showed.
+// An ask with no job only wanted the tab, which App.vue already showed.
 watch(
   [deskSwarmAsk, jobs],
   () => {
@@ -907,7 +851,7 @@ async function handleRefresh() {
         </div>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 pb-1 text-xs text-muted-foreground">
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.ok" />{{ t('hswarm.nav.ready') }}</span>
-          <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.warn" />{{ t('hswarm.nav.resting') }}</span>
+          <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.rest" />{{ t('hswarm.nav.resting') }}</span>
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.nokey" />{{ t('hswarm.nav.noKey') }}</span>
           <span class="flex items-center gap-1"><span class="size-2 rounded-full" :class="DOT_CLASS.off" />{{ t('hswarm.nav.off') }}</span>
           <span v-if="status?.running" class="ms-auto font-mono">{{ t('hswarm.nav.port', { port: status.port }) }}</span>
@@ -1033,13 +977,7 @@ async function handleRefresh() {
             @open="openPath"
           />
         </KeepAlive>
-        <!-- The Managers node's pages: Desk's managers, shown whether or not HSwarm runs. Standalone, Desk's routes do not
-             answer, so the page says it runs in Hydra Desk. -->
-        <div v-if="managersShown" class="p-5 py-3">
-          <p v-if="managers.available === false" class="text-sm text-muted-foreground">{{ t('hswarm.v.managers.runsInDesk') }}</p>
-          <component :is="page.component" v-else v-bind="page.props" @open="openPath" @open-task="openTask" />
-        </div>
-        <template v-if="page.component !== CliMayteView && !managersShown">
+        <template v-if="page.component !== CliMayteView">
           <!-- Error state -->
           <Alert v-if="error || !status?.running" variant="destructive" class="m-2 w-auto">
             <AlertCircle class="size-4" />

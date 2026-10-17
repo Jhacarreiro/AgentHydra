@@ -565,27 +565,28 @@ def _model_row(name: str, m: dict, labels: dict, bench: dict) -> dict:
 
 
 def snapshot() -> dict:
-    """Everything the console shows, in one read: no network call, no key."""
+    """Everything the console shows, in one read: no network call, no key. Safe on any thread: it holds the registry
+    still while it reads (config.RELOAD_LOCK), and the console reads it off the event loop."""
     from . import __version__
+    from .client import read_key_state
     from .selection import auto_models, evidence
 
-    by_slug = {p["slug"]: p for p in evidence()["points"]}
-    auto = auto_models()
-    labels = {n: by_slug.get(m["benchmark_slug"], {}).get("name", n) for n, m in auto}
-    bench = {n: (by_slug[m["benchmark_slug"]].get("score"), by_slug[m["benchmark_slug"]].get("cost"))
-             for n, m in auto if m["benchmark_slug"] in by_slug}
-    listed = [(n, m) for n, m in sorted(config.MODELS.items()) if not m.get("passthrough") and m.get("provider") in config.PROVIDERS]
-    from .client import read_key_state
-
-    state = read_key_state()  # once for every provider row, not twice per provider
-    return {
-        "version": __version__, "home": str(config.HOME), "providers_dir": str(config.PROVIDERS_DIR),
-        "settings_file": str(config.SETTINGS_FILE),
-        "providers": [_provider_row(n, p, state) for n, p in config.PROVIDERS.items()],
-        "models": [_model_row(n, m, labels, bench) for n, m in listed],
-        "priority": dict(config.PRIORITY), "disabled_models": sorted(config.DISABLED_MODELS),
-        "roles": dict(sorted(config.ROLES.items())),
-        "options": {"routing": config.PRICE_ROUTING, "route_via_climayte": config.ROUTE_VIA_CLIMAYTE, "route_via_climayte_max": config.ROUTE_VIA_CLIMAYTE_MAX,
-                    "route_via_climayte_start_s": config.ROUTE_VIA_CLIMAYTE_START_S, "load_bias": config.LOAD_BIAS, "daily_cap_usd": config.DAILY_CAP_USD,
-                    "concurrency": config.DEFAULT_CONCURRENCY, "max_concurrency": config.MAX_CONCURRENCY},
-    }
+    with config.RELOAD_LOCK:
+        by_slug = {p["slug"]: p for p in evidence()["points"]}
+        auto = auto_models()
+        labels = {n: by_slug.get(m["benchmark_slug"], {}).get("name", n) for n, m in auto}
+        bench = {n: (by_slug[m["benchmark_slug"]].get("score"), by_slug[m["benchmark_slug"]].get("cost"))
+                 for n, m in auto if m["benchmark_slug"] in by_slug}
+        listed = [(n, m) for n, m in sorted(config.MODELS.items()) if not m.get("passthrough") and m.get("provider") in config.PROVIDERS]
+        state = read_key_state()  # once for every provider row, not twice per provider
+        return {
+            "version": __version__, "home": str(config.HOME), "providers_dir": str(config.PROVIDERS_DIR),
+            "settings_file": str(config.SETTINGS_FILE),
+            "providers": [_provider_row(n, p, state) for n, p in config.PROVIDERS.items()],
+            "models": [_model_row(n, m, labels, bench) for n, m in listed],
+            "priority": dict(config.PRIORITY), "disabled_models": sorted(config.DISABLED_MODELS),
+            "roles": dict(sorted(config.ROLES.items())),
+            "options": {"routing": config.PRICE_ROUTING, "route_via_climayte": config.ROUTE_VIA_CLIMAYTE, "route_via_climayte_max": config.ROUTE_VIA_CLIMAYTE_MAX,
+                        "route_via_climayte_start_s": config.ROUTE_VIA_CLIMAYTE_START_S, "load_bias": config.LOAD_BIAS, "daily_cap_usd": config.DAILY_CAP_USD,
+                        "concurrency": config.DEFAULT_CONCURRENCY, "max_concurrency": config.MAX_CONCURRENCY},
+        }

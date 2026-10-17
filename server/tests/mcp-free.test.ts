@@ -42,6 +42,15 @@ const INSTANCES: FreeInstance[] = [
 const THREAD = '11111111-1111-4111-8111-111111111111'
 
 describe('pickFreeAccount', () => {
+  test('pending and retired accounts cannot be chosen, including an explicit number', () => {
+    for (const poolState of ['pending', 'retired'] as const) {
+      const inactive = INSTANCES.map((i) => ({ ...i, poolState }))
+      expect(pickFreeAccount(inactive, new Set(), {})).toBeNull()
+      expect(pickFreeAccount(inactive, new Set(), { account: 2 })).toBeNull()
+    }
+    expect(pickFreeAccount(INSTANCES, new Set(), { account: 2 })?.id).toBe('b')
+  })
+
   test('an idle account with room, used longest ago first; never one signed out, and one at 90% of its week only by number', () => {
     // ChatGPT's unlimited text and a Claude window under half used are the same room: Claude first on a tie.
     expect(pickFreeAccount(INSTANCES, new Set(), {})?.num).toBe(1)
@@ -166,7 +175,15 @@ describe('free_chat through a stand-in Desk 2', () => {
   let threadDelay = 0
   let emptyThreads = false
   let threadFailures = 0
+  /** A continuation's lookup by chat id (`view=lookup`) answers 503 this many more times. */
+  let lookupFailures = 0
   let statusFailures = 0
+  /** Status reads that answer before statusFailures begin (a batch's own read, after free_chat's). */
+  let statusPasses = 0
+  /** The next sends answer 503 as a stopping Desk 2 does (desk2 service.ts start). */
+  let stoppingSends = 0
+  /** 503s answered to a status read or a send. */
+  let turnedAway = 0
   let jobReadDelay = 0
   let activeJobReads = 0
   let peakJobReads = 0
@@ -188,8 +205,10 @@ describe('free_chat through a stand-in Desk 2', () => {
         if (path === '/status') {
           statusReads++
           if (statusDelay) await Bun.sleep(statusDelay)
-          if (statusFailures-- > 0)
+          if (statusPasses-- <= 0 && statusFailures-- > 0) {
+            turnedAway++
             return Response.json({ error: 'status unavailable' }, { status: 503 })
+          }
           return Response.json({ ready: true, instances: INSTANCES, jobs: [...jobs.values()] })
         }
         if (path === '/threads') {
@@ -197,6 +216,8 @@ describe('free_chat through a stand-in Desk 2', () => {
           if (threadDelay) await Bun.sleep(threadDelay)
           if (threadFailures-- > 0)
             return Response.json({ error: 'history unavailable' }, { status: 503 })
+          if (url.searchParams.get('view') === 'lookup' && lookupFailures-- > 0)
+            return Response.json({ error: 'Desk is busy' }, { status: 503 })
           if (emptyThreads) return Response.json([])
           return Response.json([
             {
@@ -220,6 +241,13 @@ describe('free_chat through a stand-in Desk 2', () => {
             prompt: string
             name?: string
             model?: string
+          }
+          if (stoppingSends-- > 0) {
+            turnedAway++
+            return Response.json(
+              { error: 'Desk is stopping. Read the chat after reconnecting.' },
+              { status: 503 },
+            )
           }
           if (
             [...jobs.values()].some((j) => j.instanceId === r.instanceId && j.state === 'running')
@@ -483,6 +511,85 @@ describe('free_chat through a stand-in Desk 2', () => {
     expect(bulkReads - beforeBulk).toBe(1)
   }, 30_000)
 
+  test('a retired thread cannot send or silently switch accounts', async () => {
+    const account = INSTANCES[1]!
+    const before = ran.length
+    account.poolState = 'retired'
+    try {
+      const out = await run('free_chat', { tasks: [{ prompt: 'do not send', chat_id: THREAD }] })
+      expect(out.tasks[0].state).toBe('failed')
+      expect(out.tasks[0].error).toContain('retired from the active pool')
+      expect(ran.length).toBe(before)
+    } finally {
+      delete account.poolState
+    }
+  })
+
+  // 2026-10-16: a thread lookup Desk could not answer (a 503) failed the continuation as "No Free thread has
+  // chat_id", though the thread was there; it stays queued and the next tick finds it.
+  test('a continuation whose thread lookup Desk cannot answer now goes to its thread on a later tick', async () => {
+    lookupFailures = 1
+    try {
+      const out = await run('free_chat', { tasks: [{ prompt: 'later', chat_id: THREAD }] })
+      expect(out.tasks[0]).toMatchObject({ state: 'done', chat_id: THREAD, response: 're: later' })
+    } finally {
+      lookupFailures = 0
+    }
+  }, 30_000)
+
+  // 2026-10-17: a task still queued when Desk 2 restarted failed, though Desk was back seconds later. While it
+  // stops, Desk answers 503; once it exits, nothing answers until the next one is up. The task waits, then goes once.
+  test.each([
+    ['its send is answered 503', () => (stoppingSends = 1)],
+    ["the batch's status read is answered 503", () => (statusPasses = statusFailures = 1)],
+  ])(
+    'a queued task Desk 2 turns away while it stops is sent once it is back: %s',
+    async (_, stop) => {
+      resetFreeHealth()
+      const before = turnedAway
+      const prompt = `queued while Desk stops ${before}`
+      stop()
+      try {
+        const out = await run('free_chat', { tasks: [{ prompt }] })
+        expect(turnedAway - before).toBe(1)
+        expect(out.tasks[0]).toMatchObject({ state: 'done', response: `re: ${prompt}` })
+        expect(ran.filter((r) => r.prompt === prompt)).toHaveLength(1)
+      } finally {
+        stoppingSends = statusPasses = statusFailures = 0
+        resetFreeHealth()
+      }
+    },
+    30_000,
+  )
+
+  test('a send Desk 2 never answered (connection refused) goes again under its own request id', async () => {
+    resetFreeHealth()
+    const prompt = 'queued while Desk is gone'
+    const gone = Bun.serve({ port: 0, fetch: () => new Response(null) })
+    const gonePort = gone.port
+    gone.stop(true)
+    const realFetch = globalThis.fetch
+    let refused: string | undefined
+    // That one send really is refused: it goes to a port nothing listens on any more.
+    const send = spyOn(globalThis, 'fetch').mockImplementation(((input, init) => {
+      const url = String(input)
+      if (refused || init?.method !== 'POST' || !url.endsWith('/api/free/jobs'))
+        return realFetch(input, init)
+      refused = JSON.parse(String(init.body)).requestId
+      return realFetch(url.replace(`:${server.port}/`, `:${gonePort}/`), init)
+    }) as typeof fetch)
+    try {
+      const out = await run('free_chat', { tasks: [{ prompt }] })
+      expect(refused).toBeDefined()
+      expect(out.tasks[0]).toMatchObject({ state: 'done', response: `re: ${prompt}` })
+      expect(ran.filter((r) => r.prompt === prompt)).toHaveLength(1)
+      expect(jobs.get(refused!)?.state).toBe('done')
+    } finally {
+      send.mockRestore()
+      resetFreeHealth()
+    }
+  }, 30_000)
+
   // 2026-10-08: the GPT-6 trial asks a Free ChatGPT account for GPT-6 by name.
   test('a ChatGPT model goes to a ChatGPT account and reaches Desk; a Claude family is never sent to one', async () => {
     const out = await run('free_chat', {
@@ -557,6 +664,8 @@ describe('free_chat through a stand-in Desk 2', () => {
 
   test('a new thread its account refuses is answered by another idle account, and the refusing one rests', async () => {
     // 2026-10-07: a failing ChatGPT account stayed first in line and took ~3,700 sends in a row.
+    // From no lease: an earlier test's new Claude thread holds its account for four minutes.
+    resetFreeHealth()
     const out = await run('free_chat', { tasks: [{ prompt: 'refused' }] })
     expect(out.tasks[0]).toMatchObject({ state: 'done', response: 're: refused' })
     expect(out.tasks[0].retried).toContain('http_rejected')

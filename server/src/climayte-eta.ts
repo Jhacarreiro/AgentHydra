@@ -72,6 +72,15 @@ export const ETA_INSTRUCTION =
   'Write a new ETA line for each later message you are sent, not when told to continue. ' +
   'The owner reads it to decide whether to wait, and AgentHydra compares it with the time it really took.'
 
+/** The estimating sentences a seat's prompt carries (a Hydra Core persona's sub-chat, climayte-launch.ts
+ *  seatEtaNote): its Prime chat sums up its seats with the time left (desk2 tasks/seats.ts; the owner,
+ *  2026-10-16, "Expected timeline, X amount of hours"). A seat is a chat, so its estimates are shown, never
+ *  reviewed or calibrated on (etaSamples leaves chats out, and the ledger gets no row of theirs). */
+export const SEAT_ETA_INSTRUCTION =
+  'Before your first tool call on each message you are sent, write one line on its own, `ETA: <n> min`: the working time that message will take, the workers you start and wait on included. ' +
+  'You are an AI agent: reading a file, writing an edit or running a quick command takes you seconds, so count your tool calls at about 10 seconds each and add the real run time of each slow command or worker you will wait on. ' +
+  'Write a new ETA line for each later message, not when told to continue. Your Prime chat shows it to the owner as the time left.'
+
 export const ETA_LINE_MAX = 300
 export const ETA_TEXT_MAX = 2000
 
@@ -262,10 +271,13 @@ export function etaSamples(
     effort?: string | null
     eta?: CliMayteEta
     pastEtas?: CliMayteEta[]
+    chat?: boolean
   }>,
 ): EtaSample[] {
   const out: EtaSample[] = []
-  for (const w of workers)
+  for (const w of workers) {
+    // A chat's estimates (a seat's, SEAT_ETA_INSTRUCTION) are for the owner to read, never a sample.
+    if (w.chat) continue
     for (const e of [...(w.pastEtas ?? []), ...(w.eta ? [w.eta] : [])])
       if (e.tookS !== undefined && e.doneAt !== undefined && e.minutes > 0)
         out.push({
@@ -284,6 +296,7 @@ export function etaSamples(
           bucket: etaBucket(etaRatio(e.minutes, e.tookS)),
           ...(e.review ? { review: e.review } : {}),
         })
+  }
   return out.sort((a, b) => b.doneAt - a.doneAt)
 }
 
@@ -514,7 +527,12 @@ export interface EtaPromptStats {
  *  first. */
 export function etaPromptStats(samples: EtaSample[]): EtaPromptStats[] {
   const by = new Map<number, EtaSample[]>([[ETA_PROMPT_VERSION, []]])
-  for (const s of samples) by.set(versionOf(s), [...(by.get(versionOf(s)) ?? []), s])
+  for (const s of samples) {
+    const version = versionOf(s)
+    const list = by.get(version)
+    if (list) list.push(s)
+    else by.set(version, [s])
+  }
   return [...by]
     .sort((a, b) => b[0] - a[0])
     .map(([version, list]) => {

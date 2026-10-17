@@ -20,3 +20,12 @@ method = "GET"
 path = "/v1/generations/{generation_id}"
 capability = "generation-status"
 response = "json"
+
+# Image route for `hswarm image` (image.py). Moderated; no price on record here.
+[images.v3-turbo]
+adapter = "ideogram"
+model = "/v1/ideogram-v3/generate"
+modes = ["t2i"]
+moderated = true
+input = { rendering_speed = "TURBO" }
+aspect_ratios = ["1:3", "3:1", "1:2", "2:1", "9:16", "16:9", "10:16", "16:10", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "1:1"]

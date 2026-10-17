@@ -1,4 +1,4 @@
-import { onScopeDispose, reactive, ref, shallowRef } from 'vue'
+import { getCurrentInstance, onActivated, onDeactivated, onScopeDispose, reactive, ref, shallowRef } from 'vue'
 import type { FreeCommand, FreeHealth, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
 import { sameData } from '@/lib/reconcile'
@@ -244,8 +244,25 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
 /** `threads`: the caller lists the threads, so the list is read while it is open (it is read for no one else). */
 export function useFreeInstances(opts: { threads?: boolean } = {}) {
   if (opts.threads) {
+    let held = true
+    let disposed = false
     threadReaders++
-    onScopeDispose(() => { threadReaders-- })
+    const release = () => {
+      if (!held) return
+      held = false
+      threadReaders--
+    }
+    if (getCurrentInstance()) {
+      onDeactivated(release)
+      onActivated(() => {
+        if (disposed || held) return
+        held = true
+        threadReaders++
+        // Registered before the view's load hook: both share the same read.
+        void readThreads().catch(() => {})
+      })
+    }
+    onScopeDispose(() => { disposed = true; release() })
     if (!threadsRead) void readThreads().catch(() => {})
   }
   return { instances, threads, tokens, health, jobs, errors, loaded, loading, loadError, busy, run, logout, planSeen, remove, forgetThread, recover, refreshFree,

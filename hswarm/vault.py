@@ -38,6 +38,7 @@ backend's vault file (HSWARM_HOME/vault-request.pin) and `accept` joins only a c
 from __future__ import annotations
 
 import base64
+import calendar
 import contextlib
 import hashlib
 import json
@@ -62,6 +63,8 @@ LIST_RX = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}_api_keys(\.(dead|unfunded))?$"
 KEY_MIN_LEN = 8
 KEEP_VERSIONS = 40            # earlier vault files kept beside the current one on the backend: the way back from a bad merge
 SYNC_EVERY_S = 120            # the shared server's own sync cadence
+FULL_SYNC_EVERY_S = 30 * 60 - SYNC_EVERY_S  # how long the autosync's change gate is trusted: a full round still runs every 30 min
+RACY_S = 2                    # a file written this close to a round's start may share its stat with a later write (FAT keeps 2 s)
 FIRST_SYNC_DELAY_S = 20
 FIRST_SYNC_TIME = 1           # a first sync's puts are older than any real change: they never beat a tombstone
 CAS_TRIES = 8
@@ -130,6 +133,14 @@ def zswarm_paired() -> bool:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _hours_old(stamp: str | None) -> float:
+    """How old a base file's `at` stamp is, in hours; a missing or unparsable one counts as old."""
+    try:
+        return max(0.0, (time.time() - calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))) / 3600)
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _read_json(path: Path) -> dict | None:
@@ -286,6 +297,9 @@ class DirBackend:
             return None, None
         return blob, _etag(blob)
 
+    def etag(self) -> str | None:
+        return self.get()[1]
+
     def put(self, blob: bytes, expect: str | None) -> str:
         from .client import file_lock
         from .shared import REPLACE_TRIES
@@ -356,6 +370,7 @@ class DirBackend:
 # The remote half of the ssh backend: plain sh, one ssh call each. No double quotes, so the command crosses a Windows
 # command line unchanged; every value spliced in is checked first (a directory name, a hex digest).
 _SSH_GET = "d={dir}; test -f $d/vault.bin || exit 3; cat $d/vault.bin"
+_SSH_ETAG = "d={dir}; test -f $d/vault.bin || exit 3; sha256sum < $d/vault.bin | cut -c1-64"  # the hash put compares, 64 bytes back
 _SSH_PUT = (
     "d={dir}; umask 077; mkdir -p $d/history; exec 9>$d/lock; flock -w 30 9 || exit 4; "
     "cur=none; test -f $d/vault.bin && cur=$(sha256sum < $d/vault.bin | cut -c1-64); "
@@ -418,6 +433,15 @@ class SshBackend:
             raise VaultError(f"could not read the vault over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
         return out, _etag(out)
 
+    def etag(self) -> str | None:
+        rc, out, err = self._run(_SSH_ETAG.format(dir=self.dir), b"")
+        if rc == 3:
+            return None
+        tag = out.decode("ascii", "replace").strip()
+        if rc != 0 or not re.fullmatch(r"[0-9a-f]{64}", tag):
+            raise VaultError(f"could not read the vault's hash over ssh ({self.dest}): {err.strip()[:300] or f'exit {rc}'}")
+        return tag
+
     def put(self, blob: bytes, expect: str | None) -> str:
         new = _etag(blob)
         rc, _out, err = self._run(_SSH_PUT.format(dir=self.dir, expect=expect or "none", new=new, keep=KEEP_VERSIONS + 1), blob)
@@ -470,7 +494,8 @@ def _tmp_token() -> str:
 
 def open_backend(url: str):
     """The backend a URL names. Add one by writing a class with `label`, get() -> (bytes | None, etag | None) and
-    put(blob, expect_etag) -> etag (raising Conflict when expect_etag is stale), plus the requests/ quartet
+    put(blob, expect_etag) -> etag (raising Conflict when expect_etag is stale), optionally etag() -> the etag get() would
+    return, read cheaply (without it the autosync runs a full round every time), plus the requests/ quartet
     list_requests(), read_request(name), write_request(name, bytes) and delete_request(name), and naming its scheme here."""
     if url.startswith("dir:"):
         return DirBackend(Path(url[4:]))
@@ -513,6 +538,7 @@ def _apply_local(merged: dict, local: dict[str, list[str]]) -> dict:
     Returns the new base lists and the counts."""
     folder = config.SECRETS_DIR
     added = removed = 0
+    rewrote = False
     for name, entries in merged["lists"].items():
         if not LIST_RX.fullmatch(name):
             continue  # a name that is not a list is never a path
@@ -520,9 +546,11 @@ def _apply_local(merged: dict, local: dict[str, list[str]]) -> dict:
         drop = {kid for kid, e in entries.items() if e["k"] is None and kid in have}
         add = [e["k"] for kid, e in sorted(entries.items()) if e["k"] is not None and kid not in have]
         if drop or add:
-            _rewrite(folder / name, drop, add)
+            rewrote = _rewrite(folder / name, drop, add) or rewrote
             added, removed = added + len(add), removed + len(drop)
-    after = scan()
+    # Nothing rewritten means the files are byte-for-byte what the caller scanned, so its scan is still the truth and a
+    # second full read of secrets/ buys nothing (2026-10-16: the autosync round ran it every 120 s).
+    after = scan() if rewrote else local
     base = {name: sorted(kid for kid in map(key_id, keys) if merged["lists"].get(name, {}).get(kid, {}).get("k") is not None)
             for name, keys in after.items()}
     return {"lists": base, "added": added, "removed": removed}
@@ -581,7 +609,12 @@ def sync(*, rebase: bool = False, allow_removals: bool = False, dry_run: bool = 
 
 def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run: bool = False, backend=None) -> dict:
     """One round: read the vault, add what changed here, push it if anything is new there, bring this machine's files up
-    to date. Counts only; a key is never in the result."""
+    to date. Counts only; a key is never in the result. A round that ends with this machine and the vault file in step
+    leaves _last_round behind for the autosync's change gate."""
+    global _last_round
+    started, before = time.time_ns(), _local_stamp()
+    if not dry_run:
+        _last_round = None
     cfg, key = _load_config(), _load_key()
     be = backend or open_backend(cfg["backend"])
     me = cfg.get("machine") or socket.gethostname().lower()
@@ -590,24 +623,32 @@ def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run:
     ops, stats = _local_ops(local, base, me, FIRST_SYNC_TIME if base is None else _now_ms())
     if base is not None and not allow_removals:
         _guard(stats)
-    merged, remote, pushed = _push(be, key, base, ops, dry_run)
-    after, before = present(merged), present(remote)  # once each: this runs over every key, and 60,000 of them is seconds, not hours
-    into_vault = sum(1 for k, v in after.items() if v and not before.get(k))
-    out_of_vault = sum(1 for k, v in after.items() if not v and before.get(k))
+    merged, remote, pushed, etag = _push(be, key, base, ops, dry_run)
+    now, was = present(merged), present(remote)  # once each: this runs over every key, and 60,000 of them is seconds, not hours
+    into_vault = sum(1 for k, v in now.items() if v and not was.get(k))
+    out_of_vault = sum(1 for k, v in now.items() if not v and was.get(k))
     if dry_run:
         held = {n: {key_id(k) for k in keys} for n, keys in local.items()}
-        local_add = sum(1 for (n, kid), v in after.items() if v and kid not in held.get(n, ()) and LIST_RX.fullmatch(n))
+        local_add = sum(1 for (n, kid), v in now.items() if v and kid not in held.get(n, ()) and LIST_RX.fullmatch(n))
         return {"backend": be.label, "dry_run": True, "pushed": False, "rev": remote["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
                 "to_here": local_add, "keys": live_count(merged)}
     applied = _apply_local(merged, local)
-    _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
+    # The base only matters for its rev and lists, so skip the rewrite when neither changed (every 120 s otherwise,
+    # 2026-10-16); still stamp `at` hourly so status's last_sync does not freeze at the last real change.
+    same = base is not None and base.get("rev") == merged["rev"] and base.get("lists") == applied["lists"]
+    if not same or _hours_old(base.get("at")) >= 1:
+        _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
+    after = _local_stamp()
+    if after == before and not _racy(after, started):  # nothing here moved while it ran, this round's own writes included
+        _last_round = {"at": time.monotonic(), "backend": be.label, "etag": etag, "local": after, "base": _stat(base_file())}
     return {"backend": be.label, "dry_run": False, "pushed": pushed, "rev": merged["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
             "added_here": applied["added"], "removed_here": applied["removed"], "keys": live_count(merged), "lists": len(applied["lists"])}
 
 
-def _push(be, key: bytes, base: dict | None, ops, dry_run: bool) -> tuple[dict, dict, bool]:
+def _push(be, key: bytes, base: dict | None, ops, dry_run: bool) -> tuple[dict, dict, bool, str | None]:
     """Merge `ops` into the vault and write it back by compare-and-swap, again while another machine writes first.
-    Returns the merged state, the remote it was merged into, and whether it was pushed."""
+    Returns the merged state, the remote it was merged into, whether it was pushed, and the etag of the vault file that
+    holds the merged state (the one read when nothing was pushed, the one written when it was)."""
     for _ in range(CAS_TRIES):
         blob, etag = be.get()
         remote = unseal(key, blob) if blob else empty_state()
@@ -616,11 +657,10 @@ def _push(be, key: bytes, base: dict | None, ops, dry_run: bool) -> tuple[dict, 
                              "or replaced; nothing was changed. `hswarm vault sync --rebase` accepts it.")
         merged = merge(remote, {"lists": ops})
         if present(merged) == present(remote) or dry_run:
-            return merged, remote, False
+            return merged, remote, False, etag
         merged["rev"] = remote["rev"] + 1
         try:
-            be.put(seal(key, merged), etag)
-            return merged, remote, True
+            return merged, remote, True, be.put(seal(key, merged), etag)
         except Conflict:
             continue
     raise VaultError("the vault kept changing under this sync (another machine writing); try again in a minute")
@@ -1044,6 +1084,56 @@ def leave() -> dict:
     return {"left": label, "kept_in_folder": sum(len(k) for k in scan().values())}
 
 
+# The autosync's change gate. A full round downloads, decrypts and merges the whole vault (63,606 keys on the owner's
+# machine, 2026-10-16), so an idle machine paid for all of it every 120 s. The last round that ended with this machine and
+# the vault file in step leaves what it saw: the vault file's etag and the stats of everything here a round reads. A tick
+# that finds both the same (a 64-byte hash over ssh, a stat of each list file) has nothing to merge and skips the round;
+# any other tick, and every tick FULL_SYNC_EVERY_S after the last full round, runs one as before.
+_last_round: dict | None = None
+
+
+def _stat(path: Path) -> tuple[int, int, int] | None:
+    """Size, mtime and file id: an in-place edit moves the mtime, a replace (atomic_write, an editor's save-as) the id."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns, st.st_ino
+
+
+def _local_stamp() -> tuple:
+    """What a round reads on this machine, by stat: every list file (and which there are) and the vault setup."""
+    folder = config.SECRETS_DIR
+    try:
+        names = sorted(n for n in os.listdir(folder) if LIST_RX.fullmatch(n))
+    except OSError:
+        names = []
+    return (str(folder), tuple((n, _stat(folder / n)) for n in names),
+            str(config.HOME), _stat(config_file()), _stat(key_file()))
+
+
+def _racy(stamp: tuple, started_ns: int) -> bool:
+    """A file written just before the round began could be written again without its stat moving (a coarse clock, the
+    same size, in place): such a round is not trusted, and the next tick runs a full one."""
+    stats = [st for _n, st in stamp[1]] + [stamp[3], stamp[4]]
+    return any(st is not None and st[1] >= started_ns - RACY_S * 1_000_000_000 for st in stats)
+
+
+def _nothing_moved() -> bool:
+    """True only when the last full round ended in step under FULL_SYNC_EVERY_S ago and neither side moved since: the
+    vault file has the same hash and every file here a round reads has the same stat. A probe that fails proves nothing."""
+    seen = _last_round
+    if seen is None or time.monotonic() - seen["at"] >= FULL_SYNC_EVERY_S:
+        return False
+    if _local_stamp() != seen["local"] or _stat(base_file()) != seen["base"]:
+        return False
+    try:
+        be = open_backend(_load_config()["backend"])
+        return be.label == seen["backend"] and hasattr(be, "etag") and be.etag() == seen["etag"]
+    except Exception:  # noqa: BLE001 - the full round runs and reports its own failure, word for word as before
+        return False
+
+
 def autosync_loop() -> None:
     """The shared server's thread: sync every SYNC_EVERY_S while a vault is set up, say so on a change and say each new
     failure once. A refused sync (the guard) is not retried until a person acts; the loop just keeps looking."""
@@ -1055,10 +1145,12 @@ def autosync_loop() -> None:
 
 
 def autosync_tick(last: str | None = None) -> str | None:
-    """One round of the loop: nothing at all without a vault. Returns the failure it reported (or None), so the next
-    round says the same failure only once."""
+    """One round of the loop: nothing at all without a vault, and only a hash probe while nothing moved (_nothing_moved).
+    Returns the failure it reported (or None), so the next round says the same failure only once."""
     try:
         if configured():
+            if _nothing_moved():
+                return None
             r = sync()
             if r["pushed"] or r["added_here"] or r["removed_here"]:
                 print(f"[hswarm vault] rev {r['rev']}: {r['to_vault']} keys to the vault, {r['added_here']} added here, "

@@ -7,7 +7,7 @@ key_url = "https://replicate.com/account/api-tokens"
 docs = "https://replicate.com/docs/reference/http"
 auth_header = "Authorization"
 auth_prefix = "Bearer "
-capabilities = ["model-inference", "prediction-status"]
+capabilities = ["model-inference", "prediction-status", "image-generation"]
 
 [operations.predict]
 method = "POST"
@@ -26,3 +26,45 @@ method = "GET"
 path = "/v1/predictions"
 capability = "prediction-status"
 response = "json"
+
+# Image routes for `hswarm image` (image.py). Replicate has no balance endpoint: a spent key is parked by its first 402.
+# Prices are replicate.com/pricing (2026-10-16); a model that page does not list has no price here and is served after
+# the priced routes.
+[images.flux-schnell]
+adapter = "replicate"
+model = "black-forest-labs/flux-schnell"
+modes = ["t2i"]
+price = 0.003
+input = { disable_safety_checker = true, go_fast = true }
+aspect_ratios = ["1:1", "16:9", "21:9", "3:2", "2:3", "4:5", "5:4", "3:4", "4:3", "9:16", "9:21"]
+
+[images.flux-dev]
+adapter = "replicate"
+model = "black-forest-labs/flux-dev"
+modes = ["t2i"]
+price = 0.025
+input = { disable_safety_checker = true }
+aspect_ratios = ["1:1", "16:9", "21:9", "3:2", "2:3", "4:5", "5:4", "3:4", "4:3", "9:16", "9:21"]
+
+[images.flux-kontext-dev]
+adapter = "replicate"
+model = "black-forest-labs/flux-kontext-dev"
+modes = ["edit"]
+image_field = "input_image"
+input = { disable_safety_checker = true, aspect_ratio = "match_input_image" }
+
+[images.flux-fill-dev]
+adapter = "replicate"
+model = "black-forest-labs/flux-fill-dev"
+modes = ["fill"]
+image_field = "image"
+mask_field = "mask"
+input = { disable_safety_checker = true }
+
+[images.flux-kontext-pro]
+adapter = "replicate"
+model = "black-forest-labs/flux-kontext-pro"
+modes = ["edit"]
+moderated = true
+image_field = "input_image"
+input = { aspect_ratio = "match_input_image", safety_tolerance = 2 }

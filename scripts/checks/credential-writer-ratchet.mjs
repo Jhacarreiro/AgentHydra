@@ -53,6 +53,8 @@ export const CREDENTIAL_WRITERS = {
     'desktop login sync and renewal: writes the encrypted oauth:tokenCacheV2 into a profile config.json',
   'server/src/core/instance-logout.ts':
     'desktop logout: rewrites config.json with the login keys removed',
+  'server/src/core/revoked-grants.ts':
+    'takes revoked grants out of a closed profile: rewrites its oauth:tokenCache keys, only when config.json is unchanged since it was read',
   'desk2/server/src/free-instances/storage.ts':
     'legacy harness migration: copies each provider session.dpapi into its new Free instance folder',
 }

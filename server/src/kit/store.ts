@@ -421,7 +421,8 @@ export class KitStore {
           if (this.ckptParkWhenDone) this.parkCheckpointWorker()
         }
         this.ckptWorker.onerror = () => this.stopCheckpointWorker()
-        this.ckptWorker.unref()
+        // Bun's worker stays unreferenced when this module is also checked with DOM types.
+        ;(this.ckptWorker as Worker & { unref(): void }).unref()
         this.db.exec('pragma wal_autocheckpoint = 0')
       }
       if (first) return

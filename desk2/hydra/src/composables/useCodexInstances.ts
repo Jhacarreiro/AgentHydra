@@ -72,8 +72,8 @@ const focusDesktop = (id: string) => withBusy(id, () => api.focusCodexDesktopIns
 const quitDesktop = (id: string) => withBusy(id, () => api.quitCodexDesktopInstance(id), true)
 const rename = (id: string, name: string | null) =>
   withBusy(id, () => api.renameCodexInstance(id, name), true)
-const remove = (id: string, confirmName: string) =>
-  withBusy(id, () => api.deleteCodexInstance(id, confirmName), true)
+const remove = (id: string, note: string) =>
+  withBusy(id, () => api.deleteCodexInstance(id, note), true)
 // No refreshAfter: a redeem changes quota, not the instance list — the caller re-checks usage
 // itself (see CodexInstanceRows.vue's onRedeemResetCredit).
 const redeemResetCredit = (id: string, opts: { force?: boolean } = {}) =>

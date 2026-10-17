@@ -106,7 +106,7 @@ function getStatus(client: Client) {
 
 function getStatusClass(client: Client) {
   if (client.registered === null)
-    return 'bg-warning/10 text-warning'
+    return 'bg-info/10 text-info'
   if (client.registered) return 'bg-success/10 text-success'
   return 'bg-muted text-muted-foreground'
 }

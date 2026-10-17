@@ -173,7 +173,6 @@ def _nudge(args, client, org, remembered):
                 KEEPALIVE_PROMPT,
                 model,
                 new_chat_id=str(uuid4()),
-                temporary=True,
                 timezone=args.timezone,
                 locale=args.locale,
                 on_text=None,
@@ -277,14 +276,11 @@ def _turn_model(args, client, org, conversation, remembered):
     return model
 
 
-def _require_privacy_match(args, conversation):
-    if (
-        conversation is not None
-        and not args.regular
-        and conversation.get("is_temporary") is not True
-    ):
+def _require_privacy_match(conversation):
+    # A Free account only ever uses Incognito chats; nothing can ask for a regular one (owner, 2026-10-16).
+    if conversation is not None and conversation.get("is_temporary") is not True:
         raise ClaudeError(
-            "This is a regular chat. Pass --regular explicitly to continue it.",
+            "This chat is not Incognito. Free accounts only continue Incognito chats; no message was sent.",
             code="privacy_mismatch",
         )
 
@@ -302,21 +298,30 @@ def _send_turn(args, registry, client, org, active_chat, conversation, model, pr
         ]
     )
     tried = [m for m in dict.fromkeys([model, *fallbacks]) if m]
+    created = []
+
+    def remember_answer(is_temporary):
+        # The row keeps what Claude answered when it created the chat, never what was asked.
+        created.append(is_temporary)
+        registry.record(active_chat, org, temporary=is_temporary, status="pending")
+
     try:
         for i, attempt in enumerate(tried):
+            # A model refused after the chat was created tries the next one in that same, confirmed chat.
+            new = conversation is None and not created
             try:
                 return client.send(
                     org,
                     prompt,
                     attempt,
-                    chat_id=active_chat if conversation is not None else None,
-                    new_chat_id=active_chat if conversation is None else None,
+                    chat_id=None if new else active_chat,
+                    new_chat_id=active_chat if new else None,
                     existing=conversation,
-                    temporary=not args.regular,
                     web_search=args.web_search,
                     timezone=args.timezone,
                     locale=args.locale,
                     on_text=on_text,
+                    on_created=remember_answer,
                 )
             except ClaudeError as error:
                 if error.code != "model_not_available" or i == len(tried) - 1:
@@ -462,9 +467,10 @@ def execute(args, *, api, on_text=None) -> dict:
             if args.command in {"read", "track"}:
                 return _read_or_track(args, registry, org, active_chat, name, conversation)
             model = _turn_model(args, client, org, conversation, remembered)
-            _require_privacy_match(args, conversation)
+            _require_privacy_match(conversation)
             if not active_chat:
-                # Commit the recovery handle before the first request that can create a chat.
+                # Commit the recovery handle before the first request that can create a chat. Its privacy stays
+                # unknown until Claude answers the create (see _send_turn).
                 active_chat = str(uuid4())
                 locks.enter_context(
                     chat_lock(api.HTTP_CONFIG_FILE.parent / "locks", "chat-" + active_chat)
@@ -474,7 +480,6 @@ def execute(args, *, api, on_text=None) -> dict:
                     org,
                     name=name,
                     model=model,
-                    temporary=not args.regular,
                     status="pending",
                 )
             result = _send_turn(

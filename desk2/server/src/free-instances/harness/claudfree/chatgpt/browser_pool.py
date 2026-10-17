@@ -22,6 +22,23 @@ from ..registry import chat_lock
 from .http import ChatGPTHttp
 
 MAX_FRAME = 4 * 1024 * 1024
+# How long an idle exit lets open connections finish (a ping reply) after it stops listening.
+CLOSE_GRACE_SECONDS = 2
+
+
+async def close_server(server, grace=CLOSE_GRACE_SECONDS):
+    """Stop listening, then wait a bounded time for open connections.
+
+    Never `async with server`: its exit awaits wait_closed() without a bound. On Windows,
+    CPython's proactor transport skips Server._detach when its socket's shutdown() raises
+    after the peer is gone, so wait_closed() never returned. The idle broker then kept its
+    owner lock and a dead endpoint.json, and every ChatGPT send failed after Desk's 25 s
+    startup wait until the process was killed (2026-10-17: two brokers stuck that way)."""
+    server.close()
+    try:
+        await asyncio.wait_for(server.wait_closed(), grace)
+    except TimeoutError:
+        pass
 
 
 class ContextBrowser:
@@ -292,11 +309,15 @@ async def serve(directory, version, *, idle_seconds=60):
             temporary.write_text(json.dumps({'port': port, 'token': token, 'pid': os.getpid(), 'version': version}), encoding='utf-8')
             temporary.chmod(0o600)
             temporary.replace(endpoint)
-            async with server:
+            try:
                 while pool.active or (not pool.draining and time.monotonic() - pool.last_used < idle_seconds):
                     await asyncio.sleep(1)
                     if browser.stopped:
                         pool.drain()
+            finally:
+                # No caller may find this port once it stops listening.
+                endpoint.unlink(missing_ok=True)
+                await close_server(server)
         finally:
             try:
                 await browser.stop()

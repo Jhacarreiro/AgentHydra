@@ -51,21 +51,25 @@ test('session refresh never reads plan or identity files, and recent accounts sk
   )
   const now = Date.now()
   await refreshPoolSessions(now)
-  const metadataReads = () =>
-    reads.mock.calls.filter((call) =>
-      ['.credentials.json', '.claude.json'].some((name) => String(call[0]).endsWith(name)),
-    ).length
-  expect(metadataReads()).toBe(0)
+  const readsOf = (name: string) => () =>
+    reads.mock.calls.filter((call) => String(call[0]).endsWith(name)).length
+  const identityReads = readsOf('.claude.json')
+  const credentialReads = readsOf('.credentials.json')
+  // The first refresh of a never-seen account reads its credentials once, to tell a cleared login
+  // (isLoggedIn, a3da0e61). Its plan and identity files are never read.
+  expect(identityReads()).toBe(0)
+  expect(credentialReads()).toBe(1)
   reads.mockClear()
   exists.mockClear()
   await refreshPoolSessions(now + 1000)
   expect(
     exists.mock.calls.filter((call) => String(call[0]).endsWith('.credentials.json')),
   ).toHaveLength(0)
-  expect(metadataReads()).toBe(0)
+  expect(identityReads()).toBe(0)
+  expect(credentialReads()).toBe(0)
   // Verify the read spy observes the old hydration path rather than silently missing its imports.
   listCliInstances()
-  expect(metadataReads()).toBeGreaterThan(0)
+  expect(identityReads() + credentialReads()).toBeGreaterThan(0)
 }, 30_000)
 
 test('new and newly signed-in accounts are discovered while another account is inside its refresh interval', async () => {

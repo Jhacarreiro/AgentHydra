@@ -135,6 +135,7 @@ test('each no-data reason maps to its own explanation; ok needs none', () => {
   expect(usageReasonMessageKey('check_failed')).toBe('instances.usageReasonCheckFailed')
   expect(usageReasonMessageKey('stale_token_app_closed')).toBe('instances.usageReasonAppClosed')
   expect(usageReasonMessageKey('rate_limited')).toBe('instances.usageReasonRateLimited')
+  expect(usageReasonMessageKey('token_revoked')).toBe('instances.usageReasonRevoked')
   expect(usageReasonMessageKey('ok')).toBeNull()
 })
 

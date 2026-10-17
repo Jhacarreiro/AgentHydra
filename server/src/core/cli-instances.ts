@@ -32,6 +32,7 @@ import { basename, join } from 'node:path'
 import { syncOwnerClaude } from '../climayte-owner-sync'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
+import { deleteNoteProblem } from './delete-note'
 import { pinHaikuModel } from './haiku-pin'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
@@ -200,11 +201,43 @@ export function setCliLoginVeto(
   loginVeto = fn
 }
 
-/** True when the config dir has been `/login`'d once (a `.credentials.json` is present). */
+// A signed-out Claude Code can leave its credential object behind with both tokens empty. Keep
+// only that definite local refusal (never the tokens); polling unchanged files adds no JSON reads.
+const emptyLoginCache = new Map<
+  string,
+  { stamp: StatStamp; dev: number; ino: number; empty: boolean }
+>()
+
+/** A credential file exists and has not explicitly cleared both of its OAuth tokens. */
 export function isLoggedIn(configDir: string): boolean {
+  const path = join(configDir, '.credentials.json')
   try {
-    return existsSync(join(configDir, '.credentials.json'))
+    const readAt = Date.now()
+    const st = statSync(path)
+    const hit = emptyLoginCache.get(path)
+    if (hit && hit.dev === st.dev && hit.ino === st.ino && unchangedSince(hit.stamp, st))
+      return !hit.empty
+    let empty = false
+    try {
+      // Unknown legacy formats keep the existing file-presence behavior. An expired access grant
+      // with a refresh token is also still usable: the CLI owns its normal refresh.
+      if (st.isFile() && st.size <= 64 * 1024) {
+        const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
+        empty =
+          typeof oauth?.accessToken === 'string' &&
+          !oauth.accessToken.trim() &&
+          typeof oauth?.refreshToken === 'string' &&
+          !oauth.refreshToken.trim()
+      }
+    } catch {
+      /* An unreadable or unfamiliar login is not proof of a cleared OAuth grant. */
+    }
+    emptyLoginCache.delete(path)
+    emptyLoginCache.set(path, { stamp: stampOf(st, readAt), dev: st.dev, ino: st.ino, empty })
+    if (emptyLoginCache.size > 512) emptyLoginCache.delete(emptyLoginCache.keys().next().value!)
+    return !empty
   } catch {
+    emptyLoginCache.delete(path)
     return false
   }
 }
@@ -323,7 +356,10 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
   // so a listing stays as fast as it was.
   const cred = isLoggedIn(configDir)
   const loginNote = (cred && loginVeto?.(rec.id, configDir)) || null
-  const who = cred ? cliAccountIdentity(configDir) : null
+  // Keep the last known identity of an explicitly cleared login so renewal targets this same
+  // managed entry. Identity metadata does not make its empty credential usable.
+  const cleared = emptyLoginCache.get(join(configDir, '.credentials.json'))?.empty === true
+  const who = cred || cleared ? cliAccountIdentity(configDir) : null
   const { loginNote: _stale, ...stored } = rec
   return {
     ...stored,
@@ -901,9 +937,9 @@ export interface DeleteCliInstanceOptions {
 }
 
 /**
- * Guarded delete: `confirmName` must equal the instance's display name (same discipline as the
- * desktop delete). Removes the record AND its config dir (which holds the login) — irreversible, so
- * the confirm gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
+ * Guarded delete: `note` says why the instance is deleted (at least 3 characters, see
+ * {@link deleteNoteProblem}). Removes the record AND its config dir (which holds the login) —
+ * irreversible, so the note gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
  * no "outside the root" escape to guard against as there is for desktop dirs.
  *
  * The record is dropped ONLY once the directory is verifiably gone (audit AH-03). The previous
@@ -914,7 +950,7 @@ export interface DeleteCliInstanceOptions {
  */
 export function deleteCliInstance(
   id: string,
-  confirmName?: string,
+  note?: string,
   options: DeleteCliInstanceOptions = {},
 ): CMActionResult {
   const rec = readStore().instances.find((i) => i.id === id)
@@ -926,12 +962,13 @@ export function deleteCliInstance(
       message: 'CLI instance not found.',
       data: { id },
     }
-  if (!confirmName || confirmName !== rec.name) {
+  const noteProblem = deleteNoteProblem(note)
+  if (noteProblem) {
     return {
       ok: false,
       action: 'cli-delete',
       dir: rec.configDir,
-      message: `Refusing to delete: confirmName must exactly match the instance name '${rec.name}'.`,
+      message: `Refusing to delete: ${noteProblem}`,
       data: { id },
     }
   }

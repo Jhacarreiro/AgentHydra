@@ -79,6 +79,19 @@ export interface BabysitterStatus {
   error: string | null
 }
 
+/** A stopped chat a person may have to see to: its continue was refused, had no app to take it, or was given up on. */
+export function babysitterNeedsPerson(state: BabysitterChatState): boolean {
+  return state !== 'waiting' && state !== 'resumed'
+}
+
+/** Whether the stopped chats need anyone (owner, 2026-10-16: they read in plain grey): 'person' when one needs a person
+ *  or the last look failed, 'waiting' while chats only wait on a limit, null when nothing is waiting. AgentHydra's
+ *  Tools pages colour by it: red, amber, or neither. */
+export function babysitterAttention(s: Pick<BabysitterStatus, 'stopped' | 'error'>): 'person' | 'waiting' | null {
+  if (s.error || s.stopped.some((c) => babysitterNeedsPerson(c.state))) return 'person'
+  return s.stopped.some((c) => c.state === 'waiting') ? 'waiting' : null
+}
+
 /** POST /api/babysitter: turn it on or off (saved in Settings), and/or look now. */
 export interface BabysitterRequest {
   enabled?: boolean

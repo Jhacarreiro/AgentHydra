@@ -1,6 +1,7 @@
 """ChatGPT Temporary Chats with current first-party preparation and HTTP readback."""
 
 from functools import partial
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from ..api import Client
 from ..errors import ClaudeError
 from ..registry import chat_lock, valid_name
 from ..results import brief_result, export_results
-from .http import TEXT_MODEL, connection, thread_model, visible_messages
+from .http import TEXT_MODEL, connection, continuation_summary, visible_messages
 from .registry import ChatGPTRegistry
 from .state import ChatGPTState
 
@@ -109,9 +110,9 @@ class ChatGPTClient(Client):
             }
 
     def _execute(self, args, *, on_text=None):
-        if args.model or args.regular or args.web_search or args.org_id or args.stream or on_text:
+        if args.model or args.web_search or args.org_id or args.stream or on_text:
             raise ClaudeError(
-                "ChatGPT currently supports default-model Temporary Chats. Model selection, regular chats, forced web search, organizations and token streaming are not supported.",
+                "ChatGPT currently supports default-model Temporary Chats. Model selection, forced web search, organizations and token streaming are not supported.",
                 code="unsupported_option",
             )
         command = args.command
@@ -125,6 +126,15 @@ class ChatGPTClient(Client):
         if command == "auth":
             with connection(self._state, args.request_timeout) as http:
                 value = {"authenticated": True, "account_label": http.account_label, "account_email": http.account_email}
+            # The connection has saved any rotated cookies; _run still holds the session lock.
+            # Bind this authenticated identity to the exact persisted login without exposing cookies.
+            try:
+                value["login_fingerprint"] = hashlib.sha256(self._state.session_file.read_bytes()).hexdigest()
+            except OSError:
+                raise ClaudeError(
+                    "The verified login could not be read back. Keep the pool import pending.",
+                    code="session_save_failed",
+                ) from None
         elif command == "usage":
             with connection(self._state, args.request_timeout) as http:
                 value = http.usage()
@@ -171,13 +181,14 @@ class ChatGPTClient(Client):
                 if command in {"read", "track"}:
                     return self._read_or_track(registry, args, entry, server_id, body)
                 # A preference picks a NEW chat's model; a continued chat stays on the model its thread answered on.
-                model = http.model_for(args.prefer) if body is None else thread_model(body)
                 continuation = {}
-                if body is not None:
+                if body is None:
+                    model = http.model_for(args.prefer)
+                else:
                     # Validate the selected visible branch before dispatch, then
                     # release its text/metadata before waiting for a browser slot.
-                    continuation['previous_ids'] = frozenset(message['id']
-                        for message in visible_messages(body, rich=False))
+                    model, continuation['previous_ids'] = continuation_summary(body)
+                    continuation['previous_ids'] = frozenset(continuation['previous_ids'])
                     body = {key: body[key] for key in
                         ('conversation_id', 'current_node', 'is_temporary_chat') if key in body}
                 return self._send(http, registry, pool, args.prompt, entry, server_id, body, model, **continuation)
@@ -383,7 +394,7 @@ class ChatGPTClient(Client):
                 "Names and UUIDs are stored without transcripts. HTTP supplies the Temporary Chat routing cookie automatically, enabling reads after the browser closes while the service permits access.",
                 "Offline listings do not verify availability; readable/resumable=null means unknown. --check performs HTTP reads.",
                 "chat/resume validate the exact prompt, branch, privacy mode and model before allowing one ordinary browser HTTP request. HTTP readback never posts again. Read-only commands never open a browser. auto_prepare=False retains explicit legacy preparation.",
-                "prepare optionally collects up to eight single-use preparations without sending messages. prepared reports local readiness, not a required next step.",
+                "prepare collects up to eight single-use preparations for explicit legacy sends with auto_prepare=False, without sending messages. Automatic browser sends do not use this pool, so prepare does not prewarm them. prepared reports legacy pool readiness, not a required next step.",
                 "Automatic preparation credentials remain in memory and are single-use. The local handle is recorded before preparation and linked to a browser-created conversation before readback, so an uncertain outcome can be reviewed without resending. Explicit legacy preparations remain account-bound with a five-minute cutoff.",
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
                 "No message is retried automatically. On timeout, read the returned chat_id before sending again.",

@@ -20,7 +20,7 @@ import time
 import httpx
 
 from . import config, keylimits
-from .client import ChatClient, KeyPool
+from .client import NO_QUOTA, ChatClient, KeyPool, read_key_state, tls
 
 
 _POOLS: dict[tuple[str, str], tuple[float, tuple[str, ...], "KeyPool | None"]] = {}
@@ -83,8 +83,19 @@ def report(only: str | None = None, *, verbose: bool = True, counts_only: bool =
     while two hundred workers are in flight. `verbose=False` keeps every count and only the rows that
     are not plainly ok (capped per provider, with `rows_omitted` saying how many were left out).
     `counts_only=True` keeps the counts and no rows at all: the doctor's default, where even the bounded
-    rows were 74,801 of its 82,669 characters (2026-10-06, mostly disabled keys)."""
+    rows were 74,801 of its 82,669 characters (2026-10-06, mostly disabled keys).
+
+    Safe on any thread, and both the doctor and hswarm_keys read it off the event loop (0.3 s for 45 providers,
+    2026-10-16): the registry is held still while it reads (config.RELOAD_LOCK)."""
+    with config.RELOAD_LOCK:
+        return _report(only, verbose, counts_only)
+
+
+def _report(only: str | None, verbose: bool, counts_only: bool) -> dict:
     out: dict = {"providers": {}}
+    # The shared state read once for every pool, not once per pool: 0.39 s -> 0.06 s for 45 providers' pools, on the
+    # shared server's event loop in every hswarm_doctor and hswarm_keys list (2026-10-16).
+    state = read_key_state()
     for name in _providers(only):
         keys = config.load_api_keys(name)
         if not keys:
@@ -93,7 +104,7 @@ def report(only: str | None = None, *, verbose: bool = True, counts_only: bool =
         # KeyPool, not ChatClient: this report is offline, and building a client would open an httpx
         # AsyncClient (512 connections) that a sync function can never aclose - one leaked per provider
         # per call, and an MCP server serving hswarm_keys calls it all day.
-        rows = KeyPool(keys, name).status()
+        rows = KeyPool(keys, name, state=state).status(reload=False)
         entry = {
             "keys": len(rows), "base_url": config.PROVIDERS[name].get("base_url"),
             "balance_authority": config.PROVIDERS[name].get("balance_authority") or "reading",
@@ -102,6 +113,19 @@ def report(only: str | None = None, *, verbose: bool = True, counts_only: bool =
             "disabled": sum(1 for r in rows if r["disabled"]),
             "free_only": sum(1 for r in rows if r["free_only"]),
         }
+        # Of the resting keys, those with no quota at all where the calls land (asked again at the daily reset), and per
+        # model the keys that have spent today's allowance for it: 549 of 726 Gemini keys read just "resting" before.
+        if no_quota := sum(1 for r in rows if r["state"] == "resting" and r.get("why") == NO_QUOTA):
+            entry["no_quota"] = no_quota
+        spent: dict[str, int] = {}
+        for r in rows:
+            for m in r.get("spent") or ():
+                spent[m] = spent.get(m, 0) + 1
+        if spent:
+            entry["spent"] = spent
+        placed = [r["region"] for r in rows if r.get("region")]
+        if placed:  # keys served on another of the provider's regions than base_url (client.find_region), per region
+            entry["regions"] = {u: placed.count(u) for u in dict.fromkeys(placed)}
         entry["limits"] = keylimits.describe(name)
         if entry["limits"]:
             entry["keys_at_limit"] = keylimits.keys_at_limit(name, keys)
@@ -210,7 +234,7 @@ async def check(provider: str, fingerprint: str) -> dict:
         if model_check:
             await _check_by_model(provider, spec, key)
         else:
-            await _check_by_get(provider, spec, key, path)
+            await _check_by_get(provider, spec, key, path, pool)
     except ApiError as e:
         if _is_rejection(e, service):
             pool.disable(key, reason=f"{provider} rejected this key (HTTP {e.status})", status=e.status)
@@ -235,18 +259,26 @@ async def _check_by_model(provider: str, spec: dict, key: str) -> None:
             raise ApiError(r.status_code, r.text, provider)
 
 
-async def _check_by_get(provider: str, spec: dict, key: str, path: str) -> None:
-    from .provider_auth import request_headers
+async def _check_by_get(provider: str, spec: dict, key: str, path: str, pool: KeyPool) -> None:
+    """The free GET, on the key's own region when one was found for it. A 401 there asks the provider's other listed
+    regions (find_region): a China-issued key is accepted where it was issued, not rejected for where it was asked."""
+    from .client import find_region
+    from .provider_auth import auth_query, request_headers
     from .usage import ApiError
 
     headers = request_headers(spec, key)
+    params = {field: key} if (field := auth_query(spec)) else None
     if spec.get("transport") == "anthropic":
         from . import anthropic_native
 
         headers = {**(spec.get("headers") or {}), "x-api-key": key, "anthropic-version": anthropic_native.VERSION}
         headers.pop("Authorization", None)
-    async with httpx.AsyncClient(base_url=spec["base_url"], timeout=30, follow_redirects=False) as client:
-        response = await client.get(path, headers=headers)
+    base = pool.base_url(key) or spec["base_url"]
+    async with httpx.AsyncClient(base_url=base, timeout=30, follow_redirects=False, verify=tls()) as client:
+        response = await client.get(path, headers=headers, params=params)
+        if response.status_code == 401 and not path.startswith(("http://", "https://")) and (
+                found := await find_region(client, pool, key, base, headers, path)):
+            response = found[1] or await client.get(found[0] + path, headers=headers)
     if not response.is_success:
         raise ApiError(response.status_code, response.text, provider)
 

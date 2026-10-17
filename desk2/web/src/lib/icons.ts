@@ -216,6 +216,7 @@ export const settingsIcons = {
   hswarm: Bot,
   connections: Plug,
   connectors: Blocks,
+  packs: SquareSlash,
   devservers: Server,
   diagnostics: Activity,
   updates: CloudDownload,

@@ -14,6 +14,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -241,6 +242,37 @@ test('a load while done/ is still being read takes the work in flight now and ev
      return core.workers.size`,
   )) as number
   expect(booted).toBe(5)
+}, 60_000)
+
+test('a done/ that cannot be listed is a read still owed: a later load takes its workers without a restart', async () => {
+  const { home, corch } = install('unlistable')
+  writeFileSync(
+    join(corch, 'workers.json'),
+    JSON.stringify({ workers: [worker('w-hot', 'waiting', home)], perAccount: {} }),
+  )
+  // done/ is a link to itself: listing it fails with a loop error, not ENOENT (no folder, no workers).
+  const done = join(corch, 'done')
+  symlinkSync(done, done, 'junction')
+  const real = join(root, 'unlistable-done')
+  mkdirSync(real)
+  writeFileSync(join(real, 'w-old.json'), JSON.stringify(worker('w-old', 'done', home)))
+  const seen = (await start(
+    home,
+    `const fs = await import('node:fs')
+     const first = c.climayteList().map((w) => w.id)
+     try { fs.unlinkSync(args.done) } catch { fs.rmdirSync(args.done) }
+     fs.symlinkSync(args.real, args.done, 'junction')
+     const soon = c.climayteList().map((w) => w.id)
+     const realNow = Date.now
+     Date.now = () => realNow() + 31_000
+     const later = c.climayteList().map((w) => w.id)
+     return { first, soon, later }`,
+    { done, real },
+  )) as { first: string[]; soon: string[]; later: string[] }
+  expect(seen.first).toEqual(['w-hot'])
+  // Asked again at most every 30 s, and then done/'s workers join the store.
+  expect(seen.soon).toEqual(['w-hot'])
+  expect([...seen.later].sort()).toEqual(['w-hot', 'w-old'])
 }, 60_000)
 
 test('a finished worker held packed reads, takes a write and saves back exactly as its file had it', async () => {

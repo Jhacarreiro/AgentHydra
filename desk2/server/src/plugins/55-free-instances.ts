@@ -48,7 +48,8 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     })
   }
   const router = new Hono()
-  router.onError((error, c) => c.json({ error: error instanceof FreeError ? error.message : 'Free instances could not complete the request.' }, error instanceof FreeError ? error.status : 503))
+  router.onError((error, c) => c.json({ error: error instanceof FreeError ? error.message : 'Free instances could not complete the request.',
+    ...(error instanceof FreeError && error.code ? { code: error.code } : {}) }, error instanceof FreeError ? error.status : 503))
   router.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store')
     const origin = c.req.header('origin')
@@ -60,6 +61,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   })
   router.use('*', bodyLimit({ maxSize: 450_000, onError: c => c.json({ error: 'Request is too large.' }, 413) }))
   router.get('/status', c => c.json(service.status()))
+  router.get('/pool', c => c.json({ version: 1 }))
+  router.post('/pool/instances/:id/retire', async c => c.json(await service.retirePool(c.req.param('id'))))
+  router.post('/pool/admissions', async c => c.json(await service.admitPool(await c.req.json().catch(() => null)), 201))
+  router.post('/pool/admissions/:requestId/commit', async c => c.json(await service.commitPool(c.req.param('requestId'))))
+  router.post('/pool/admissions/:requestId/abort', async c => c.json(await service.abortPool(c.req.param('requestId'))))
   router.get('/stats', c => c.json(service.stats(Number(c.req.query('days')) || 14)))
   router.get('/sync', c => c.json(sync?.status() ?? { on: false, lastSyncAt: null, lastError: null, shared: 0 }))
   router.post('/instances', async c => c.json(service.create(await c.req.json().catch(() => null)), 201))

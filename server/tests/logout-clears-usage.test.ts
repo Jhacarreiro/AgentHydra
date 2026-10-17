@@ -48,8 +48,9 @@ test('a 401 (an expired or REVOKED token) also drops the cached usage, not just 
 })
 
 test('a signed-out CLI instance drops its cached usage', () => {
+  // Signed out, or a definitive 401 (a revoked login, 2026-10-16), as on the desktop path.
   expect(usageService).toContain(
-    'if (!hasAnyCredential) dropCachedUsage(key, { keepLastKnown: true })',
+    'if (!hasAnyCredential || apiFail?.status === 401) dropCachedUsage(key, { keepLastKnown: true })',
   )
 })
 

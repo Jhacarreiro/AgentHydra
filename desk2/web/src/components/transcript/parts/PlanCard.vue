@@ -50,7 +50,7 @@ async function respond(approve: boolean, mode?: PermissionMode) {
       @click="ctx.toggle(openKey)"
     >
       <Check v-if="item.state === 'approved'" class="size-4 shrink-0 text-success-text" />
-      <PencilLine v-else-if="item.state === 'rejected'" class="size-4 shrink-0 text-warning-text" />
+      <PencilLine v-else-if="item.state === 'rejected'" class="size-4 shrink-0 text-text-muted" />
       <Clock v-else class="size-4 shrink-0 text-text-muted" />
       <span class="shrink-0">{{ item.state === 'approved' ? 'Plan approved' : item.state === 'rejected' ? 'Kept planning' : 'Plan expired' }}</span>
       <span class="min-w-0 truncate text-text">{{ title }}</span>

@@ -6,7 +6,7 @@ key_url = "https://www.runpod.io/console/user/settings"
 docs = "https://docs.runpod.io/serverless/endpoints/send-requests"
 auth_header = "Authorization"
 auth_prefix = "Bearer "
-capabilities = ["model-inference", "job-status", "endpoint-health"]
+capabilities = ["model-inference", "job-status", "endpoint-health", "image-generation"]
 
 [operations.run]
 method = "POST"
@@ -25,3 +25,36 @@ method = "GET"
 path = "/v2/{endpoint_id}/health"
 capability = "endpoint-health"
 response = "json"
+
+# Image routes for `hswarm image` (image.py). RunPod's public endpoints run open FLUX models on RunPod's GPUs, need no
+# endpoint of one's own, and report what each call charged in `output.cost`, which the route returns as its cost. The
+# safety checker is off: these routes exist for the scenes a moderated provider refuses.
+[images.flux-1-kontext-dev]
+adapter = "runpod"
+model = "black-forest-labs-flux-1-kontext-dev"
+modes = ["edit"]
+price = 0.025  # measured 2026-10-16: output.cost 0.025 for one 704x1536 edit
+input = { enable_safety_checker = false }
+
+[images.flux-1-schnell]
+adapter = "runpod"
+model = "black-forest-labs-flux-1-schnell"
+modes = ["t2i"]
+price = { per_mp = 0.0024 }  # docs.runpod.io/hub/public-endpoints (2026-10-16); a 512x512 call reported 0.003
+size_style = "wh"
+
+[images.flux-1-dev]
+adapter = "runpod"
+model = "black-forest-labs-flux-1-dev"
+modes = ["t2i"]
+price = { per_mp = 0.02 }  # docs.runpod.io/hub/public-endpoints (2026-10-16)
+size_style = "wh"
+
+# One free GraphQL read per key: an account at or under 5 cents is parked before an image is paid for.
+[image_balance]
+url = "https://api.runpod.io/graphql"
+method = "POST"
+json = { query = "query { myself { clientBalance } }" }
+field = "data.myself.clientBalance"
+usd_per_unit = 1.0
+min = 0.05

@@ -95,10 +95,7 @@ export async function waitUntil(done: () => boolean, timeoutMs: number, stepMs =
   return true
 }
 
-// Connections browser.mjs:3298. The window is closed the way a person closes it, so Chrome flushes its cookies: taskkill
-// WITHOUT /F on Windows (WM_CLOSE; /F would lose the flush), SIGTERM elsewhere. No SIGKILL: a window that ignores the close
-// is usually showing the human a dialog, and killing it would throw away what they typed.
-async function closeSignInWindow(dir: string, pid: number): Promise<void> {
+async function askToClose(pid: number): Promise<void> {
   if (process.platform === 'win32') {
     await new Promise<void>((res) => {
       const k = spawn('taskkill', ['/PID', String(pid)], { windowsHide: true, stdio: 'ignore' })
@@ -109,10 +106,27 @@ async function closeSignInWindow(dir: string, pid: number): Promise<void> {
     try {
       process.kill(pid, 'SIGTERM')
     } catch {
-      // already gone - the lock wait below is the real signal
+      // already gone - the lock wait is the real signal
     }
   }
-  if (!(await waitUntil(() => !profileLocked(dir), 20_000)))
+}
+
+// Connections browser.mjs:3298. The window is closed the way a person closes it, so Chrome flushes its cookies: taskkill
+// WITHOUT /F on Windows (WM_CLOSE; /F would lose the flush), SIGTERM elsewhere. No SIGKILL: a window that ignores the close
+// is usually showing the human a dialog, and killing it would throw away what they typed.
+// On Windows the close is asked again every 2 s while the window still holds the profile: Chrome drops a WM_CLOSE that
+// comes while it is still starting, though taskkill reports success (2026-10-16: closes sent 0.6-0.8 s after launch were
+// all lost, every one from 0.85 s closed it in 0.2 s), and a busy box stretches that start past the next browser call.
+// SIGTERM is sent once: Chrome takes a second one as a kill, which loses the flush.
+async function closeSignInWindow(dir: string, pid: number): Promise<void> {
+  const until = Date.now() + 20_000
+  const again = process.platform === 'win32' ? 2_000 : Infinity
+  let closed = false
+  for (let first = true; !closed && Date.now() < until; first = false) {
+    if (first || processAlive(pid)) await askToClose(pid)
+    closed = await waitUntil(() => !profileLocked(dir), Math.min(again, until - Date.now()))
+  }
+  if (!closed)
     throw new Error(
       `the plain sign-in window on ${dir} (pid ${pid}) did not close within 20s - it is most likely showing the human a dialog. ` +
         'Close that window by hand, then retry this call.',

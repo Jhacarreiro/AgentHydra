@@ -143,7 +143,7 @@ async function transcriptPathForAsync(
   if (await exists(direct)) return direct
   let dirs: string[]
   try {
-    dirs = await readdir(join(claudeHome, 'projects'))
+    dirs = await fsSlot(() => readdir(join(claudeHome, 'projects')))
   } catch {
     return null
   }
@@ -155,7 +155,7 @@ async function transcriptPathForAsync(
 }
 
 const exists = (path: string): Promise<boolean> =>
-  access(path).then(
+  fsSlot(() => access(path)).then(
     () => true,
     () => false,
   )
@@ -246,7 +246,7 @@ export async function readRegistrationsAsync(claudeHome: string): Promise<Regist
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []
   try {
-    files = (await readdir(dir)).filter((f) => f.endsWith('.json'))
+    files = (await fsSlot(() => readdir(dir))).filter((f) => f.endsWith('.json'))
   } catch {
     return []
   }

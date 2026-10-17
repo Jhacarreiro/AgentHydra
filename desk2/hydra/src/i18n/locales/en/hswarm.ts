@@ -1,7 +1,6 @@
 // HSwarm tab - HSwarm console integration
 import clients from './hswarm/clients'
 import jobs from './hswarm/jobs'
-import managers from './hswarm/managers'
 import models from './hswarm/models'
 import money from './hswarm/money'
 import overview from './hswarm/overview'
@@ -12,7 +11,7 @@ import tools from './hswarm/tools'
 
 export default {
   // Each view's own strings: t('hswarm.v.<view>.<key>').
-  v: { overview, savings, providers, models, routing, clients, jobs, tools, money, managers },
+  v: { overview, savings, providers, models, routing, clients, jobs, tools, money },
   // The left-hand tree (ZSwarm console layout): HSwarmView.vue.
   nav: {
     label: 'HSwarm objects',

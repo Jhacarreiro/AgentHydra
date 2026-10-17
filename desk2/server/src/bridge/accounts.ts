@@ -1,32 +1,16 @@
-// Accounts: AgentHydra's CLI instances (GET /api/cli-instances) plus the machine's default ~/.claude
-// login, as the rows Hydra Desk shows (SPEC.md "The bridge"). Which account a chat runs on is not
-// decided in Hydra Desk at all: a new chat is a CliMayte worker and CliMayte places it.
+// Accounts: AgentHydra's CLI instances (GET /api/cli-instances), as the rows Hydra Desk shows (SPEC.md
+// "The bridge"). Which account a chat runs on is not decided in Hydra Desk at all: a new chat is a
+// CliMayte worker and CliMayte places it.
 
-import type { AccountInfo, AccountRef } from '@shared/protocol'
+import type { AccountInfo } from '@shared/protocol'
 import type { AhCliInstance, AhUsageLimit, AhWorker } from './client'
-
-export const DEFAULT_ACCOUNT: AccountRef = { id: 'default', label: 'Default login', configDir: null }
-
-/** The default login as a row. AgentHydra does not read its usage, so its numbers are unknown. */
-export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
-  ...DEFAULT_ACCOUNT,
-  email: null,
-  plan: null,
-  signedIn: true,
-  fiveHourPct: null,
-  weeklyPct: null,
-  fiveHourResetsAt: null,
-  weeklyResetsAt: null,
-  inUse: false,
-}
 
 /** The fleet's line (owner, 2026-08-31): every account stays at or under 85% on both windows. Nothing Desk places
  *  itself (a move, a title, a judgment) goes onto an account at or past it. */
 export const ROOM_PCT = 85
 
 /** Signed in, and read under its line on both windows: ROOM_PCT, or the owner's lower cap for the account (owner,
- *  2026-10-09: "up to 50% of five-hour, 50% of week"). An unread window is not room: the default login is never
- *  read, and before this a full account moved chats onto one at 99% (the line was 100, unread counted as 0). */
+ *  2026-10-09: "up to 50% of five-hour, 50% of week"). An unread window is not room. */
 export function hasRoom(a: AccountInfo): boolean {
   const line = (cap: number | null | undefined): number => Math.min(ROOM_PCT, cap ?? ROOM_PCT)
   return (
@@ -36,6 +20,14 @@ export function hasRoom(a: AccountInfo): boolean {
     a.fiveHourPct < line(a.maxFiveHourPct) &&
     a.weeklyPct < line(a.maxWeeklyPct)
   )
+}
+
+/** The healthiest account not tried yet: one with room (hasRoom), the owner's highest priority first, then the least
+ *  used. */
+export function pickHealthy(accounts: AccountInfo[], tried: ReadonlySet<string>): AccountInfo | null {
+  const ok = accounts.filter((a) => !tried.has(a.id) && hasRoom(a))
+  const load = (a: AccountInfo): number => Math.max(a.fiveHourPct ?? 0, a.weeklyPct ?? 0)
+  return ok.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || load(a) - load(b))[0] ?? null
 }
 
 const RUNNING_WORKER = new Set(['running', 'checking'])
@@ -81,10 +73,10 @@ export function toAccountInfo(i: AhCliInstance, busyAccountIds: ReadonlySet<stri
   }
 }
 
-/** The default login first, then the CLI instances in AgentHydra's order. */
+/** The CLI instances in AgentHydra's order. */
 export function mapAccounts(instances: AhCliInstance[], workers: AhWorker[]): AccountInfo[] {
   const busy = new Set(
     workers.filter((w) => RUNNING_WORKER.has(w.status) && w.accountId).map((w) => w.accountId as string),
   )
-  return [DEFAULT_ACCOUNT_INFO, ...instances.map((i) => toAccountInfo(i, busy))]
+  return instances.map((i) => toAccountInfo(i, busy))
 }

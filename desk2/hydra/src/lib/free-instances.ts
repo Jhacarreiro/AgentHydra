@@ -1,4 +1,5 @@
 import type { FreeInstance, FreeJob, FreeResult, FreeProvider, FreeRequest, FreeSettings, FreeStatRow, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
+import { isPaidPlan } from '@desk/shared/free-instances'
 import { ref } from 'vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import type { UsageLimit, UsageSnapshot } from '@/lib/api'
@@ -123,6 +124,15 @@ export function freeCheckVerdict(
   }
   const why = reason || t('freeInstances.verdictNoAnswer')
   return { state: 'unknown', text: t('freeInstances.verdictUnknown', { who, reason: why }), reason: why }
+}
+
+/** The plan label the Instances filter reads on a Free row, in the desktop rows' words: the paid plan the site
+ *  reports ("Go", "Pro"), "Free" on the Free plan, null while no reading has named one (the filter's
+ *  unknown-is-never-no rule). Owner, 2026-10-16: every row type obeys every filter. */
+export function freePlanLabel(i: Pick<FreeInstance, 'plan' | 'usage'>): string | null {
+  const plan = i.plan ?? i.usage?.plan ?? null
+  if (!plan) return null
+  return isPaidPlan(plan) ? plan.charAt(0).toUpperCase() + plan.slice(1) : 'Free'
 }
 
 /** The provider's mark on a Free row (ProviderLogo). */

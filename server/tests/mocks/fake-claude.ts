@@ -16,7 +16,32 @@ const flag = (name: string): string | null => {
 const resume = flag('--resume')
 const sessionId = resume ?? flag('--session-id') ?? crypto.randomUUID()
 const configDir = process.env.CLAUDE_CONFIG_DIR ?? ''
-const prompt = await Bun.stdin.text()
+// Stream-json keeps stdin open for mid-turn delivery. Read the launch line without
+// waiting for EOF or closing that pipe; the native runner closes it after our result.
+async function launchInput(): Promise<{ prompt: string; echo?: unknown }> {
+  if (flag('--input-format') !== 'stream-json') return { prompt: await Bun.stdin.text() }
+  const reader = Bun.stdin.stream().getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  try {
+    while (!text.includes('\n')) {
+      const { value, done } = await reader.read()
+      if (done) throw new Error('Stream-json launch prompt ended before its newline')
+      text += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const echo = JSON.parse(text.slice(0, text.indexOf('\n'))) as {
+    message: { content: string | { type: string; text: string }[] }
+  }
+  const content = echo.message.content
+  return {
+    prompt: typeof content === 'string' ? content : content.map((block) => block.text).join('\n'),
+    echo,
+  }
+}
+const { prompt, echo } = await launchInput()
 
 // Every launch is recorded in the account's folder, so a test can see the cache TTL it was given, the
 // session it ran in and the prompt it started from.
@@ -28,6 +53,7 @@ if (configDir)
   )
 
 const emit = (ev: unknown) => process.stdout.write(`${JSON.stringify(ev)}\n`)
+if (echo && args.includes('--replay-user-messages')) emit(echo)
 const line = (ev: unknown) => `${JSON.stringify(ev)}\n`
 // How long a turn on a fake-overage or fake-near-limit account runs on when nobody stops it: the seconds its
 // marker names, else 6. A test that expects the stop names more than a stop takes on a loaded box (3-5 s

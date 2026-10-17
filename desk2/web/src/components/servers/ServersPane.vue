@@ -284,7 +284,8 @@ const labelOf = (profile: string | null): string | null => (profile ? (profileLi
 function applyPages(profile: string, got: BrowserTab[] | 'closed' | null) {
   if (got === null) return
   const list = (got === 'closed' ? [] : got).filter((p) => !closing.has(p.id))
-  pages.value = { ...pages.value, [profile]: list }
+  // The same tabs on every look (the usual one) keep the old object: titles and the tab strip would re-render for nothing.
+  if (JSON.stringify(list) !== JSON.stringify(pages.value[profile])) pages.value = { ...pages.value, [profile]: list }
   state.value = syncPages(state.value, profile, list)
 }
 /** The browsers this chat uses: those it has a tab for, and the one its AI last drove. */

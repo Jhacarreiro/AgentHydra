@@ -202,7 +202,7 @@ async function pairOne(c: PairingCandidate): Promise<{ p: Pairing; made: boolean
   const cli = found ?? createPairedCli(c.desktopLabel)
   const link = linkCliInstanceToDesktop(cli.id, c.desktopDir, c.desktopLabel)
   if (!link.ok) {
-    if (made) deleteCliInstance(cli.id, cli.name)
+    if (made) deleteCliInstance(cli.id, 'Pairing: it could not be linked to its desktop.')
     throw new Error(link.message || 'could not link the CLI instance')
   }
   const feed = await feedCliFromDesktop({
@@ -210,7 +210,7 @@ async function pairOne(c: PairingCandidate): Promise<{ p: Pairing; made: boolean
     associatedDesktopDir: c.desktopDir,
   }).catch(() => null)
   if (made && feed !== 'fed') {
-    deleteCliInstance(cli.id, cli.name)
+    deleteCliInstance(cli.id, 'Pairing: its desktop gave it no sign-in.')
     throw new Error(
       feed === 'no-desktop-login'
         ? 'its Desktop app has no Claude Code sign-in right now'

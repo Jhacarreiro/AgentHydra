@@ -32,6 +32,10 @@ const ERROR_INSUFFICIENT_BUFFER = 122
 const ROW_BYTES = 24
 /** Connections opened between asking the size and reading the table: room for this many more. */
 const SLACK_ROWS = 256
+/** Only capacity is retained, never a decoded identity. Large tables are released after the read. */
+const RETAINED_BUFFER_BYTES = 1024 * 1024
+/** A corrupt required size must not allocate gigabytes. This still holds over 699,000 rows. */
+const MAX_TABLE_BYTES = 16 * 1024 * 1024
 
 type TableCall = (buf: Uint8Array | null, size: Uint32Array) => number
 let tableCall: TableCall | null | undefined
@@ -65,36 +69,69 @@ function load(): TableCall | null {
 
 const swapPort = (raw: number): number => ((raw & 0xff) << 8) | ((raw >> 8) & 0xff)
 
+/** A reader's reusable native buffer. Injectable calls/allocations keep malformed native replies
+ *  testable without querying the machine. Every invocation reads a new table; no rows are cached. */
+export function createTcpTableReader(
+  call: TableCall,
+  allocate: (bytes: number) => Uint8Array = (bytes) => new Uint8Array(bytes),
+): () => TcpRow[] | null {
+  let kept: Uint8Array | null = null
+  const size = new Uint32Array(1)
+  const bufferFor = (required: number): Uint8Array | null => {
+    if (required < 4 || required > MAX_TABLE_BYTES) return null
+    const buf = allocate(Math.min(MAX_TABLE_BYTES, required + SLACK_ROWS * ROW_BYTES))
+    return buf.byteLength >= required && buf.byteLength <= MAX_TABLE_BYTES ? buf : null
+  }
+  return () => {
+    try {
+      let buf = kept
+      if (!buf) {
+        size[0] = 0
+        if (call(null, size) !== ERROR_INSUFFICIENT_BUFFER) return null
+        buf = bufferFor(size[0]!)
+        if (!buf) return null
+      }
+      // A short buffer is retried at the reported size, under the same four-call bound.
+      for (let tries = 0; tries < 4; tries++) {
+        const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+        // A purported success that did not write a header cannot reuse the previous identities.
+        view.setUint32(0, 0xffff_ffff, true)
+        size[0] = buf.byteLength
+        const rc = call(buf, size)
+        if (rc === ERROR_INSUFFICIENT_BUFFER) {
+          if (tries === 3) return null
+          buf = bufferFor(size[0]!)
+          if (!buf) return null
+          continue
+        }
+        if (rc !== NO_ERROR || size[0]! < 4 || size[0]! > buf.byteLength) return null
+        const n = view.getUint32(0, true)
+        if (4 + n * ROW_BYTES > size[0]!) return null
+        kept = buf.byteLength <= RETAINED_BUFFER_BYTES ? buf : null
+        const rows: TcpRow[] = new Array(n)
+        for (let i = 0; i < n; i++) {
+          const at = 4 + i * ROW_BYTES
+          rows[i] = {
+            state: view.getUint32(at, true),
+            localPort: swapPort(view.getUint32(at + 8, true)),
+            pid: view.getUint32(at + 20, true),
+          }
+        }
+        return rows
+      }
+    } catch {
+      // A refused call or allocation: could not look, never an old identity.
+    }
+    return null
+  }
+}
+
+let reader: (() => TcpRow[] | null) | null = null
+
 /** Every IPv4 TCP connection on this machine with its owning pid, or null when it cannot be read. */
 export function windowsTcpTable(): TcpRow[] | null {
   const call = load()
   if (!call) return null
-  try {
-    const size = new Uint32Array(1)
-    if (call(null, size) !== ERROR_INSUFFICIENT_BUFFER) return null
-    // The table can grow between the two calls: a short buffer is asked again at the new size.
-    for (let tries = 0; tries < 4; tries++) {
-      const buf = new Uint8Array(size[0]! + SLACK_ROWS * ROW_BYTES)
-      size[0] = buf.byteLength
-      const rc = call(buf, size)
-      if (rc === ERROR_INSUFFICIENT_BUFFER) continue
-      if (rc !== NO_ERROR) return null
-      const view = new DataView(buf.buffer)
-      const n = view.getUint32(0, true)
-      if (4 + n * ROW_BYTES > buf.byteLength) return null
-      const rows: TcpRow[] = new Array(n)
-      for (let i = 0; i < n; i++) {
-        const at = 4 + i * ROW_BYTES
-        rows[i] = {
-          state: view.getUint32(at, true),
-          localPort: swapPort(view.getUint32(at + 8, true)),
-          pid: view.getUint32(at + 20, true),
-        }
-      }
-      return rows
-    }
-  } catch {
-    // a refused call: could not look
-  }
-  return null
+  reader ??= createTcpTableReader(call)
+  return reader()
 }
