@@ -7,7 +7,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync, readFileSync, watch } from 'node:fs'
 import { join, sep } from 'node:path'
-import { type Answer, type Daemon, knownBug, scenario, signIn, waitFor } from './harness'
+import { type Answer, type Daemon, scenario, signIn, waitFor } from './harness'
 
 const lane = scenario('E2')
 const home = lane.home()
@@ -83,18 +83,11 @@ test('E2: a task dispatches, and the same request sent again answers the same wo
   expect(repeat.body.workers[0]).toMatchObject({ id: first.body.workers[0].id, repeat: true })
 })
 
-knownBug(
-  {
-    issue: 'a repeated request to an unnamed CliMayte group answers with a new random group name',
-    where:
-      'climayteRun in server/src/climayte.ts names the reply group `named || g-<6 hex>` even when every task repeats',
-    fix: 'https://github.com/LunarWerxs/AgentHydra/pull/17',
-  },
-  'E2: a repeat answers in the group of the worker it repeats',
-  () => {
-    expect(repeat.body.group).toBe(repeat.body.workers[0].group)
-  },
-)
+// Until upstream 9be22ac1 an unnamed repeat answered under a fresh g-<6 hex> group that held none of
+// its workers (climayteRun named the group `named || g-<6 hex>` even when every task repeated).
+test('E2: a repeat answers in the group of the worker it repeats', () => {
+  expect(repeat.body.group).toBe(repeat.body.workers[0].group)
+})
 
 test('E2: the worker reaches done on the fake CLI, launched once', async () => {
   const id = first.body.workers[0].id

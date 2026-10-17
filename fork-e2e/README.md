@@ -11,7 +11,7 @@ conflicts with it.
 - **Run it:** `bun install --frozen-lockfile` at the root and in `desk2/`, then `cd fork-e2e && bun run test`. About 30 s on Linux.
 - **Five scenarios:** E1 boot and store, E2 CliMayte dispatch, E3 Origin/Host guards, E4 MCP over both transports, E6 idle egress.
 - **Hermetic:** every scenario runs in its own temp home with outbound traffic refused and counted, and ends by checking that the real `~/.claude.json`, `~/.claude`, `~/.codex` and their siblings did not change.
-- **Known bugs stay visible:** an upstream bug the lane knows of is asserted as it should behave and marked `[known bug, fix proposed in <upstream pull request>]` (one today, in E2). The lane stays green while it fails and goes red once upstream fixes it, as a cue to drop the marker.
+- **Known bugs stay visible:** an upstream bug the lane knows of is asserted as it should behave and marked `[known bug, fix proposed in <upstream pull request>]` (none open today). The lane stays green while it fails and goes red once upstream fixes it, as a cue to drop the marker.
 - **Root suite untouched:** the files are `*.e2e.ts`, which a `bun test` at the root never picks up.
 - **CI:** `.github/workflows/fork-e2e.yml` on ubuntu-latest (push to main, pull requests, daily, manual), only in the fork's own repository.
 
@@ -79,12 +79,13 @@ The numbering leaves gaps on purpose: E5 (the Codex hub) and E7 onward need code
 
 Each known bug is one `knownBug(...)` test (harness.ts). While the bug is there it reports as `todo` and prints `known bug still present`, plus a `::warning` annotation on GitHub. Once fixed, bun fails it with "marked as todo but passes"; then turn it into a plain `test`, so the fix stays guarded.
 
-1. **A repeated request to an unnamed CliMayte group answers with a new group name** (E2). The workers are the right ones (`repeat: true`, same id), but the reply's `group` is a fresh `g-xxxxxx`, because `climayteRun` in `server/src/climayte.ts` names the group `named || g-<6 hex>` even when every task repeats. Fix proposed upstream: [LunarWerxs/AgentHydra#17](https://github.com/LunarWerxs/AgentHydra/pull/17).
+None is open today.
 
 Fixed upstream:
 
 - **The `session_stats_gone` index came back on every start after the first** (E1). The base schema created it on every open and the schema's v1 step dropped it only while `user_version < 1`, so every later start brought it back, a second daemon that exits at once at the single-instance guard included (the schema runs when db.ts is imported, before the guard). Upstream fixed it in 3d7c1966: the base schema now drops it on every open (`server/src/db.ts`, `drop index if exists session_stats_gone`). E1 asserts it stays dropped across all three starts.
 - **`tests/mcp.test.ts` asserted the opposite of the daemon** (E4). It stubbed `fetch` and expected `add_queue_item` to succeed, while a live daemon refuses every call with 409 (`server/src/routes/queue.ts`, `headlessRunsAllowed()` is `false`), as the tool's own description says (`server/src/mcp-session-tools.ts`). Upstream fixed it in 61ccec1e: the MCP test now expects the refusal, and `server/tests/queue-patch-guard.test.ts` holds it on a real POST. E4 asserts the refusal over both transports on a live daemon.
+- **A repeated request to an unnamed CliMayte group answered with a new group name** (E2). The workers were the right ones (`repeat: true`, same id), but the reply's `group` was a fresh `g-xxxxxx`: `climayteRun` in `server/src/climayte.ts` named the group `named || g-<6 hex>` even when every task repeated. Upstream fixed it in 9be22ac1: a repeat answers in its workers' own group. E2 asserts it.
 
 Observations the lane asserts as they are, for upstream to weigh:
 
