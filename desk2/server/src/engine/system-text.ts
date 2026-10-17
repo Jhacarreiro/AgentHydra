@@ -273,8 +273,12 @@ export function continuationOf(text: string): { said: string | null; messages: s
   const why = CONTINUED_WHY.find(([re]) => re.test(m[2]))?.[1]
   const where = m[1] === 'on another account' ? ' on another account' : ''
   // A chat's continuation opens with the owner's message it answers, then the same note.
-  const lead = text.slice(0, m.index).trim()
-  const said = CHAT_HEIR.test(text.slice(m.index)) && lead && !CONTINUED.test(lead) ? lead : null
+  // The lead may be a stream-json line (a relaunch's saved prompt), itself carrying an earlier continuation:
+  // read it as the text it carries and keep only what comes before that earlier note.
+  let lead = unwrapEnvelope(text.slice(0, m.index).trim()).trim()
+  const nested = CONTINUED.exec(lead)
+  if (nested) lead = lead.slice(0, nested.index).trim()
+  const said = CHAT_HEIR.test(text.slice(m.index)) && lead ? lead : null
   return { said, messages: messages || null, line: `${CONTINUED_LINE}${where}${why ? `: ${why}` : ''}.` }
 }
 

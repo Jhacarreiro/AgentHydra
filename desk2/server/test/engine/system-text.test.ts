@@ -541,6 +541,17 @@ describe("a handoff's continuation prompt", () => {
     expect(out[3]).toMatchObject({ text: 'why did it stop?' })
   })
 
+  test("a chat continuation led by a stream-json line carrying an earlier continuation shows the plain message and one muted line", () => {
+    const heir = (c: string) =>
+      c.replace('Do not redo steps it reports finished.', "That session was this chat's manager before you: you continue as the manager. Do not redo steps it reports finished.")
+    const lead = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: heir(continued({})) }] } })
+    const chat = heir(continued({})).replace('Please tidy the example garden plan.', lead)
+    expect(userTurns(user(chat), null)).toEqual([
+      { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
+      { kind: 'system', id: 'u9:continued', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' },
+    ])
+  })
+
   test("a non-chat continuation hides the repeated task as before", () => {
     expect(userTurns(user(continued()), null)).toEqual([userTurn(user(continued()), null)!])
     expect(userTurns(user(continued({ messages: ['why did it stop?'] })), null)).toEqual([userTurn(user(continued({ messages: ['why did it stop?'] })), null)!])

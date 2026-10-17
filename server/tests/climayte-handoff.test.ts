@@ -39,6 +39,14 @@ describe('continuationPrompt', () => {
       'An earlier session already worked on this task on this account and handed off because its conversation had grown large. Continue from its handoff below',
     )
   })
+  test("a chat's task is the owner's plain text: an envelope is unwrapped and an earlier continuation is cut off", () => {
+    const env = (t: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: t }] } })
+    const first = continuationPrompt('Example Owner: please tidy the garden plan.', 'old handoff', 'h0.md', [], [], { ...from, chat: true })
+    const out = continuationPrompt(env(first), 'the handoff', 'h.md', ['t.jsonl'], [], { ...from, chat: true })
+    expect(out.startsWith('Example Owner: please tidy the garden plan.\n\n---\nAn earlier session')).toBe(true)
+    expect(out).not.toContain('{"type"')
+    expect(out).not.toContain('old handoff')
+  })
 })
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
