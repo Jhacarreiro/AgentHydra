@@ -166,8 +166,13 @@ const title = computed(() => row.value?.title || props.session?.title || 'Sessio
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
 const shortId = computed(() => props.sessionId.slice(0, 8))
 // Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file),
-// else the prompts in the transcript shown: Desk reads only a long session file's last 8 MB.
-const prompts = computed(() => turnCount(props.items))
+// else the prompts in the transcript shown: Desk reads only a long session file's last 8 MB. Until the transcript loads, the
+// count it showed last time (rail-cache.ts): an outside Codex chat, whose usage AgentHydra does not count, read "0 turns" for a
+// moment on every revisit, then its real count (2026-10-17).
+const prompts = computed(() => (props.items.length ? turnCount(props.items) : (railFacts(props.sessionId)?.turns ?? 0)))
+watch(prompts, (n) => {
+  if (props.items.length && props.sessionId) keepRailFacts(props.sessionId, { turns: n })
+})
 const sessionTurns = computed(() => (usage.value?.status === 'ok' ? usage.value.tokens.turns : null))
 const turns = computed(() => sessionTurns.value ?? prompts.value)
 const turnsTip = computed(() => {
