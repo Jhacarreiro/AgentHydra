@@ -1,3 +1,6 @@
+// server/tests/auto-update-relaunch.test.ts: an applied update's restart is retried until it hands over,
+// never applying the same update twice. A manual source apply's guard (index.ts restartRefusal: a CliMayte
+// worker the daemon spawned itself) holds the restart until it lets go.
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import {
   autoUpdateEnabled,
@@ -32,85 +35,9 @@ function status(): UpdateStatus {
     reason: null,
   }
 }
-/** Work a restart would lose (a chat move, orchestrator.ts moveRestartRefusal), as the daemon wires hasUnsafeWork. */
-function unsafeWork() {
-  let n = 0
-  return {
-    begin: () => {
-      n++
-      let ended = false
-      return () => {
-        if (!ended) n--
-        ended = true
-      }
-    },
-    running: () => n > 0,
-  }
-}
 function applied(): UpdateApplyResult {
   return { ok: true, message: 'updated', restartRequired: true, status: status(), output: [] }
 }
-
-test('volatile work is a hard gate even beyond the soft one-hour defer', async () => {
-  const work = unsafeWork()
-  const release = work.begin()
-  let applies = 0
-  let restarts = 0
-  setAutoUpdateHooks({
-    check: async () => status(),
-    apply: async () => {
-      applies++
-      return applied()
-    },
-    hasUnsafeWork: work.running,
-    hasActiveRuns: () => true,
-    relaunch: () => {
-      restarts++
-    },
-  })
-  expect((await runAutoUpdateOnce(1)).reason).toBe('volatile-work')
-  expect((await runAutoUpdateOnce(10_000_000)).reason).toBe('volatile-work')
-  expect([applies, restarts]).toEqual([0, 0])
-  release()
-})
-
-test('work begun during apply defers restart, then hands over without another check or apply', async () => {
-  const work = unsafeWork()
-  let release!: () => void
-  let checks = 0
-  let applies = 0
-  let restarts = 0
-  setAutoUpdateHooks({
-    check: async () => {
-      checks++
-      return status()
-    },
-    apply: async () => {
-      applies++
-      release = work.begin()
-      return applied()
-    },
-    hasUnsafeWork: work.running,
-    relaunch: () => {
-      restarts++
-      return true
-    },
-  })
-  expect(await runAutoUpdateOnce()).toMatchObject({
-    applied: true,
-    relaunched: false,
-    reason: 'restart-pending',
-  })
-  expect((await runAutoUpdateOnce()).relaunched).toBe(false)
-  expect([checks, applies, restarts]).toEqual([1, 1, 0])
-  release()
-  expect(await runAutoUpdateOnce()).toMatchObject({
-    checked: false,
-    applied: false,
-    relaunched: true,
-  })
-  expect([checks, applies, restarts]).toEqual([1, 1, 1])
-})
 
 test('a second restart request while a successor handshake is pending shares it', async () => {
   let ready!: (ok: boolean) => void
@@ -147,23 +74,19 @@ test('a failed handoff remains pending and retries without reinstalling', async 
   expect([attempts, checks]).toEqual([2, 0])
 })
 
-test('deferred manual source updates keep their original restart guard after unsafe work finishes', async () => {
-  const work = unsafeWork()
-  const release = work.begin()
-  let sourceWorkActive = true
+test('a deferred manual source update keeps its restart guard until the guard lets go', async () => {
+  let workerInside = true
   let restarts = 0
   setAutoUpdateHooks({
-    hasUnsafeWork: work.running,
     relaunch: () => {
       restarts++
       return true
     },
   })
-  expect(await relaunchAfterUpdate(() => !sourceWorkActive)).toBe(false)
-  release()
+  expect(await relaunchAfterUpdate(() => !workerInside)).toBe(false)
   expect((await runAutoUpdateOnce()).relaunched).toBe(false)
   expect(restarts).toBe(0)
-  sourceWorkActive = false
+  workerInside = false
   expect((await runAutoUpdateOnce()).relaunched).toBe(true)
   expect(restarts).toBe(1)
 })
@@ -187,15 +110,13 @@ test('a thrown handoff remains pending rather than reporting an applied update a
 })
 
 test('a requested manual update retries its pending handoff promptly while auto-apply is off', async () => {
-  const work = unsafeWork()
-  const release = work.begin()
+  let workerInside = true
   const wasEnabled = autoUpdateEnabled()
   const timers = spyOn(globalThis, 'setTimeout')
   let applies = 0
   try {
     setAutoUpdateEnabled(false)
     setAutoUpdateHooks({
-      hasUnsafeWork: work.running,
       apply: async () => {
         applies++
         return applied()
@@ -203,14 +124,13 @@ test('a requested manual update retries its pending handoff promptly while auto-
       relaunch: () => true,
     })
     startAutoUpdate()
-    expect(await relaunchAfterUpdate()).toBe(false)
+    expect(await relaunchAfterUpdate(() => !workerInside)).toBe(false)
     expect(timers.mock.calls.at(-1)?.[1]).toBe(5000)
-    release()
+    workerInside = false
     expect((await runAutoUpdateOnce()).relaunched).toBe(true)
     expect(applies).toBe(0)
     expect(autoUpdateEnabled()).toBe(false)
   } finally {
-    release()
     stopAutoUpdate()
     timers.mockRestore()
     setAutoUpdateEnabled(wasEnabled)

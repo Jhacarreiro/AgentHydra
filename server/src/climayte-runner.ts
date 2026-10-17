@@ -199,6 +199,16 @@ export function noteHandoff(specPath: string, endedAt: number | null): void {
     if (at !== null && endedAt - at > HANDOFF_KEEP_MS) handoffs.delete(path)
 }
 
+/** Resolves, once no hand-off this daemon started is still under way or `maxWaitMs` has passed, with
+ *  how many still are. Bun ends a hand-off's powershell when the daemon exits, and a runner it had not
+ *  started yet then never starts, so a relaunch waits for them first (index.ts relaunchDaemon). */
+export async function runnerHandoffsSettled(maxWaitMs: number): Promise<number> {
+  const pending = () => [...handoffs.values()].filter((endedAt) => endedAt === null).length
+  const until = Date.now() + maxWaitMs
+  while (pending() > 0 && Date.now() < until) await Bun.sleep(100)
+  return pending()
+}
+
 /** How long `specPath` has been its runner's to claim, or null while this daemon's hand-off of it has
  *  not ended (the runner cannot have started, so it is neither late nor lost). Counted from that
  *  hand-off's end, else from `launchedAt`: an earlier daemon's hand-off died with it, and POSIX's

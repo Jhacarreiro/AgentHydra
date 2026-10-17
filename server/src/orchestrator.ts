@@ -17,11 +17,20 @@
  * the process as an argv array, never through a shell, so there is nothing to inject.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { APP_ROOT } from './config'
+import { APP_ROOT, DATA_DIR } from './config'
+import { fsSlot } from './core/fs-slots'
 import { killProcessTree } from './core/process'
 import { readInstanceInfo } from './instance'
+import {
+  type RunnerFiles,
+  removeRunnerFiles,
+  runnerFiles,
+  startRunner,
+  watchRunner,
+} from './orchestrator-runner'
 
 /** Where the toolbox lives. `AGENTHYDRA_ORCHESTRATOR_DIR` overrides for a layout where the Python
  *  tree sits somewhere else (a compiled binary with the tree copied beside it, or a developer
@@ -297,33 +306,18 @@ async function waitForLockToClear(
   return !liveRun(script)
 }
 
-/** The scripts a restart can stop half-way through a move: the chat imported onto its new account
- *  and still unarchived on the old one, which nothing repairs until `migrate_reconcile --finish`. */
-const MOVE_SCRIPTS = ['migrate_batch', 'migrate_chat'] as const
-
 /**
- * Why a restart must wait, or null. `force` is a person's word to restart anyway.
+ * The scripts that run under a runner, outside the daemon (orchestrator-runner.ts), with their
+ * operation kept on disk for the next daemon (adoptOrchestratorRuns): a chat move.
  *
  * ⛔ A RESTART CUT A DRAIN HALF-WAY (2026-10-08). A peer session restarted the daemon 23 minutes
  * into a 9-chat migrate_batch; its python child died with the daemon, two chats were left landed
- * and still unarchived on the source, and seven were never tried. Only a hand-run migrate_reconcile
- * found them. Other toolbox runs are not held to this: a restart past them loses no half-done move.
+ * and still unarchived on the source, and seven were never tried. Until 2026-10-17 every restart
+ * was refused while a move ran (moveRestartRefusal); now a move goes on through the restart and
+ * the next daemon answers its operation id. A move's own daemon calls wait out the handover
+ * (toolbox-calls.ts, hydralib's AGENTHYDRA_OPERATION).
  */
-export function moveRestartRefusal(force: boolean, now = Date.now()): string | null {
-  if (force) return null
-  const moves = MOVE_SCRIPTS.flatMap((script) => {
-    const run = liveRun(script)
-    return run
-      ? [`${script} (started ${Math.max(0, Math.round((now - run.started) / 60_000))} min ago)`]
-      : []
-  })
-  if (moves.length === 0) return null
-  return (
-    `${moves.join(' and ')} is moving chats through this daemon, and a restart can stop a move ` +
-    'half-way (the chat on its new account and still unarchived on the old one). Wait for it to ' +
-    'finish, or pass force:true and then run migrate_reconcile --finish.'
-  )
-}
+const MOVE_SCRIPTS = new Set(['migrate_batch', 'migrate_chat'])
 
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
  *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
@@ -350,7 +344,10 @@ export function orchestratorBusy(): boolean {
 //     says cancelled rather than failed.
 // Results are kept in memory, bounded (OPERATION_KEEP) and expiring (OPERATION_TTL_MS): this is
 // reconciliation for a dropped connection and a restart-free daemon, not an audit log - the
-// toolbox's own ledgers are the durable record of what an act did.
+// toolbox's own ledgers are the durable record of what an act did. A chat move (MOVE_SCRIPTS) is
+// the exception since 2026-10-17: it runs under a runner and its record is also kept in RUNS_DIR,
+// so the next daemon answers its id (adoptOrchestratorRuns). Every other run's record still dies
+// with the daemon, as below.
 //
 // ⛔ 'RESTART-FREE' IS THE LOAD-BEARING WORD, AND IT USED TO BE INVISIBLE TO CALLERS (2026-09-12).
 // A migration batch was launched detached, the daemon restarted while it ran, the batch's child
@@ -396,6 +393,51 @@ interface OperationEntry {
   /** The registry's own deadline timer (see OPERATION_WATCHDOG_GRACE_MS). Cleared the moment the
    *  run settles, so a finished operation leaves no timer behind. */
   watchdog: ReturnType<typeof setTimeout> | null
+  /** A move under a runner (MOVE_SCRIPTS): what ran and where its files are. Its record is saved in
+   *  RUNS_DIR whenever it changes, so the next daemon can take it on. Null for every other run. */
+  runner: RunnerRun | null
+}
+
+interface RunnerRun {
+  files: RunnerFiles
+  command: string[]
+  cwd: string
+  startedAt: number
+  timeoutMs: number
+}
+
+/** A move's operation as saved: the record and how to read its run. */
+interface SavedRun {
+  op: OrchestratorOperation
+  run: RunnerRun
+}
+
+/** Where a move's record and its runner's files live (orchestrator-runner.ts). */
+const RUNS_DIR = join(DATA_DIR, 'orchestrator-runs')
+const recordPath = (id: string) => join(RUNS_DIR, `${id}.json`)
+/** A record's name; the runner's own files carry a second extension. */
+const RECORD_NAME = /^[0-9a-f-]{36}\.json$/
+
+/** Written whole and renamed into place, so a reader never sees half a record. */
+function saveRun(entry: OperationEntry): void {
+  if (!entry.runner) return
+  const path = recordPath(entry.op.id)
+  const tmp = `${path}.${process.pid}.tmp`
+  try {
+    writeFileSync(tmp, JSON.stringify({ op: entry.op, run: entry.runner } satisfies SavedRun))
+    renameSync(tmp, path)
+  } catch (err) {
+    console.error(`[orchestrator] could not save move ${entry.op.id}:`, err)
+  }
+}
+
+async function readSavedRun(path: string): Promise<SavedRun | null> {
+  try {
+    const saved = JSON.parse(await fsSlot(() => readFile(path, 'utf8'))) as SavedRun
+    return saved?.op?.id && saved.run?.files ? saved : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -453,25 +495,34 @@ export function operationMissReason(now = Date.now()): OperationMiss {
         'ran them. If your run began before that time, it was a DIFFERENT process: the record ' +
         'did not survive the restart, and the run itself may have finished or died with the ' +
         "daemon that ran it. Do NOT re-fire the act - read the toolbox's own ledger for what it " +
-        'did, and verify the effect directly. For a move (migrate_batch, migrate_chat), run ' +
-        'migrate_reconcile: it lists chats left half-moved, and migrate_reconcile --finish <id> ' +
-        'settles each.'
+        'did, and verify the effect directly. A move (migrate_batch, migrate_chat) keeps its ' +
+        'record through a restart, so a move missing here ended over an hour ago or ran on a ' +
+        'daemon older than that record: run migrate_reconcile, which lists chats left ' +
+        'half-moved, and migrate_reconcile --finish <id> settles each.'
       : 'no such operation - this daemon has been up over an hour, so the id was either never ' +
         'minted here or its record has passed the one-hour retention.',
   }
 }
 
+function forgetOperation(e: OperationEntry): void {
+  operations.delete(e.op.id)
+  if (!e.runner) return
+  rmSync(recordPath(e.op.id), { force: true })
+  // A run the watchdog closed before its runner ended still has them.
+  removeRunnerFiles(e.runner.files)
+}
+
 function pruneOperations(now = Date.now()): void {
   const finished = [...operations.values()].filter((e) => e.op.finishedAt !== null)
   for (const e of finished) {
-    if (now - (e.op.finishedAt ?? now) > OPERATION_TTL_MS) operations.delete(e.op.id)
+    if (now - (e.op.finishedAt ?? now) > OPERATION_TTL_MS) forgetOperation(e)
   }
   const stillFinished = [...operations.values()]
     .filter((e) => e.op.finishedAt !== null)
     .sort((a, b) => (a.op.finishedAt ?? 0) - (b.op.finishedAt ?? 0))
   while (stillFinished.length > OPERATION_KEEP) {
     const oldest = stillFinished.shift()
-    if (oldest) operations.delete(oldest.op.id)
+    if (oldest) forgetOperation(oldest)
   }
 }
 
@@ -529,6 +580,7 @@ function newOperationEntry(op: OrchestratorOperation): OperationEntry {
     kill: null,
     cancelRequested: false,
     watchdog: null,
+    runner: null,
   }
 }
 
@@ -567,6 +619,11 @@ function settleOperation(
   op.result = result
   op.finishedAt = Date.now()
   op.status = entry.cancelRequested ? 'cancelled' : result.ok ? 'done' : 'failed'
+  // A move's result goes into its record before its runner's files go: the record is what answers.
+  if (entry.runner) {
+    saveRun(entry)
+    removeRunnerFiles(entry.runner.files)
+  }
   return snapshot(op)
 }
 
@@ -597,6 +654,7 @@ function expireOperation(
   }
   op.finishedAt = Date.now()
   op.status = 'failed'
+  saveRun(entry)
 }
 
 export function startOrchestratorOperation(
@@ -617,8 +675,12 @@ export function startOrchestratorOperation(
   const op = newOperation(input, key, check)
   const entry = newOperationEntry(op)
   const deps = opts.deps ?? {}
+  // A move runs under a runner and outlives this daemon (MOVE_SCRIPTS); a spawn handed in is the
+  // caller's own.
+  const move = check.ok && !deps.spawn && MOVE_SCRIPTS.has(check.invocation.script)
   entry.promise = runOrchestrator(input, {
     ...deps,
+    ...(move ? { spawn: runnerSpawn(entry) } : {}),
     onProcess: operationProcessHandler(op, entry, deps),
   }).then((result) => settleOperation(op, entry, result))
   // `validateInvocation` failing means the run resolves immediately with a refusal, so the default
@@ -646,6 +708,102 @@ export function listOrchestratorOperations(): OrchestratorOperation[] {
   return [...operations.values()]
     .map((e) => snapshot(e.op))
     .sort((a, b) => b.startedAt - a.startedAt)
+}
+
+/** The spawn a move runs through (MOVE_SCRIPTS): its python under a runner, outside this daemon,
+ *  with its record saved before the runner starts, so a daemon that never saw it start can still
+ *  take it on. */
+function runnerSpawn(entry: OperationEntry): NonNullable<SpawnDeps['spawn']> {
+  return (command, cwd, timeoutMs, hooks) => {
+    mkdirSync(RUNS_DIR, { recursive: true })
+    const files = runnerFiles(RUNS_DIR, entry.op.id)
+    const startedAt = Date.now()
+    entry.runner = { files, command, cwd, startedAt, timeoutMs }
+    saveRun(entry)
+    // AGENTHYDRA_OPERATION tells hydralib this run outlives a restart, so its daemon calls wait one
+    // out (toolbox-calls.ts).
+    startRunner(files, command, cwd, {
+      ...orchestratorChildEnv(),
+      AGENTHYDRA_OPERATION: entry.op.id,
+    })
+    return watchRunner(files, { startedAt, timeoutMs }, hooks?.onProcess)
+  }
+}
+
+/**
+ * Take on the moves an earlier daemon left (MOVE_SCRIPTS): every record in RUNS_DIR is an operation
+ * here again, under its own id. A running one is watched on from its runner's files and holds its
+ * route lock as it did there, so a second move is still refused busy; a finished one answers its
+ * result until OPERATION_TTL_MS after it ended.
+ *
+ * Awaited by index.ts once the port is free and before it serves it: the predecessor held that port,
+ * so it has exited and no move it started is missed, and no request reaches this daemon before its
+ * moves are back. Returns how many were taken on.
+ */
+export async function adoptOrchestratorRuns(now = Date.now()): Promise<number> {
+  let names: string[]
+  try {
+    names = await readdir(RUNS_DIR)
+  } catch {
+    return 0
+  }
+  const found = await Promise.all(
+    names
+      .filter((name) => RECORD_NAME.test(name))
+      .map((name) => readSavedRun(join(RUNS_DIR, name))),
+  )
+  const expired: SavedRun[] = []
+  let adopted = 0
+  for (const saved of found) {
+    if (!saved || operations.has(saved.op.id)) continue
+    if (saved.op.finishedAt !== null && now - saved.op.finishedAt > OPERATION_TTL_MS) {
+      expired.push(saved)
+      continue
+    }
+    const entry = newOperationEntry(saved.op)
+    entry.runner = saved.run
+    if (saved.op.finishedAt === null) watchAdopted(entry, saved.run, now)
+    else operations.set(saved.op.id, entry)
+    adopted++
+  }
+  await Promise.all(
+    expired.flatMap(({ op, run }) =>
+      [recordPath(op.id), ...Object.values(run.files), `${run.files.spec}.taken`].map((f) =>
+        fsSlot(() => rm(f, { force: true })),
+      ),
+    ),
+  )
+  return adopted
+}
+
+/** A move that was running when its daemon went: watched on from its files. A runner whose hand-off
+ *  died with that daemon never claims its spec; the watch then answers "never started; nothing ran"
+ *  (index.ts relaunchDaemon waits for hand-offs under way before it hands over, so that is rare). */
+function watchAdopted(entry: OperationEntry, run: RunnerRun, now: number): void {
+  const { op } = entry
+  op.ran = true
+  const lockKey = routeLockKey(op.script, op.args) ?? op.script
+  const lock: InFlightRun = {
+    started: run.startedAt,
+    deadline: run.startedAt + run.timeoutMs + STALE_LOCK_GRACE_MS,
+  }
+  inFlight.set(lockKey, lock)
+  const ran = { script: op.script, args: op.args, command: run.command, cwd: run.cwd }
+  entry.promise = watchRunner(run.files, run, (kill) => {
+    entry.kill = kill
+    lock.kill = kill
+  })
+    .then((r) => settleOperation(op, entry, runOutcome({ ...ran, started: run.startedAt }, r)))
+    .finally(() => {
+      if (inFlight.get(lockKey) === lock) inFlight.delete(lockKey)
+    })
+  const left = run.startedAt + run.timeoutMs + OPERATION_WATCHDOG_GRACE_MS - now
+  entry.watchdog = setTimeout(
+    () => expireOperation(op, entry, run.timeoutMs, OPERATION_WATCHDOG_GRACE_MS),
+    Math.max(0, left),
+  )
+  entry.watchdog.unref?.()
+  operations.set(op.id, entry)
 }
 
 /** Ask a running operation to stop. Its whole process tree is killed; the outcome then reads
@@ -1222,6 +1380,30 @@ export function wouldRefuseBusy(input: {
   return !(holder && mayPreempt(args, holder.op.args))
 }
 
+type SpawnResult = Awaited<ReturnType<NonNullable<SpawnDeps['spawn']>>>
+
+/** A finished spawn as the run's answer. */
+function runOutcome(
+  run: { script: string; args: string[]; command: string[]; cwd: string; started: number },
+  r: SpawnResult,
+  preempted?: string,
+): OrchestratorRun {
+  return {
+    ok: r.code === 0 && !r.timedOut,
+    script: run.script,
+    args: run.args,
+    command: run.command,
+    cwd: run.cwd,
+    ...(preempted ? { preempted } : {}),
+    exitCode: r.code,
+    exitMeaning: exitMeaning(run.script, r.code),
+    timedOut: r.timedOut,
+    durationMs: Date.now() - run.started,
+    stdout: tail(r.stdout, r.stdoutDropped ?? 0),
+    stderr: tail(r.stderr, r.stderrDropped ?? 0),
+  }
+}
+
 /** Run one script by its menu name. The driver's cwd is the toolbox root, exactly as a person
  *  typing `python orch.py <script>` there, so state/, the tray heartbeat and the ledgers resolve
  *  to the same files a hand-run would use. */
@@ -1271,20 +1453,7 @@ export async function runOrchestrator(
         deps.onProcess?.(kill)
       },
     })
-    return {
-      ok: r.code === 0 && !r.timedOut,
-      script,
-      args,
-      command,
-      cwd: dir,
-      ...(preempted ? { preempted } : {}),
-      exitCode: r.code,
-      exitMeaning: exitMeaning(script, r.code),
-      timedOut: r.timedOut,
-      durationMs: Date.now() - started,
-      stdout: tail(r.stdout, r.stdoutDropped ?? 0),
-      stderr: tail(r.stderr, r.stderrDropped ?? 0),
-    }
+    return runOutcome({ script, args, command, cwd: dir, started }, r, preempted)
   } catch (e) {
     return {
       ok: false,

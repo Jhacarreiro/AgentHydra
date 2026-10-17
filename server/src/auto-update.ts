@@ -51,8 +51,6 @@ export interface AutoUpdateHooks {
   apply: typeof applyUpdate
   /** Restart the daemon so the freshly-pulled code takes over. Wired by server/src/index.ts. */
   relaunch: () => void | boolean | Promise<void | boolean>
-  /** Work held only in this process must finish; the one-hour soft defer never overrides it. */
-  hasUnsafeWork: () => boolean
   /** True when dispatch runs are in flight. An update relaunches the daemon; even though runs now
    *  survive that (they're detached + reattached), we DEFER updating while the queue is busy so a
    *  relaunch never churns a live run's stream, for at most AUTO_UPDATE_MAX_DEFER_S. Wired by
@@ -71,7 +69,6 @@ const realHooks: AutoUpdateHooks = {
   apply: applyUpdate,
   relaunch: defaultRelaunch,
   hasActiveRuns: () => false,
-  hasUnsafeWork: () => false,
 }
 let hooks: AutoUpdateHooks = realHooks
 /** Override the side-effect hooks (index.ts sets `relaunch`; tests inject fakes for all three so
@@ -165,13 +162,14 @@ export interface AutoUpdateRunResult {
   reason?: string
 }
 
-/** An applied update still needs its restart if new volatile work began during the build.
- * Keep retrying that handoff without applying the same update again, including after a manual apply. */
+/** An applied update still needs its restart while the manual apply's guard holds it (a CliMayte worker the
+ * daemon spawned itself) or the handoff failed. Keep retrying that handoff without applying the same update
+ * again, including after a manual apply. */
 export function relaunchAfterUpdate(mayRelaunch?: () => boolean): Promise<boolean> {
   pendingRelaunch = true
   if (mayRelaunch) pendingRelaunchGuard = mayRelaunch
   if (relaunchRequest) return relaunchRequest
-  if (hooks.hasUnsafeWork() || (pendingRelaunchGuard && !pendingRelaunchGuard())) {
+  if (pendingRelaunchGuard && !pendingRelaunchGuard()) {
     retime()
     return Promise.resolve(false)
   }
@@ -239,8 +237,6 @@ export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRun
       relaunched: false,
       reason: status.reason ?? 'cannot-apply',
     }
-  if (hooks.hasUnsafeWork())
-    return { checked: true, applied: false, relaunched: false, reason: 'volatile-work' }
   // Defer while dispatch runs are in flight: applying relaunches the daemon, and even though runs
   // survive that now, we'd rather not churn a live run's stream mid-flight. Re-checked next window,
   // and installed past them once the update has waited AUTO_UPDATE_MAX_DEFER_S.
