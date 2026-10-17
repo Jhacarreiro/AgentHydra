@@ -9,8 +9,8 @@ The copy (open_scratch):
   index read from HEAD, and its files copied byte for byte from the real checkout: every tracked file as it is now (a
   checkout would rewrite line endings the real file does not have), its untracked files, and its small ignored files
   (IGNORED_MAX_*; never node_modules, target and the like, toolspecs.IGNORED_DIRS), so a brief kept in an ignored tmp/
-  is there too. A checkout tracking more than is left of TRACKED_TOTAL_* is not copied: the task's own checkout refuses
-  the copy (the task takes its other routes), one inside a bigger folder stays a reference;
+  is there too. A checkout with more tracked and untracked files than is left of WORKTREE_MAX_* is not copied: the
+  task's own checkout refuses the copy (the task takes its other routes), one inside a bigger folder stays a reference;
 - a cwd that is no checkout: a plain copy of it, each git checkout inside it made a worktree as above. A folder too big to
   copy whole (COPY_MAX_*) keeps only its top-level entries that fit (DIR_MAX_*) and its checkouts (REPOS_MAX); its other
   top-level folders, and its dot-folders, stay out as REFERENCES: the leg's file tools read them at their real paths and
@@ -50,9 +50,10 @@ COPY_MAX_FILES, COPY_MAX_BYTES = 20_000, 300 * 2**20  # a folder that is no chec
 DIR_MAX_FILES, DIR_MAX_BYTES = 3_000, 60 * 2**20  # else each top-level folder that fits is copied; the rest are references
 IGNORED_MAX_FILES, IGNORED_MAX_BYTES = 2_000, 50 * 2**20  # a checkout's ignored files copied into its worktree
 TRACKED_MAX_BYTES = 64 * 2**20  # a tracked file bigger than this is left out of the copy (Unit.left)
-# All the tracked files one copy's worktrees take together. Uncapped, a checkout of 37,000 tracked benchmark files
-# (1.9 GB) inside a folder of five checkouts took each leg 3-4 minutes and 2.5 GB to copy (2026-10-17).
-TRACKED_TOTAL_FILES, TRACKED_TOTAL_BYTES = 20_000, 300 * 2**20
+# All the tracked and untracked files one copy's worktrees take together (small ignored ones have IGNORED_MAX_*).
+# Uncapped, a checkout of 37,000 tracked benchmark files (1.9 GB) inside a folder of five checkouts took each leg 3-4
+# minutes and 2.5 GB to copy (2026-10-17).
+WORKTREE_MAX_FILES, WORKTREE_MAX_BYTES = 20_000, 300 * 2**20
 REPOS_MAX = 6  # checkouts inside a folder that is no checkout made worktrees; past it, they stay out
 STALE_S = 6 * 3600  # a copy this old whose process is gone is swept
 REFUSED_S = 600.0  # a folder no copy could be made of is not tried again for this long (free_route.eligible)
@@ -204,7 +205,7 @@ class Scratch:
         self.cwd = base / cwd_rel if cwd_rel not in ("", ".") else base
         self.units: list[Unit] = []
         self.references: set[str] = set()  # top-level names of `real` left out of the copy (casefolded)
-        self.room = [TRACKED_TOTAL_FILES, TRACKED_TOTAL_BYTES]  # the tracked files and bytes worktrees may still copy
+        self.room = [WORKTREE_MAX_FILES, WORKTREE_MAX_BYTES]  # the files and bytes worktrees may still copy
         self.real_rx, self.base_rx = _rx(real), _rx(base)
         self._next_rx = re.compile(self.real_rx.pattern + r"(?:(?P<sep>\\\\|\\|/)(?P<next>[^\\/\s\"'`<>|*?:]+))?", re.I)
 
@@ -370,18 +371,20 @@ class Scratch:
     def _worktree(self, repo: Path, copy: Path) -> Unit:
         """A checkout as a detached worktree at its HEAD whose files are the real checkout's own bytes (see the module
         docstring): tracked, untracked, then small ignored files. Raises ScratchRefused, before anything is made, for a
-        checkout whose tracked files are more than self.room."""
+        checkout whose tracked and untracked files are more than self.room."""
         tracked = [rel for rel in dict.fromkeys(_git(repo, "--no-optional-locks", "ls-files", "-z", "--cached").split("\0")) if rel]
+        untracked = [rel for rel in _git(repo, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard").split("\0") if rel]
         n = b = 0
-        for rel in tracked:
-            try:
-                st = (repo / rel).lstat()
-            except OSError:
-                continue
-            if stat.S_ISREG(st.st_mode) and st.st_size <= TRACKED_MAX_BYTES:
-                n, b = n + 1, b + st.st_size
+        for rels, cap in ((tracked, TRACKED_MAX_BYTES), (untracked, FILE_MAX_BYTES)):
+            for rel in rels:
+                try:
+                    st = (repo / rel).lstat()
+                except OSError:
+                    continue
+                if stat.S_ISREG(st.st_mode) and st.st_size <= cap:
+                    n, b = n + 1, b + st.st_size
         if n > self.room[0] or b > self.room[1]:
-            raise ScratchRefused(f"{repo} tracks {n} files of {b / 2**20:.0f} MiB, more than a scratch copy takes")
+            raise ScratchRefused(f"{repo} has {n} files of {b / 2**20:.0f} MiB to copy, more than a scratch copy takes")
         self.room[0], self.room[1] = self.room[0] - n, self.room[1] - b
         head = _git(repo, "rev-parse", "--verify", "-q", "HEAD").strip()
         nohooks = self.home / "nohooks"
@@ -393,7 +396,6 @@ class Scratch:
             self.units.append(unit)
             self._mark()
         _git(copy, "read-tree", head)  # the index is HEAD's; the files come from the real checkout below
-        untracked = _git(repo, "--no-optional-locks", "ls-files", "-z", "--others", "--exclude-standard")
         for rel in tracked:
             src = repo / rel
             if src.is_symlink() or src.is_file() and src.stat().st_size <= TRACKED_MAX_BYTES:
@@ -402,9 +404,9 @@ class Scratch:
                 unit.base[rel] = None  # deleted in the real checkout: absent in the copy too
             else:
                 unit.left.add(rel)  # a submodule's folder or a very big file
-        for rel in untracked.split("\0"):
+        for rel in untracked:
             src = repo / rel
-            if rel and rel not in unit.base and (src.is_symlink() or src.is_file() and src.stat().st_size <= FILE_MAX_BYTES):
+            if rel not in unit.base and (src.is_symlink() or src.is_file() and src.stat().st_size <= FILE_MAX_BYTES):
                 unit.base[rel] = _copy_file(src, copy / rel)
         ignored = _git(repo, "--no-optional-locks", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
         budget = [IGNORED_MAX_FILES, IGNORED_MAX_BYTES]

@@ -289,7 +289,7 @@ byte, or a copy of a folder that is no checkout (a big one keeps its small top-l
 the leg reads the rest at their real paths). Its shell may not name the real folder. An accepted answer's changes land in
 the real folder all at once, and only when every file it touched is still what the copy started from; a failed leg, or
 one whose files changed meanwhile, drops the copy and the task takes its next route with the folder as it was. A checkout
-tracking more than 20,000 files or 300 MiB, a task with shell grants, a capability or a container runtime, keeps its
+with more than 20,000 files or 300 MiB to copy, a task with shell grants, a capability or a container runtime, keeps its
 other routes. In a blind A/B on 19 real tasks (2026-10-17) Sonnet there beat the API answers 5 to 4 on code edit work
 (mean 7.3 vs 7.1, 3 judged errors to 5) and 9 to 1 on decision all work (7.9 vs 5.1, 5 to 28), more slowly: a median
 85 s against the API's 13 s on code edits.

@@ -198,8 +198,8 @@ def test_a_folder_that_is_no_checkout_is_copied_with_its_checkouts_as_worktrees(
     _no_scratch_left(repo, scratch.ROOT)
 
 
-def test_a_checkout_tracking_more_than_a_copy_takes_is_never_copied(tmp_path, repo, monkeypatch):
-    monkeypatch.setattr(scratch, "TRACKED_TOTAL_FILES", 2)  # the checkout tracks 3
+def test_a_checkout_with_more_files_than_a_copy_takes_is_never_copied(tmp_path, repo, monkeypatch):
+    monkeypatch.setattr(scratch, "WORKTREE_MAX_FILES", 3)  # the checkout tracks 3 and has 1 untracked
     with pytest.raises(scratch.ScratchRefused):
         scratch.open_scratch(str(repo))  # the task's own checkout: no copy, the task takes its other routes
     _no_scratch_left(repo, scratch.ROOT)
