@@ -8,6 +8,7 @@ import { warmAnalyticsInBackground } from './analytics'
 import { apiBodyLimit } from './api-body-limit'
 import { apiOriginAllowlist } from './api-origins'
 import {
+  askDeskRestart,
   autoUpdateEnabled,
   getAutoUpdateIntervalSecs,
   lastUpdateCheck,
@@ -1559,6 +1560,7 @@ setAutoUpdateHooks({
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
   relaunch: () => relaunchDaemon(),
+  restartDesk: () => askDeskRestart(),
 })
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any
