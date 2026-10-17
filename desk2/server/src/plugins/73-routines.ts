@@ -1,6 +1,6 @@
 // Routines (shared/routines.ts says what a routine is and what its file holds). GET /api/routines answers what its last look
 // saw (?fresh=1 looks first); POST /api/routines does one action: run, pause, propose (any caller), resume, approve,
-// discard (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
+// discard, edit, mode, move (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
 // file, runs each status command, reads each Windows task in one call, judges (routines/decide.ts) and starts the runs that
 // fell due. Its memory (each routine's last 30 runs, the one running, the newest slot it ran for, paused) is
 // <home>/routines.json, so a restart goes on watching a run it had not seen end (a command run's runner, routines/runner.ts,
@@ -9,7 +9,8 @@
 // `describe` has each run's output read by one Haiku turn afterwards (routines/describe.ts), kept with the run. When
 // <home>/routines-store.json names a central store, its routine documents are listed beside the files (routines/central.ts
 // and routines/manager-central.ts): an approved one runs where its runsOn places it (on any runner its labels match, one
-// per slot by a claim on the run board: routines/manager-board.ts), any other one is a proposal.
+// per slot by a claim on the run board: routines/manager-board.ts), any other one is a proposal. The owner moves a routine
+// file into the store with `move` (routines/manager-move.ts): its approve retires the file in the same step.
 
 import type { Hono } from 'hono'
 import { appendFileSync, mkdirSync } from 'node:fs'

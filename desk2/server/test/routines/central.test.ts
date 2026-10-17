@@ -9,9 +9,12 @@
 // edit is signed back with the sha it read, and the copy on this computer runs a pinned routine while the store and its
 // run board are down) and over its run board (a routine shared by two runners runs once per slot of its own time zone and
 // both cards show that run; a lease is honoured while it lives, taken over once it lapsed, renewed and ended by its holder,
-// and a board that does not answer holds the shared slot back).
+// and a board that does not answer holds the shared slot back), and the owner's Move to central (ROUTINES.md 7.7: a local
+// routine proposed as a pinned document with no machine path while its file runs on; the approve signs it and retires the
+// file in the same step, so it runs from the store and never twice; the discard keeps the file running; and a move with no
+// store, from an agent, or of a folder no document can name is refused).
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -534,5 +537,99 @@ describe('the run board: a routine any runner carrying its labels may run', () =
       { action: 'end', ...asked },
     ])
     expect(ticks(out)).toBe(1)
+  }, 60_000)
+})
+
+/** The rig's routines-store.json also maps example/project to a checkout in its home (made, with a tools folder in it), and
+ *  a local routine file `id` runs `run` every minute from that tools folder (or `cwd`). */
+function localRoutine(r: Rig, id: string, run: string[], cwd = join(r.home, 'project', 'tools')): void {
+  const storeFile = join(r.home, 'routines-store.json')
+  writeFileSync(storeFile, JSON.stringify({ ...JSON.parse(readFileSync(storeFile, 'utf8')), repos: { 'example/project': join(r.home, 'project') } }))
+  mkdirSync(join(r.home, 'project', 'tools'), { recursive: true })
+  writeFileSync(join(r.home, 'routines', `${id}.json`), JSON.stringify({ name: `Example ${id}`, askedBy, schedule: '* * * * *', run, cwd }))
+}
+
+describe("the owner's Move to central", () => {
+  test('a moved routine waits as a pinned document while its file runs; the approve retires the file and it runs from the store, never twice', async () => {
+    const r = rig()
+    const ran = join(r.home, 'ran.txt')
+    localRoutine(r, 'example-move', r.tick(ran))
+    const d = desk(r)
+    expect(routine(await get(d, true), 'example-move')).toMatchObject({ state: 'idle' })
+
+    // Only the window moves a routine.
+    expect((await post(d, { move: 'example-move' })).status).toBe(403)
+    expect((await post(d, { move: 'example-move' }, OWNER)).status).toBe(200)
+    // Its document runs on this computer as the file did, in this computer's zone, its folder named by the repo that holds it.
+    const doc = docOf(r, 'example-move')
+    expect(doc).toMatchObject({ runsOn: ['example-pc'], approval: null, front: expect.objectContaining({ timeZone: ZONE, workdir: { repo: 'example/project', path: 'tools' } }) })
+    expect(doc.front.cwd).toBeUndefined()
+    const moving = await get(d)
+    expect(moving.proposals).toEqual([expect.objectContaining({ id: 'example-move', source: 'central', moving: true })])
+    expect(routine(moving, 'example-move')).toMatchObject({ moving: true })
+    expect(routine(moving, 'example-move')?.source).toBeUndefined()
+    expect(moving.store?.problems).toEqual([])
+    // The document holds the file as it was moved: the file takes no edit until the move is decided.
+    expect((await post(d, { edit: { id: 'example-move', set: { timeoutMinutes: 30 } } }, OWNER)).status).toBe(409)
+
+    // While the move waits, the file runs its slot.
+    d.clock.now += 60_000
+    await get(d, true)
+    await settle(d, (s) => routine(s, 'example-move')?.runs.length === 1)
+    expect(ticks(ran)).toBe(1)
+
+    // The approve signs it into the store and retires the file in the same step: the store's routine takes its place and
+    // its runs, and the slot the file ran is not run again.
+    expect((await post(d, { approve: 'example-move' }, OWNER)).status).toBe(200)
+    expect(checkApproval(docOf(r, 'example-move'), [{ name: 'Example Owner', key: r.ownKey.public }]).ok).toBe(true)
+    expect(existsSync(join(r.home, 'routines', 'example-move.json'))).toBe(false)
+    expect(readdirSync(join(r.home, 'routines', 'moved'))).toEqual([expect.stringMatching(/^example-move-\d{12}\.json$/)])
+    const moved = await get(d, true)
+    expect(moved.proposals).toEqual([])
+    expect(routine(moved, 'example-move')).toMatchObject({ source: 'central', state: 'idle', runs: [expect.objectContaining({ outcome: 'ok' })] })
+    expect(routine(moved, 'example-move')?.moving).toBeUndefined()
+    expect(ticks(ran)).toBe(1)
+
+    // The next slot runs once, from the store.
+    d.clock.now += 60_000
+    await get(d, true)
+    await settle(d, (s) => routine(s, 'example-move')?.runs.length === 2)
+    expect(ticks(ran)).toBe(2)
+  }, 60_000)
+
+  test('a discarded move leaves the file running; a move with no store or of a folder no document can name is refused', async () => {
+    const r = rig()
+    const ran = join(r.home, 'ran.txt')
+    localRoutine(r, 'example-move', r.tick(ran))
+    localRoutine(r, 'example-far', r.tick(ran), process.platform === 'win32' ? 'Z:/example/elsewhere' : '/example/elsewhere')
+    const d = desk(r)
+    await get(d, true)
+
+    const far = await post(d, { move: 'example-far' }, OWNER)
+    expect(far.status).toBe(409)
+    expect(((await far.json()) as { error: string }).error).toContain('"repos"')
+    expect(r.store.read().docs['routines/example-far.md']).toBeUndefined()
+    rmSync(join(r.home, 'routines', 'example-far.json'))
+
+    expect((await post(d, { move: 'example-move' }, OWNER)).status).toBe(200)
+    expect((await post(d, { discard: 'example-move' }, OWNER)).status).toBe(200)
+    expect(r.store.read().docs['routines/example-move.md']?.retiredAt).toBeDefined()
+    const kept = await get(d, true)
+    expect(kept.proposals).toEqual([])
+    expect(routine(kept, 'example-move')?.moving).toBeUndefined()
+    d.clock.now += 60_000
+    await get(d, true)
+    const after = await settle(d, (s) => routine(s, 'example-move')?.runs.length === 1)
+    expect(routine(after, 'example-move')?.source).toBeUndefined()
+    expect(existsSync(join(r.home, 'routines', 'example-move.json'))).toBe(true)
+
+    // A Desk whose home names no store moves nothing.
+    const bare = rig()
+    rmSync(join(bare.home, 'routines-store.json'))
+    writeFileSync(join(bare.home, 'routines', 'example-move.json'), JSON.stringify({ name: 'Example', askedBy, schedule: '* * * * *', run: bare.tick(ran) }))
+    const none = await post(desk(bare), { move: 'example-move' }, OWNER)
+    expect(none.status).toBe(400)
+    expect(((await none.json()) as { error: string }).error).toContain('no central store')
+    expect(existsSync(join(bare.home, 'routines', 'example-move.json'))).toBe(true)
   }, 60_000)
 })

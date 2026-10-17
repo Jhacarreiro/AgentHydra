@@ -12,14 +12,15 @@ import { look, runsHere } from './manager-look'
 import { startRun } from './manager-runs'
 import { status } from './manager-view'
 import { approveCentral, discardCentral, editCentral, proposeCentral, type Refusal } from './manager-central'
+import { approveMoving, discardMoving, movingIds, moveRoutine } from './manager-move'
 
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
-const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode'] as const
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode', 'move'] as const
 type ActionName = (typeof ACTIONS)[number]
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit', 'mode']
+const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit', 'mode', 'move']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "move"?: "<id>" (to the central store), "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
 /** How long a routine's `modes.set` command may take. */
 const MODE_MS = 60_000
 
@@ -53,6 +54,8 @@ export async function postRoutine(m: Manager, c: Context) {
       return setMode(m, c, body.mode!)
     case 'propose':
       return proposeRoutine(m, c, body)
+    case 'move':
+      return centrally(m, c, moveRoutine(m, id))
     default:
       return decideProposal(m, c, action, id)
   }
@@ -149,6 +152,7 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
   const id = edit.id
   const routineFile = join(m.routinesDir, `${id}.json`)
   if (isCentral(m, id, routineFile)) return centrally(m, c, editCentral(m.central!, id, edit.set, m.clock()))
+  if (movingIds(m).has(id)) return c.json({ error: `"${id}" is moving to the central store as its file was: approve or discard the move first` }, 409)
   let raw: Record<string, unknown>
   try {
     raw = JSON.parse(readFileSync(routineFile, 'utf8')) as Record<string, unknown>
@@ -215,8 +219,10 @@ async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
   return c.json(status(m))
 }
 
-/** approve and discard: the window only (checked in postRoutine). Each acts on the proposal file of that id. */
+/** approve and discard: the window only (checked in postRoutine). Each acts on the move of that id, the central proposal,
+ *  or the proposal file. */
 async function decideProposal(m: Manager, c: Context, action: 'approve' | 'discard', id: string) {
+  if (movingIds(m).has(id)) return centrally(m, c, action === 'approve' ? approveMoving(m, id) : discardMoving(m, id))
   const proposal = join(m.proposedDir, `${id}.json`)
   if (isCentral(m, id, proposal))
     return centrally(m, c, action === 'approve' ? approveCentral(m.central!, id, localIds(m), m.clock()) : discardCentral(m.central!, id, m.clock()))

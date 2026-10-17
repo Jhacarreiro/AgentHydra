@@ -250,6 +250,52 @@ export function placementOf(runsOn: string[], runner: Runner): { placement: Plac
   return { placement: runsOn.includes(runner.id) ? 'here' : 'shared', why: null }
 }
 
+/** The part of `path` inside folder `root` ('' for the folder itself), forward slashes, or null when it is not inside. A
+ *  root with a drive letter compares without case, as Windows does. */
+function relativeIn(path: string, root: string): string | null {
+  const plain = (s: string): string => s.replace(/\\/g, '/').replace(/\/+$/, '')
+  const [p, r] = [plain(path), plain(root)]
+  const fold = /^[A-Za-z]:/.test(r) ? (s: string): string => s.toLowerCase() : (s: string): string => s
+  if (!r) return null
+  if (fold(p) === fold(r)) return ''
+  return fold(p).startsWith(`${fold(r)}/`) ? p.slice(r.length + 1) : null
+}
+
+/** A path in this runner's home as ~/ (the form every runner reads as its own home), else the path as it is. */
+const tildeOf = (s: string, home: string): string => {
+  const rel = relativeIn(s, home)
+  return rel === null ? s : rel ? `~/${rel}` : '~'
+}
+
+/** Where a local routine's folder goes in its document: the workdir of the checkout "repos" names that holds it (the deepest
+ *  one), else a ~/ cwd when it is in this runner's home. Throws when it is in neither: a document names no machine path. */
+function placeOf(cwd: string, runner: Runner): { workdir: { repo: string; path: string } } | { cwd: string } {
+  let best: { repo: string; path: string; depth: number } | null = null
+  for (const [repo, root] of Object.entries(runner.repos)) {
+    const path = relativeIn(cwd, root)
+    if (path !== null && (!best || root.length > best.depth)) best = { repo, path, depth: root.length }
+  }
+  if (best) return { workdir: { repo: best.repo, path: best.path } }
+  if (relativeIn(cwd, runner.home) !== null) return { cwd: tildeOf(cwd, runner.home) }
+  throw new Error(`its folder ${cwd} is in no checkout routines-store.json's "repos" names: name the checkout that holds it there, then move it`)
+}
+
+/** The document a local routine becomes when the owner moves it to the store (Settings' Move to central): its keys as its file
+ *  has them, its name as the title and its prompt as the body, pinned to this runner (runsOn its name) so it runs here as it
+ *  did, a schedule in this computer's time zone, and no machine path: its folder as placeOf says, and a command argument in
+ *  this runner's home as ~/. Throws when its folder cannot be named so. */
+export function documentOf(def: RoutineDefinition, runner: Runner, why: string): { front: Record<string, unknown>; body: string } {
+  const { id: _id, name, prompt, cwd, ...rest } = def
+  const front: Record<string, unknown> = { kind: 'routine', format: FORMAT, title: name, ...rest, why, runsOn: [runner.id] }
+  if (def.schedule !== undefined) front.timeZone = runner.zone
+  if (cwd !== undefined) Object.assign(front, placeOf(cwd, runner))
+  const tilde = (argv: string[]): string[] => argv.map((a) => tildeOf(a, runner.home))
+  if (def.run) front.run = tilde(def.run)
+  if (def.status) front.status = tilde(def.status)
+  if (def.modes) front.modes = { ...def.modes, set: tilde(def.modes.set) }
+  return { front, body: prompt ?? '' }
+}
+
 /** The bytes an approval signs. */
 function approvalMessage(id: string, sha: string, at: string, by: string): Buffer {
   return Buffer.from(JSON.stringify([FORMAT, id, sha, at, by]), 'utf8')

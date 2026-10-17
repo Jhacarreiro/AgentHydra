@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // A routine an AI proposed, waiting for the owner's yes: a collapsed row (icon, name, Awaiting approval chip) that opens into
 // why it should be a routine, when it runs, what it does, and Approve (it runs from then on) or Discard (its file is
-// deleted). An AI can never approve one.
+// deleted). An AI can never approve one. A move of this computer's routine to the central store waits here too: Approve
+// runs it from the store and retires the file, Discard keeps the file running.
 import { computed, ref } from 'vue'
 import { ChevronRight, MessageSquare, Repeat } from '@lucide/vue'
 import type { RoutineProposal } from '@shared/routines'
@@ -77,7 +78,11 @@ async function act(body: { approve: string } | { discard: string }) {
         </button>
       </template>
       <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">Asked for by {{ proposal.askedBy }}</div>
-      <div v-if="proposal.source === 'central'" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">
+      <div v-if="proposal.moving" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">
+        Moves this computer's routine to the central store; runs on {{ proposal.runsOn?.join(', ') }}. Approve signs it with this
+        computer's key and retires its file here, so it runs from the store from then on. Discard keeps the file running.
+      </div>
+      <div v-else-if="proposal.source === 'central'" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">
         In the central store; runs on {{ proposal.runsOn?.join(', ') }}. Approve signs it with this computer's key.
       </div>
       <div class="mt-3 flex flex-wrap gap-2">

@@ -752,7 +752,7 @@ onBeforeUnmount(() => {
                   <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0">
                     <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
                   </h4>
-                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" @details="detailsOf = x.id" />
+                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" :can-move="!!routines.store?.repo" @changed="loadRoutines" @details="detailsOf = x.id" />
                 </template>
                 </template>
               </div>

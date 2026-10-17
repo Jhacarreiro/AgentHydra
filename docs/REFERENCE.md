@@ -249,7 +249,18 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
   again at most every 5 minutes (at once with `?fresh=1`), and runs approved pinned routines from the copy. A board that does
   not answer holds back only the shared slots.
 - **Same id as a file here.** The file is listed and runs; the document is named under the store's `problems` in
-  `GET /api/routines` `store` (Settings shows that line), never listed.
+  `GET /api/routines` `store` (Settings shows that line), never listed. A file being moved is the exception, below.
+- **Move to central** (ROUTINES.md 7.7: one routine at a time, on the owner's say). With a store named, each card of this
+  computer's own routines has Move to central (`POST /api/routines` `{ "move": "<id>" }`, the window only; 400 with no store).
+  It writes the routine to the store as a document pinned to this runner (`runsOn` its name), so it runs here as it did: a
+  schedule keeps this computer's zone, `cwd` becomes the `workdir` of the deepest checkout `repos` names that holds it (else
+  `~/` in this home; in neither the move is refused, naming `repos`), and a command argument in this home starts with `~/`
+  (`routines/central.ts` `documentOf`). Until the owner decides, the file runs on and takes no edit, the document waits under
+  Awaiting approval as a move (`moving` on both), and `<desk home>/routines-moving.json` marks it. Approve signs the
+  document (refused if it changed in the store since the move) and retires the file to `<desk home>/routines/moved/` in the
+  same step (`routines/manager-move.ts`): the routine keeps its id and its memory, so the slot the file last ran is not run
+  again. Discard takes the document out of the store, and the file runs on. A look finishes a move a trusted key approved
+  on another computer, and forgets one whose document left the store.
 
 The design, the standards it borrows from (cron with an IANA zone as Kubernetes CronJob does, GitHub-style runner labels,
 Temporal's overlap names, CloudEvents, lease semantics) and the open decisions are in the CrAInium: `docs get`, repo

@@ -3,9 +3,10 @@
 // wherever it ran), next run, its mode, what the last run did when it is described, and its own on/off switch) that opens
 // into its schedule in words (a central routine's in its own time zone), its Mode row (a routine with modes), its Describe
 // runs switch, its history on this computer with each run's description, and its actions: Run now, Open chat for a prompt
-// run's chat, and Edit (its Edit form).
+// run's chat, Edit (its Edit form), and for a routine of this computer's own, Move to central when a central store is set
+// (its document then waits under Awaiting approval, and the file runs until the owner approves it).
 import { computed, ref } from 'vue'
-import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, Gauge, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
+import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, CloudUpload, Gauge, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
@@ -22,6 +23,8 @@ const props = defineProps<{
   routine: Routine
   /** Whether the routine manager is on: Run now waits for it. */
   enabled: boolean
+  /** Whether this computer reads a central store: a routine of its own may move there. */
+  canMove?: boolean
 }>()
 /** A request was answered (run, paused, resumed, or refused): the parent re-reads the status. */
 const emit = defineEmits<{ changed: []; details: [] }>()
@@ -67,6 +70,8 @@ const chatSession = computed(() => props.routine.running?.sessionId ?? last.valu
 const lastDescription = computed(() => (latest.value ? latest.value.description : last.value?.description?.state === 'done' ? last.value.description.text : null))
 /** Windows runs a windowsTask routine, so its output never reaches the manager to describe; a broken one has nothing to run. */
 const describable = computed(() => props.routine.kind === 'schedule' || props.routine.kind === 'status')
+/** A routine of this computer's own that checks out may move to the central store, one at a time (ROUTINES.md 7.7). */
+const movable = computed(() => props.canMove === true && props.routine.source === undefined && !props.routine.moving && props.routine.kind !== null)
 
 const stamp = (ms: number) => new Date(ms).toLocaleString()
 function toggleRun(at: number) {
@@ -180,6 +185,9 @@ function toggleEdit() {
       <div v-if="routine.source === 'central'" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">
         From the central store; runs on {{ routine.runsOn?.join(', ') }}<template v-if="latest?.lastLine"> · its newest run, on {{ latest.runner }}: {{ latest.lastLine }}</template>
       </div>
+      <div v-if="routine.moving" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">
+        Moving to the central store: approve or discard the move under Awaiting approval. It runs from this computer's file until then.
+      </div>
       <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
         <div v-for="t in totalRows" :key="t.label" class="rounded-(--radius-6) bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
           <dt class="text-ui-sm leading-4 text-text-muted">{{ t.label }}</dt>
@@ -263,6 +271,9 @@ function toggleEdit() {
         <button v-if="chatSession" type="button" :class="BUTTON" @click="openChat(chatSession)">Open chat</button>
         <button v-if="routine.kind !== null" type="button" :class="[BUTTON, 'gap-1.5']" :aria-expanded="editing" @click="toggleEdit">
           <Pencil class="size-3.5" aria-hidden="true" />Edit
+        </button>
+        <button v-if="movable" type="button" :class="[BUTTON, 'gap-1.5']" :disabled="busy" @click="act({ move: routine.id })">
+          <CloudUpload class="size-3.5" aria-hidden="true" />Move to central
         </button>
       </div>
       <RoutineEditForm v-if="editing" :routine="routine" :busy="busy" :error="error" @save="saveEdit" @cancel="toggleEdit" />

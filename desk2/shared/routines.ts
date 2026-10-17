@@ -83,6 +83,14 @@
 //   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is not
 //   listed (the store's `problems` name it): the file runs. The manager keeps a copy of each document in
 //   <desk home>/routines/central/ and runs from it while the store cannot be reached.
+// MOVING A ROUTINE (ROUTINES.md 7.7: one at a time, on the owner's say): the owner's Move to central on one of this
+//   computer's routines (POST `move`, the window only, refused without a store) writes it to the store as a document pinned
+//   to this runner (runsOn its name), so it runs here as it did: a schedule keeps this computer's time zone, its folder
+//   becomes the workdir of the checkout "repos" names that holds it (else ~/ in this computer's home; in neither, the move is
+//   refused), and a command argument in this home starts with ~/. The file runs on meanwhile (`moving` on its card), and the
+//   document waits as a proposal (`moving` there too). The owner's approve signs it into the store and retires the file to
+//   <desk home>/routines/moved/ in the same step, so the routine runs from the store, never from both; it keeps its id and
+//   its runs. The owner's discard takes the document out of the store, and the file runs on.
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
@@ -190,6 +198,8 @@ export interface RoutineProposal extends RoutineDefinition {
   source?: 'central'
   /** A central proposal's runner labels. */
   runsOn?: string[]
+  /** A central proposal that moves this computer's routine of the same id to the store: approving it retires that file. */
+  moving?: true
 }
 
 /** POST propose's object: a proposal, and for one kept in the central store `store: "central"` with its central keys
@@ -270,6 +280,8 @@ export interface Routine {
   timeZone?: string
   /** A central routine's newest run, wherever it ran (the run log); null when none is known. */
   latestRun?: CentralRun | null
+  /** This computer's routine is moving to the central store: its document waits for the owner's approve (proposals). */
+  moving?: true
 }
 
 /** GET /api/routines. */
@@ -290,7 +302,8 @@ export interface RoutinesStatus {
 
 /**
  * POST /api/routines. One action per call besides `enabled`. The window (X-Desk-Caller: window) may do every action; an
- * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `edit` sets the keys of a routine's file that
+ * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `move` moves a routine file to the central
+ * store (MOVING A ROUTINE above). `edit` sets the keys of a routine's file that
  * `set` names (null removes one: `until`, say), every other key as it was; 409 with the reason when the result does not
  * check out, and the file is left alone. `mode` runs the routine's `modes.set` with `value` appended (400 when `value` is
  * not one of its options, 500 with the command's last line when it fails) and reads its status again.
@@ -302,6 +315,7 @@ export interface RoutinesRequest {
   resume?: string
   approve?: string
   discard?: string
+  move?: string
   propose?: RoutineProposalRequest
   edit?: { id: string; set: Record<string, unknown> }
   mode?: { id: string; value: string }
