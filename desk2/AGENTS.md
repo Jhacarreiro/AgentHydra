@@ -20,7 +20,8 @@ between server/ and web/.
   (removed 2026-10-04): Desk's cloud list and its session header (`web/src/components/session-header`)
   replace it, and the copy's "open this chat" goes to Desk (`hydra/src/lib/desk-embed.ts`). Desk owns the one
   sidebar: a copy tab with a sidebar of its own (HSwarm's tree, whose nodes include Routing and CliMayte,
-  `hydra/src/components/HSwarmView.vue`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
+  `hydra/src/components/HSwarmView.vue`, or the Tools tab's Managers and Routines groups,
+  `hydra/src/lib/tools-sidebar.ts`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
   the tab's AppView, and only the tab on screen (App.vue's `setDeskView`) is sent; Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.
@@ -90,6 +91,13 @@ between server/ and web/.
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.
+- `bun run test` runs `server/test-own-process/` as a `bun test` of its own after the main suite. It holds a file that
+  crashed the shared process: `free-request-coordinator.test.ts` runs a node:net server and its client in the test
+  process, and Bun 1.4.3 on Windows frees such a socket's state while a poll still holds it (a segfault in 3 of 4 full
+  runs, 2026-10-16; its header has the detail). In a test's own server, wait for an accepted socket's `close`; never
+  `destroy()` it. Name test folders with `./` (`bun test ./server/test ./web/test`): a bare `server/test` is a name
+  filter that also matches `server/test-own-process/`, and that file then runs in the shared process (a segfault,
+  2026-10-16).
 - Every `bun test` run from `desk2/` preloads `server/test/preload.ts` (`desk2/bunfig.toml`): removing the folder the
   suite runs in, or a folder holding it, throws, and `process.env` cannot be reassigned. A test restores only the env
   keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left

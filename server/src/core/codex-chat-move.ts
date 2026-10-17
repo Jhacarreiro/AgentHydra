@@ -769,7 +769,7 @@ async function setArchivedInRunningApp(
   threadId: string,
   archived: boolean,
 ): Promise<void> {
-  const app = await connectCodexAppTools(from, threadId)
+  const app = await connectCodexAppTools(from, threadId, ['set_thread_archived'])
   const answer = await app.call<{ threadId?: string; archived?: boolean }>('set_thread_archived', {
     threadId,
     hostId: 'local',

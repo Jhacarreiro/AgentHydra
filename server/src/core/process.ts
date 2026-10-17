@@ -491,19 +491,23 @@ export async function capturePipedProc(
   // had printed and exited.) Accumulating as the bytes arrive means the text we already have is
   // still ours the moment the deadline fires.
   const held = { stdout: '', stderr: '' }
+  const readers = new Set<{ cancel(): Promise<void> }>()
   const drain = async (stream: ReadableStream<Uint8Array>, into: 'stdout' | 'stderr') => {
     const reader = stream.getReader()
-    const decoder = new TextDecoder('utf-8')
+    readers.add(reader)
+    // An unwanted stream still has to drain, but its text need never occupy memory.
+    const decoder = into === 'stdout' || wantStderr ? new TextDecoder('utf-8') : null
     try {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        held[into] += decoder.decode(value, { stream: true })
+        if (decoder) held[into] += decoder.decode(value, { stream: true })
       }
-      held[into] += decoder.decode()
+      if (decoder) held[into] += decoder.decode()
     } catch {
       // Killed mid-write, or the pipe closed under us: what arrived is still the honest answer.
     } finally {
+      readers.delete(reader)
       try {
         reader.releaseLock()
       } catch {
@@ -548,6 +552,15 @@ export async function capturePipedProc(
   } finally {
     if (timer) clearTimeout(timer)
     if (proc.exitCode === null && !proc.killed && proc.pid) void killProcessTreesAsync([proc.pid])
+    // A pipe held after the grace period no longer belongs to an answered capture. Cancellation
+    // closes its pending read even if the underlying cancel never settles; never await that hook.
+    for (const reader of readers) {
+      try {
+        void reader.cancel().catch(() => {})
+      } catch {
+        // The stream may have closed while the capture was returning.
+      }
+    }
   }
 }
 
@@ -893,8 +906,9 @@ const claudeProcessCache = createScanCache<ClaudeProcessScan>(
       return { ok: false, reason: err instanceof Error ? err.message : String(err) }
     }
   },
-  // 3s fresh: comfortably inside the UI's 4s poll, so a tick that lands early costs nothing, and
-  // the tick that does refresh takes the cached answer while the scan runs behind it. 30s stale:
+  // 3s fresh: the Instances tab's watches ask a few seconds apart (its exit watch is a pid probe
+  // that skips the scan and drops this cache when a pid is gone), so a read that lands early costs
+  // nothing, and one that does refresh takes the cached answer while the scan runs behind it. 30s stale:
   // past that the app has effectively been idle (nothing polling), and a caller coming back
   // deserves a real answer rather than a snapshot from whenever it last had focus.
   { freshMs: 3_000, staleMs: 30_000 },

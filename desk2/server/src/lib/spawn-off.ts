@@ -17,6 +17,9 @@ export interface SpawnOffOptions {
   maxBytes?: number
   /** Past this many milliseconds the process is killed and the result says `timedOut`. */
   timeoutMs?: number
+  /** Default 'pipe'. 'ignore' leaves stdout empty: the result then waits for the exit alone, never for a pipe a process
+   *  it started may hold open (a launcher whose program inherits it). */
+  stdout?: 'pipe' | 'ignore'
   /** Default 'pipe'. 'ignore' leaves stderr empty. */
   stderr?: 'pipe' | 'ignore'
   /** Windows: stop the whole tree with `taskkill /pid <pid> /t /f`, as free-instances/runtime.ts terminate does. */

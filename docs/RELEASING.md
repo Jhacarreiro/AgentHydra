@@ -128,7 +128,9 @@ every push and enforces two rules that used to be memory only, then runs the hos
    heading again and pushes. Announce, then do. Never `--no-verify`.
 2. **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has an open section.** Nothing pending
    ships past a release. There is no override: finish the item and delete its section, or the
-   owner deletes it. The queue is gitignored, so this can only fire on a machine that holds it.
+   owner deletes it. The queue is gitignored, so this can only fire in a checkout that holds it: a
+   tag pushed from a worktree skips it, so check the main checkout's queue first (`openTodoSections`
+   in `.githooks/check-public-push.mjs`; v2.0.5, 2026-10-16, had none open).
    A tag is also refused when `scripts/release-notes.mjs` would refuse it: below 2.0.0, no
    CHANGELOG section, or a long section with no TL;DR (read from the tagged commit).
 3. **The kit check runs, and a release tag needs green CI on its commit.** On a machine with the
@@ -185,8 +187,13 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
    gh run watch          # or: gh run list --limit 2
    ```
    Push nothing else to `main` until that run has STARTED: a newer push cancels a run still
-   queued behind another one, and the tag in step 6 needs a green run on the bump commit itself
+   queued behind another one, and the tag in step 6 needs a green run on the commit it points to
    (2.0.4, 2026-10-09: the bump's run queued behind a test fix's, and the next landing waited for it).
+   With other sessions landing every few minutes that cannot be held (2.0.5, 2026-10-16: the bump's
+   run went red, and the runs after it were replaced while queued). Then tag the first later commit
+   whose run is green, after moving the `[Unreleased]` entries it carries into the version's section
+   (they ship in it); a tag already pushed takes them with
+   `node scripts/release-notes.mjs X.Y.Z > notes.md` and `gh release edit vX.Y.Z --notes-file notes.md`.
 6. **Tag only once `main` is green:**
    ```sh
    git tag -a vX.Y.Z -m "vX.Y.Z"

@@ -1,0 +1,50 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "unbounded-collection-growth",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {
+    "core/src/accounts.ts": {
+      "unbounded-collection-growth/uncapped-collection": 2
+    },
+    "core/src/chat.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "core/src/store.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "desk2/server/src/browser/preview.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "desk2/server/src/connectors/registry.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "desk2/server/src/engine/chat-manager.ts": {
+      "unbounded-collection-growth/uncapped-collection": 3
+    },
+    "desk2/server/src/engine/normalize.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "desk2/server/src/engine/store.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "desk2/web/src/stores/desk.ts": {
+      "unbounded-collection-growth/uncapped-collection": 5
+    },
+    "server/src/climayte-ping.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "server/src/command-corrections.ts": {
+      "unbounded-collection-growth/uncapped-collection": 2
+    },
+    "server/src/core/cli-login-sync.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "server/src/core/login-sync-mirror.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    },
+    "server/src/swarm-job-ping.ts": {
+      "unbounded-collection-growth/uncapped-collection": 1
+    }
+  }
+}

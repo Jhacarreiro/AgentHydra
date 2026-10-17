@@ -117,24 +117,41 @@ export function createCompletions(deps: CompletionDeps): Completions {
   const read = readJsonStore(spec(deps.file))
   const state: State = read.status === 'ok' ? read.value : { waits: [], finishes: [] }
 
-  const save = () => writeJsonStoreAtomic(deps.file, state)
+  // Written only when something actually changed: the 30 s sweep must not rewrite the file on an idle
+  // daemon. Dirty survives a failed write, so the next sweep retries it even without new mutations.
+  let dirty = false
+  const saveIfDirty = () => {
+    if (!dirty) return
+    try {
+      writeJsonStoreAtomic(deps.file, state)
+      dirty = false
+    } catch {
+      // The write stays pending; a failed rename never reached the target, so retrying is safe.
+    }
+  }
 
   const matches = (w: Wait, f: Finish) => w.ticket === f.ticket && f.at >= w.after
 
   const prune = (t: number) => {
+    const before = state.finishes.length
     state.finishes = state.finishes.filter(
       (f) => t - f.kept <= FINISH_KEPT_MS || state.waits.some((w) => matches(w, f)),
     )
+    if (state.finishes.length !== before) dirty = true
   }
 
   const settle = () => {
     const t = deps.now()
+    const before = state.waits.length
     state.waits = state.waits.filter((w) => t - w.since <= WAIT_TTL_MS)
+    if (state.waits.length !== before) dirty = true
     prune(t)
     if (deps.ready() && !deps.off()) {
+      let matched = false
       for (const f of [...state.finishes]) {
         const hit = state.waits.filter((w) => matches(w, f))
         if (!hit.length) continue
+        matched = true
         for (const w of hit) {
           deps.emit(
             deps.resolve({
@@ -159,8 +176,9 @@ export function createCompletions(deps: CompletionDeps): Completions {
         state.waits = state.waits.filter((w) => !hit.includes(w))
         state.finishes = state.finishes.filter((x) => x !== f)
       }
+      if (matched) dirty = true
     }
-    save()
+    saveIfDirty()
   }
 
   return {
@@ -179,15 +197,19 @@ export function createCompletions(deps: CompletionDeps): Completions {
         after,
         since: deps.now(),
       })
+      dirty = true
       settle()
     },
     finished({ ticket, outcome, at }) {
       state.finishes.push({ ticket, outcome, at, kept: deps.now() })
+      dirty = true
       settle()
     },
     seen(ticket, sessionId) {
+      const before = state.waits.length
       state.waits = state.waits.filter((w) => !(w.ticket === ticket && w.sessionId === sessionId))
-      save()
+      if (state.waits.length !== before) dirty = true
+      saveIfDirty()
     },
     sweep: settle,
   }

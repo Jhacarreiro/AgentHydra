@@ -14,6 +14,7 @@ import {
   resetUsageApiBackoff,
   usageApiBackoffMsRemaining,
 } from '../src/usage'
+import { USAGE_API_URL } from '../src/usage-api'
 
 // Not shaped like a real grant: the code under test only needs a non-empty token (it is hashed for
 // the backoff key and sent as a Bearer header), so nothing here should read as a credential.
@@ -35,6 +36,11 @@ const res200 = (): Response =>
     { status: 200, headers: { 'content-type': 'application/json' } },
   )
 
+/** Calls that reached the usage endpoint: a 429 also asks the profile endpoint once, to tell a
+ *  rate limit from a revoked login (revokedLoginError). */
+const usageCalls = (spy: { mock: { calls: unknown[][] } }): number =>
+  spy.mock.calls.filter(([url]) => String(url) === USAGE_API_URL).length
+
 const realFetch = globalThis.fetch
 
 beforeEach(() => {
@@ -52,13 +58,13 @@ describe('usage API 429 backoff', () => {
 
     const first = await checkUsage({ auth: AUTH, account: 'acct-a' })
     expect(isNoData(first)).toBe(true)
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(usageCalls(fetchSpy)).toBe(1)
     expect(usageApiBackoffMsRemaining('acct-a')).toBeGreaterThan(0)
 
     // The whole point: a second poll inside the window must not call the endpoint again.
     const second = await checkUsage({ auth: AUTH, account: 'acct-a' })
     expect(isNoData(second)).toBe(true)
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(usageCalls(fetchSpy)).toBe(1)
 
     // …and it still reports rate_limited with a live countdown, so the UI reads "retry in N min".
     const fail = lastUsageApiFailure('acct-a')
@@ -76,7 +82,7 @@ describe('usage API 429 backoff', () => {
     // A different label has no backoff, so it is still free to try (and here also 429s).
     expect(usageApiBackoffMsRemaining('acct-b')).toBe(0)
     await checkUsage({ auth: AUTH, account: 'acct-b' })
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(usageCalls(fetchSpy)).toBe(2)
   })
 
   test('a 429 with no Retry-After still arms a conservative default backoff (no 30s knocking)', async () => {
@@ -121,12 +127,43 @@ describe('usage API 429 backoff', () => {
     expect(usageApiBackoffMsRemaining('acct-f')).toBeGreaterThan(0)
 
     const snap = await checkUsage({ auth: LIVE, account: 'acct-f' })
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(usageCalls(fetchSpy)).toBe(2)
     expect(snap.weekAll?.pct).toBe(42)
 
     // …and the revoked token itself is still held off.
     await checkUsage({ auth: AUTH, account: 'acct-f' })
+    expect(usageCalls(fetchSpy)).toBe(2)
+  })
+
+  test('a 429 on a login the profile endpoint calls revoked is reported revoked, not rate-limited', async () => {
+    // Instances #72 and #8, 2026-10-16: the usage endpoint answered every revoked grant 429 with an
+    // hour's Retry-After, for days, while the profile endpoint answered the same tokens 401.
+    const fetchSpy = mock(async (url: unknown) =>
+      String(url) === USAGE_API_URL
+        ? res429('3600')
+        : new Response(
+            JSON.stringify({
+              type: 'error',
+              error: {
+                type: 'authentication_error',
+                message: 'OAuth access token has been revoked.',
+              },
+            }),
+            { status: 401 },
+          ),
+    )
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    expect(isNoData(await checkUsage({ auth: AUTH, account: 'acct-r' }))).toBe(true)
+    const fail = lastUsageApiFailure('acct-r')
+    expect(fail?.status).toBe(401)
+    expect(fail?.error).toContain('has been revoked')
+    expect(fail?.retryAfterSec).toBeUndefined()
+
+    // Held off like a 429 (a dead token is not asked twice a minute), and still reported revoked.
+    await checkUsage({ auth: AUTH, account: 'acct-r' })
     expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(lastUsageApiFailure('acct-r')?.status).toBe(401)
   })
 
   test('usageApiBackoffMsRemaining reports 0 from a vantage point past the window', async () => {

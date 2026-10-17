@@ -131,7 +131,7 @@ function monitorAccountEnabled(accountId: string): boolean {
 
 const MONITOR_STATE_VARIANT: Record<MonitorStateName, BadgeVariant> = {
   scheduled: 'info',
-  blocked_weekly: 'warning',
+  blocked_weekly: 'limited',
   needs_human: 'destructive',
   done: 'secondary',
 }

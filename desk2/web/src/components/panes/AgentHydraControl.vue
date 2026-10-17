@@ -85,7 +85,7 @@ const versionColor = computed(() => {
     case 'up-to-date':
       return 'text-success-text'
     case 'available':
-      return 'text-warning'
+      return 'text-accent-text'
     case 'blocked':
     case 'no-source':
       return 'text-danger-text'

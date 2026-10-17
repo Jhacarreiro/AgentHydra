@@ -100,6 +100,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
           local,
           remote: createCrainiumHome(argv, opts.doorTimeoutMs),
           backupDir: backupDir(opts.home),
+          baseFile: join(agentHydraDir(opts.home), 'people-sync-base.json'),
           afterPull: opts.rebuild ?? rebuildCatalog,
         })
       if (cfg.home === 'crainium') writeConfig({ ...readConfig(), lastSync: res })

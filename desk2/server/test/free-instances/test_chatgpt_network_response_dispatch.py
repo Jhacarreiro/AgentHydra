@@ -46,12 +46,12 @@ class Tab:
         self.handlers[event].append(callback)
 
 
-async def armed(dispatch=None):
+async def armed(dispatch=None, page_private=True):
     tab = Tab()
     captured = asyncio.get_running_loop().create_future()
     dispatch = dispatch if dispatch is not None else {'network_id': None, 'status': None, 'sent': False}
     await browser_request._arm_interception(tab, zd, captured=captured, dispatch=dispatch,
-        prompt=PROMPT, model=TEXT_MODEL, existing=None, temporary=True)
+        prompt=PROMPT, model=TEXT_MODEL, existing=None, temporary=True, page_private=page_private)
     return tab, captured, dispatch
 
 
@@ -136,14 +136,62 @@ class NetworkResponseDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(dispatch['sent'])
         self.assertEqual(dispatch['network_id'], 'synthetic-network')
 
-    async def test_registered_pause_refuses_wrong_text_or_nonprivate_payload_before_dispatch(self):
-        for private, text in [(False, PROMPT), (True, 'Synthetic other message')]:
-            with self.subTest(private=private, text=text):
-                tab, captured, dispatch = await armed()
+    async def test_registered_pause_sends_the_exact_prompt_privately_whatever_the_website_typed(self):
+        # The website's composer may change the typed text, or its body may not carry the private flag while the page
+        # shows Temporary Chat on; the body that goes out carries the prompt and the private flag either way, once the
+        # page or the website's own body showed the chat private. The post-send readback still checks both.
+        for page_private, private, text in [(True, False, PROMPT), (True, True, 'Synthetic other message'),
+                                            (False, True, PROMPT)]:
+            with self.subTest(page_private=page_private, private=private, text=text):
+                tab, captured, dispatch = await armed(page_private=page_private)
                 payload = {'action': 'next', 'messages': [{'id': str(uuid4()),
                     'author': {'role': 'user'}, 'content': {'content_type': 'text', 'parts': [text]}}],
                     'parent_message_id': str(uuid4()), 'model': TEXT_MODEL,
                     'history_and_training_disabled': private}
+                event = SimpleNamespace(request=SimpleNamespace(
+                    url='https://chatgpt.com/backend-api/f/conversation', method='POST',
+                    post_data=json.dumps(payload), headers={'Authorization': 'Bearer synthetic-only'}),
+                    request_id=zd.cdp.fetch.RequestId('synthetic-accepted'),
+                    network_id=zd.cdp.network.RequestId('synthetic-network'))
+                await tab.handlers[zd.cdp.fetch.RequestPaused][0](event)
+                prepared, _headers = await captured
+                actions = tab.commands[2:]
+                self.assertEqual([command['method'] for command in actions], ['Fetch.continueRequest'])
+                sent = json.loads(base64.b64decode(actions[0]['params']['postData']))
+                self.assertEqual(sent['messages'][0]['content']['parts'], [PROMPT])
+                self.assertIs(sent['history_and_training_disabled'], True)
+                self.assertEqual(sent, prepared)
+                self.assertTrue(dispatch['sent'])
+
+    async def test_registered_pause_refuses_a_chat_nothing_showed_private(self):
+        # Neither the page (Temporary Chat never read on) nor the website's body says the chat is private: the flag is
+        # not forced onto it, and nothing is sent.
+        tab, captured, dispatch = await armed(page_private=False)
+        payload = {'action': 'next', 'messages': [{'id': str(uuid4()),
+            'author': {'role': 'user'}, 'content': {'content_type': 'text', 'parts': [PROMPT]}}],
+            'parent_message_id': str(uuid4()), 'model': TEXT_MODEL, 'history_and_training_disabled': False}
+        event = SimpleNamespace(request=SimpleNamespace(
+            url='https://chatgpt.com/backend-api/f/conversation', method='POST',
+            post_data=json.dumps(payload), headers={'Authorization': 'Bearer synthetic-only'}),
+            request_id=zd.cdp.fetch.RequestId('synthetic-unverified'),
+            network_id=zd.cdp.network.RequestId('synthetic-network'))
+        await tab.handlers[zd.cdp.fetch.RequestPaused][0](event)
+        with self.assertRaises(ClaudeError) as error:
+            await captured
+        self.assertEqual(error.exception.code, 'privacy_not_verified')
+        self.assertIn('No message was sent.', str(error.exception))
+        self.assertNotIn(PROMPT, str(error.exception))
+        self.assertEqual([command['method'] for command in tab.commands[2:]], ['Fetch.failRequest'])
+        self.assertFalse(dispatch['sent'])
+
+    async def test_registered_pause_refuses_a_misshapen_request_before_dispatch(self):
+        one = {'id': str(uuid4()), 'author': {'role': 'user'}, 'content': {'content_type': 'text', 'parts': [PROMPT]}}
+        for name, action, messages in [('two messages', 'next', [one, dict(one, id=str(uuid4()))]),
+                                       ('wrong action', 'variant', [one])]:
+            with self.subTest(name):
+                tab, captured, dispatch = await armed()
+                payload = {'action': action, 'messages': messages, 'parent_message_id': str(uuid4()),
+                    'model': TEXT_MODEL, 'history_and_training_disabled': True}
                 event = SimpleNamespace(request=SimpleNamespace(
                     url='https://chatgpt.com/backend-api/f/conversation', method='POST',
                     post_data=json.dumps(payload), headers={'Authorization': 'Bearer synthetic-only'}),
@@ -153,6 +201,8 @@ class NetworkResponseDispatchTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ClaudeError) as error:
                     await captured
                 self.assertEqual(error.exception.code, 'browser_preparation_invalid')
+                self.assertIn('No message was sent.', str(error.exception))
+                self.assertNotIn(PROMPT, str(error.exception))
                 self.assertEqual([command['method'] for command in tab.commands[2:]], ['Fetch.failRequest'])
                 self.assertFalse(dispatch['sent'])
                 self.assertIsNone(dispatch['network_id'])

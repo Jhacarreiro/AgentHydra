@@ -26,7 +26,7 @@ const workers = computed(() => {
 
 function dot(w: CliMayteWorker | null): string {
   if (!w) return 'bg-text-muted'
-  if (w.active) return w.status === 'waiting' ? 'bg-warning' : 'bg-brand animate-pulse'
+  if (w.active) return w.status === 'waiting' ? 'bg-[var(--status-limited)]' : 'bg-brand animate-pulse'
   return w.status === 'done' ? 'bg-success' : w.status === 'failed' ? 'bg-danger' : 'bg-text-muted'
 }
 </script>

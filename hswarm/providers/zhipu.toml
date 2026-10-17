@@ -1,6 +1,10 @@
 # Z.ai / BigModel, the GLM family.
 
 base_url = "https://api.z.ai/api/paas/v4"
+# Z.ai (international: https://docs.z.ai/guides/overview/quick-start) serves api.z.ai/api/paas/v4 and BigModel (China:
+# https://docs.bigmodel.cn/cn/guide/develop/openai/introduction) open.bigmodel.cn/api/paas/v4, each with its own keys.
+# A key that 401s here is looked for on the other once (client.find_region).
+region_base_urls = ["https://api.z.ai/api/paas/v4", "https://open.bigmodel.cn/api/paas/v4"]
 about = "Z.ai's GLM models. Paid per use."
 key_url = "https://z.ai/manage-apikey/apikey-list"  # where a person makes an API key
 website = "https://z.ai"  # the company's site; the console shows its favicon

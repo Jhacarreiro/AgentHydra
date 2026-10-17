@@ -19,3 +19,18 @@ method = "GET"
 path = "/v1/generations/{generation_id}"
 capability = "generation-status"
 response = "json"
+
+# Image route for `hswarm image` (image.py): Leonardo's hosted FLUX Schnell, paid in Leonardo API tokens (no USD price
+# on record here). Model ids from GET /v1/platformModels (2026-10-16).
+[images.flux-schnell]
+adapter = "leonardo"
+model = "1dd50843-d653-4516-a8e3-f0238ee453ff"
+modes = ["t2i"]
+moderated = true
+max_mp = 2.1
+
+# One free read per key: paid plus subscription API tokens.
+[image_balance]
+url = "/v1/me"
+field = ["user_details.0.apiPaidTokens", "user_details.0.apiSubscriptionTokens"]
+unit = "tokens"

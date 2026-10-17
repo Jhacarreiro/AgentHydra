@@ -342,7 +342,7 @@ export function latestEtaEnd(units: readonly TaskUnit[]): number | null {
   return maxOf(units.filter((u) => u.running).map((u) => u.etaEndsAt))
 }
 
-const minutesText = (m: number): string => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`)
+export const minutesText = (m: number): string => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`)
 
 /** 'about 5 min left', 'about 1 h 20 min left', 'due about now', '3 min over the estimate'. */
 export function etaLeft(endsAt: number, now: number): string {

@@ -47,7 +47,7 @@ const viewRows = computed(() =>
 function dotClass(row: AccountRow): string {
   const a = row.account
   if (!a || !a.signedIn) return 'border border-text-muted opacity-50'
-  if (row.inUse) return 'border-[1.5px] border-[var(--warning)]'
+  if (row.inUse) return 'border-[1.5px] border-[var(--accent)]'
   const fuller = [a.fiveHourPct, a.weeklyPct].reduce<number | null>((m, p) => (p == null ? m : Math.max(m ?? 0, p)), null)
   return { ok: 'bg-[var(--success)]', warn: 'bg-[var(--warning)]', full: 'bg-[var(--danger)]', unknown: 'bg-text-muted' }[usageTone(fuller)]
 }

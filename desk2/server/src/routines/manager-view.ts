@@ -8,8 +8,9 @@ import { settleCommands } from './manager-settle'
 import { look } from './manager-look'
 import { refreshCentral, storeStatus } from './manager-central'
 import { latestRunOf, readRuns } from './manager-board'
+import { movingIds } from './manager-move'
 
-function routineView(m: Manager, s: Seen, t: number): Routine {
+function routineView(m: Manager, s: Seen, t: number, moving: Set<string>): Routine {
   const { entry } = s
   const def = entry.def
   const mem = m.memory[entry.id] ?? emptyMemory()
@@ -42,6 +43,8 @@ function routineView(m: Manager, s: Seen, t: number): Routine {
     running: mem.running ? { ...mem.running } : null,
     runs: [...mem.runs],
     runsTotal: Math.max(mem.runs.length, m.runCounts.get(entry.id) ?? 0),
+    group: def?.group ?? null,
+    campaigns: def?.campaigns ?? null,
     ...(entry.central
       ? {
           source: 'central' as const,
@@ -49,18 +52,21 @@ function routineView(m: Manager, s: Seen, t: number): Routine {
           latestRun: latestRunOf(m.central, entry.id),
           ...(entry.central.timeZone ? { timeZone: entry.central.timeZone } : {}),
         }
-      : {}),
+      : moving.has(entry.id)
+        ? { moving: true as const }
+        : {}),
   }
 }
 
 export function status(m: Manager): RoutinesStatus {
   const t = m.clock()
+  const moving = movingIds(m)
   return {
     enabled: enabled(m),
     everyMs: ROUTINES_EVERY_MS,
     checkedAt: m.checkedAt,
     nextCheckAt: m.nextCheckAt,
-    routines: m.seen.map((s) => routineView(m, s, t)),
+    routines: m.seen.map((s) => routineView(m, s, t, moving)),
     proposals: m.proposals,
     error: m.lastError,
     store: storeStatus(m.central, m.centralError),

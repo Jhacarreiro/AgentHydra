@@ -151,7 +151,7 @@ you already have.
 
 - **This PC (the default):** your people are folders under `~/.agenthydra/people/`, the format in [docs/PEOPLE.md](docs/PEOPLE.md).
 - **CrAInium (owners only):** in Settings → Your people, pick CrAInium. Your people are kept in the owners' private persona store on their own server, reached over SSH, and follow you to your other PCs. The choice only shows on a PC that has the private add-on and SSH access to that server.
-- **Safe sync:** the newer copy of a person wins, the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
+- **Safe sync:** the newer copy of a person wins (a copy here unchanged since the last sync never does, whatever its files' dates), the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
 
 <details>
 <summary>How it works</summary>
@@ -197,7 +197,7 @@ bun run build && bun run start
   builds exist but are not verified yet. Windows instance management needs the classic Squirrel
   installer of Claude Desktop, not the MSIX package (the Instances view links it).
 - **Instance actions are real:** open, quit, create and delete act on your real Claude Desktop
-  instances; delete asks you to type the name.
+  instances; delete asks you to say why, and a synced login is deleted on your other PC too.
 - **Network:** AgentHydra reads local files and talks to `localhost`. On its own it only checks for
   updates, through `studio.connections.icu` (a LunarWerx relay of GitHub's release feed), sending the
   app version, a coarse OS tag and a random install id; the server derives a coarse location and

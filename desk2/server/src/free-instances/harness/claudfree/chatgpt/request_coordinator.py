@@ -24,12 +24,14 @@ from uuid import UUID, uuid4
 from ..errors import ClaudeError
 from ..registry import chat_lock
 from .api import ChatGPTClient
-from .browser_pool import MAX_FRAME as BROKER_FRAME
+from .browser_pool import MAX_FRAME as BROKER_FRAME, close_server
 from .browser_request import adopt_cookies
 from .browser_slots import browser_slot
 from .http import ChatGPTHttp
 from .registry import ChatGPTRegistry
 from .request_ownership import AccountLeases, CancelToken, OwnerJob, PhaseProcess, json_frame
+from .request_ownership import _INPUT_LIMIT as PHASE_INPUT_LIMIT
+from .request_phases import readback_if_confirmed
 from .state import ChatGPTState
 
 INPUT_LIMIT = 1024 * 1024
@@ -241,13 +243,32 @@ class Coordinator:
                     raise phase_error(browser_result)
                 prepared = browser_result['request']
             self.check(cancel, deadline)
-            tail = self.phase('readback', {'saved_state': latest, 'headers': preflight['headers'],
+            tail_arguments = {'saved_state': latest, 'headers': preflight['headers'],
                 'branch': preflight['existing'], 'previous_ids': preflight['previous_ids'],
                 'model': model, 'prompt': request['prompt'], 'prepared': prepared,
                 'entry': {'chat_id': entry['chat_id'], 'name': entry['name']},
-                'command': request['command'], 'timeout': 120, 'brief': True}, cancel, deadline)
+                'command': request['command'], 'timeout': 120, 'brief': True}
+            try:
+                # Preserve the exact private-input admission limit even without a child.
+                local_input = len(json_frame({'phase': 'readback', 'arguments': tail_arguments})) <= PHASE_INPUT_LIMIT
+            except (TypeError, ValueError, UnicodeError, RecursionError):
+                local_input = False
+            tail = readback_if_confirmed(**tail_arguments) if local_input else None
+            local_tail = tail is not None
+            if local_tail:
+                try:
+                    # The child reserves up to 4 KiB for its readiness frame. Near
+                    # that boundary let the original phase enforce its exact limit.
+                    local_tail = len(json_frame(tail)) + 4096 <= PHASE_LIMIT
+                except (TypeError, ValueError, UnicodeError, RecursionError):
+                    local_tail = False
+            if not local_tail:
+                self.check(cancel, deadline)
+                tail = self.phase('readback', tail_arguments, cancel, deadline)
             if tail.get('saved_state_valid'):
                 latest = tail['saved_state']
+            if local_tail:
+                self.check(cancel, deadline)
             if not tail.get('ok'):
                 raise phase_error(tail)
             if not tail.get('saved_state_valid'):
@@ -486,11 +507,12 @@ async def serve(directory, version, root, python, browser_endpoint, *, cache_dir
             temporary.write_text(json.dumps({'port': port, 'token': coordinator.token, 'version': version, 'pid': os.getpid()}), encoding='utf-8')
             temporary.chmod(0o600)
             temporary.replace(endpoint)
-            async with server:
-                while coordinator.active or coordinator.leases.quarantined or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
-                    await asyncio.sleep(1)
+            while coordinator.active or coordinator.leases.quarantined or (not coordinator.draining and time.monotonic() - coordinator.last_used < idle_seconds):
+                await asyncio.sleep(1)
         finally:
             endpoint.unlink(missing_ok=True)
+            # Bounded: an unbounded wait_closed() held the browser pool's owner lock forever (close_server).
+            await close_server(server)
             owner.assert_idle()
 
 

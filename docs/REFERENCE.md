@@ -126,8 +126,10 @@ also paced under the burst at which ChatGPT locks it out (a learned cap of new c
 `free_status` gives each account's `plan`, its last hour (`lastHour`, marked FAILING at 90% failed of 5 or
 more) and its pace (`paced` until a time, or `pace`: new chats of the cap in the last 30 minutes). Free
 threads are private, so unlike probe chats they need no deleting. The call answers within 45 s
-with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
-hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
+with a `batch` for `free_results` while the sending goes on; batches are kept 6 hours (saved, so a daemon
+restart carries them on), the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running; a
+task still queued while it restarts (503 while it stops, then no answer) waits for it within the batch's
+30 minutes, and a send it never answered goes again under its own request id.
 
 History lookups use bounded, opt-in Desk queries: `/api/free/threads?view=recent&limit=30&account=...`
 returns `{total,threads}`; `view=lookup&chat_id=...` accepts up to 32 identifiers and returns each ID's
@@ -144,7 +146,7 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 moment of the stop.
 
 **Routines** is the babysitter's third sibling (Desk 2's `plugins/73-routines.ts`, logic in
-`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, Settings > Managers > Routines). A routine is one
+`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, AgentHydra's Tools tab). A routine is one
 standing job on this PC, on a schedule: a command, an AI prompt that runs as a chat you can open, or a Windows scheduled
 task. Routines run on the PC through AgentHydra's own CLI and accounts; the manager asks no model itself. The owner's
 rule for them: a routine runs only for something the owner asked for in the owner's own words, and an AI can only propose one.
@@ -185,7 +187,7 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   makes the routine `ended` after that local day: it never runs but stays listed.
 
 States: `idle`, `due`, `running`, `paused` (the owner paused it), `off` (its status says off), `ended` (past `until`),
-`broken` (with its reason) and `waiting` (a proposal waiting for the owner's yes, listed under "Waiting for your yes").
+`broken` (with its reason) and `waiting` (a proposal waiting to be approved, by the owner or by an agent he told to, listed under "Awaiting approval").
 
 Schedule semantics: the memory keeps each schedule routine's last slot. The first time a routine is seen it starts from now,
 so a slot already past never runs. A look runs the newest slot at or before now, once, when it is later than the last slot
@@ -203,11 +205,13 @@ the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB);
 proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
-Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the
-owner's click, `X-Desk-Caller: window`) may resume, approve, discard, switch the manager (`enabled`), or edit a routine; an
-agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
-is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
-chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
+Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, move one
+to the central store, and set its group and campaigns (`meta`) (the owner, 2026-10-16: an agent approves the routines he asks
+for, never handing the click back to him). Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard,
+switch the manager (`enabled`), edit a routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in AgentHydra's Tools tab`. On the Tools tab's
+Overview each routine is a card whose small switch pauses or resumes it; the card opens its page (its schedule in words,
+its history, Run now and Open chat), and the Routine manager's page holds the manager's `enabled` switch (owner,
+2026-10-17: Desk's Settings > Managers, which listed them before, is now a link to the Tools tab). A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
 runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
 into `routines/<id>.json` without `why`, discard deletes it.
@@ -216,12 +220,25 @@ into `routines/<id>.json` without `why`, discard deletes it.
 routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `headline`, `totals`, `settings`, last run,
 `nextRunAt`, the run going on (`kind` `command` or `prompt`, its runner's `pid` or its chat), and its last 30 runs, plus
 `proposals` and `error`. `POST /api/routines` takes one action per call:
-`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard }` (an id; `resume`, `approve` and
-`discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
+`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard, move }` (an id; `resume` and
+`discard` are window only), or `{ propose: { id, why, ...contract } }`, or `{ meta: { id, group?, campaigns? } }` (a key it
+names is set, `null` removes it, an absent one is kept). Anything else answers 400 with the expected shape; a bad `group` or
+`campaigns` value is 400 with the reason, an unknown routine 404.
 
-The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause` and `propose`,
-each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
-a routine rather than add one, and to prefer a temporary background task it manages itself.
+The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause`, `propose`,
+`approve`, `move` and `meta`, each marked MUTATES. It cannot resume, discard, edit or switch the manager. Its description tells the
+agent to approve or move only a routine the owner asked for in his own words, to propose a routine rather than add one
+nobody asked for, and to prefer a temporary background task it manages itself.
+
+**Group and campaigns.** Two optional keys say where a routine belongs; neither changes what it runs. `group` is the folder
+the Tools tab's Routines group lists it under (1 to 40 characters, one line). `campaigns` lists the CrAInium's Campaigns arm ids it works for
+(1 to 10, each `^[a-z0-9][a-z0-9-]{0,63}$`, no repeats). A central document keeps both outside its approval, as it keeps
+`description`, so setting them leaves the routine approved and running. Each routine's `group` and `campaigns` (null when
+absent) are on its entry in `GET /api/routines`. `GET /api/routines/:id/campaigns` (`?fresh=1` skips its 60-second cache)
+asks the arm's `campaigns` tool through the person's Connections server, `show` for each id and `dnc` once: a `RoutineCampaigns`
+answer with each campaign's ledger (status, goal, `ready` summed over its lanes, numbers, sends per day, newest 5 runs and the
+do-not-contact count). Addresses are never read into it. An id the arm does not know is in `missing`; with no Connections
+server, or a refusal of every campaign, `error` says why and `campaigns` is empty (HTTP 200 either way).
 
 **Central routines** (the owner, 2026-10-15: one place for the routines, which other people can use too). When
 `<desk home>/routines-store.json` names a store, the manager also lists the routines kept there, which every computer reading
@@ -234,13 +251,15 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
 
 - **Approval.** A document runs only with an Ed25519 signature, by a key this computer trusts (its own
   `<desk home>/routines-approver.key`, made with the store, or one the file's `approvers` lists), over its id and the sha of
-  everything in it but `approval` and `description` (`routines/central.ts`). Any other change makes it a proposal again. Approve
+  everything in it but `approval`, `description`, `group` and `campaigns` (`routines/central.ts`). Any other change makes it a proposal again. Approve
   signs with this computer's key and writes the document back with the sha it read; an edit is signed again the same way, and
   answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
-  the MCP tool), never approve.
+  the MCP tool) and approve; a proposal that arrives already carrying an `approval` is refused.
 - **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
-  pinned here and runs as a local routine does. When none is, any runner carrying the labels may run it (schedule routines
-  only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
+  pinned here and runs as a local routine does. A document with `"eachRunner": true` (signed like every other key) runs on
+  every runner carrying its labels, each its own copy as a local routine, never claimed and of any kind, status included:
+  work each computer does over its own data, such as learning from that computer's chats. When neither, any runner carrying
+  the labels may run it (schedule routines only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
   of twice its timeout, renewed while the run lives (`routines/manager-board.ts`, `routines/runs.ts`). Anything else is state
   `elsewhere`, listed and never run, read or paused here. A schedule keeps its own `timeZone` on every runner.
 - **Runs.** Every central run is reported to the run log as CloudEvents (`routine.claimed`, `routine.started`,
@@ -249,7 +268,18 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
   again at most every 5 minutes (at once with `?fresh=1`), and runs approved pinned routines from the copy. A board that does
   not answer holds back only the shared slots.
 - **Same id as a file here.** The file is listed and runs; the document is named under the store's `problems` in
-  `GET /api/routines` `store` (Settings shows that line), never listed.
+  `GET /api/routines` `store` (Settings shows that line), never listed. A file being moved is the exception, below.
+- **Move to central** (ROUTINES.md 7.7: one routine at a time, on the owner's say). With a store named, each card of this
+  computer's own routines has Move to central (`POST /api/routines` `{ "move": "<id>" }`, any caller; 400 with no store).
+  It writes the routine to the store as a document pinned to this runner (`runsOn` its name), so it runs here as it did: a
+  schedule keeps this computer's zone, `cwd` becomes the `workdir` of the deepest checkout `repos` names that holds it (else
+  `~/` in this home; in neither the move is refused, naming `repos`), and a command argument in this home starts with `~/`
+  (`routines/central.ts` `documentOf`). Until the owner decides, the file runs on and takes no edit, the document waits under
+  Awaiting approval as a move (`moving` on both), and `<desk home>/routines-moving.json` marks it. Approve signs the
+  document (refused if it changed in the store since the move) and retires the file to `<desk home>/routines/moved/` in the
+  same step (`routines/manager-move.ts`): the routine keeps its id and its memory, so the slot the file last ran is not run
+  again. Discard takes the document out of the store, and the file runs on. A look finishes a move a trusted key approved
+  on another computer, and forgets one whose document left the store.
 
 The design, the standards it borrows from (cron with an IANA zone as Kubernetes CronJob does, GitHub-style runner labels,
 Temporal's overlap names, CloudEvents, lease semantics) and the open decisions are in the CrAInium: `docs get`, repo
@@ -406,6 +436,45 @@ independent pollers re-hit a limited account roughly every 30 seconds and each e
 the window being waited out, so an account that tripped a limit could never recover: measured on
 2026-09-11, accounts that had read fine two hours earlier sat at 429 all day. The number obeyed is
 always the server's own. None is invented here.
+
+### A 429 can be a revoked login
+
+The usage endpoint answers a REVOKED OAuth token the same way it answers a rate limit: 429
+`rate_limit_error` with a fresh `Retry-After` of about an hour, on every read, for as long as anyone
+asks. Measured 2026-10-16 on two instances that had read "rate limited, it clears on its own" for
+days: the profile endpoint (`/api/oauth/profile`) answered the same tokens 401 "OAuth access token
+has been revoked." So every 429 is followed by one profile read with the same token
+(`revokedLoginError`, `server/src/usage-api.ts`). A 401 there is recorded as the 401 it is, the row
+reads `token_revoked` instead of `rate_limited` (desktop and CLI rows alike), the account's last
+reading leaves the room ranking as a signed-out one does, and the token is held off as long as a real
+429 would be.
+
+**Signing in again does not replace a revoked desktop login.** Claude Desktop keeps its saved grants
+through a sign-in to the same account (its `main.log`: "preserving oauth cache (same-user
+re-login)"), and its token getter hands out a saved grant until that grant's own `expiresAt`
+without asking whether it still works. It makes a new grant only when the saved one is missing, or
+expired with its refresh refused. Revoking a grant does not move its expiry, so a revoked Claude Code
+grant (a month long) or inference grant (a year long) stays in use through any number of re-logins.
+AgentHydra therefore takes such grants out itself (`server/src/core/revoked-grants.ts`):
+
+- A grant is revoked only on the profile endpoint's word (a 401 that says revoked); an expired grant
+  is the app's to refresh and is left alone. It is remembered by a SHA-256 digest of its token, never
+  the token, in `revoked-grants.json` in the data dir.
+- It leaves the profile's token caches (`oauth:tokenCacheV2` and `oauth:tokenCache` in
+  `config.json`) only while the app is closed, when a usage check reads `token_revoked` (every grant
+  of the profile is asked about then, the profile-only ones included) and just before AgentHydra
+  opens the profile (known digests only, no network). The file is read again right before the write
+  and left alone if anything changed it meanwhile (Login sync may have landed a newer login).
+- The app then makes new grants from its claude.ai sign-in the next time it needs one. Until then the
+  row reads `no_token`; a profile whose claude.ai sign-in was revoked too may ask for a sign-in once.
+- Login sync never lands a remembered grant, leaves it out of "the later expiry wins" (a dead
+  year-long grant would otherwise win every comparison and put itself back on every PC), treats a
+  copy that differs only by such grants as the same copy, and sends each account's digests with its
+  login so the other PC drops them too.
+
+What revokes these grants in the first place is not settled. Revocations of the same shape predate
+Login sync. One hazard remains under investigation: Login sync puts one desktop login, refresh token
+included, on both PCs.
 
 ### Built-in guidance
 
@@ -803,6 +872,28 @@ is `null`, and leaves an absent field unchanged. The curated icon/color keys liv
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `desk2/hydra/src/lib/instance-appearance.ts`.
 
+### How the Instances tab stays live
+
+Live means a watcher, a change event, or a short poll while something is in flight, never only a manual Refresh
+(owner, 2026-10-16). While the tab is on screen it runs three watches beside the two-minute list refresh:
+
+| Watch | Every | Asks | Acts when |
+|---|---|---|---|
+| Logins | 5 s | `GET /api/instances/logins` (config.json, no process scan) | a profile's login moved: the old identity is dropped and resolved again |
+| Unconfirmed logins | on the login watch | the account resolve, for a running app whose login could not be confirmed (the yellow mark) | its last resolve is 10 s old (`desk2/hydra/src/lib/account-resolve.ts`); a closed app keeps the 15-minute re-check |
+| Exits | 3 s, only while a row reads open | `GET /api/instances/alive?pids=...`: a signal-0 probe of each Desktop pid, Codex `desktopPid` and CLI `livePids`, no process scan | a pid is gone: the daemon drops both scan caches and the tab lists that kind again at once |
+
+`GET /api/cli-instances` gives each login's `livePids` (its live sessions' pids) beside `liveSessions`. The filter's
+facets act on every row kind: a CLI login's plan is its own or its linked desktop's and it is open while a session
+runs; a Free login's plan is the one its site reports ("Free" on the Free plan) and it is open while a chat or check
+of it is in flight; a DeepSeek harness row's plan is "API key" and it is open while it runs. An unknown fact never
+sets a row aside.
+
+A process scan that fails (a timed-out WMI query) is not "nothing runs": the Desktop list and the Codex list each read
+the last scan that answered, if it is under five minutes old (`lastGoodClaudeProcessScan` in `server/src/core/process.ts`,
+`listCodexDesktopProcesses` in `server/src/core/codex-desktop.ts`). A `fresh` read, which launch and stop use to act,
+never takes that snapshot.
+
 ### The usage numbers on a row
 
 The 5-hour and weekly columns of the Instances, CLI and Codex tables come from three stores in the
@@ -1101,6 +1192,13 @@ cannot run, comparing this app's synced copies against a private sibling repo th
 workflow can never check out. Before it had a name, a pre-commit hook was its only enforcement, and
 that hook is skipped by `--no-verify` and silently does nothing on any machine without the sibling
 checkout. External contributors should not run it; nothing in CI depends on it.
+
+`.arkitect/ratchets/` is the other owner-only gate: one inventory per Architect performance check (25 of them,
+seeded 2026-10-16 after the efficiency audit), holding how many warnings each file is allowed per rule. The
+Architect lives in a private repo, so CI skips it; the owner's land tool (`cycle.py`, kept outside this repo) runs
+`arkitect ratchet --check <the inventoried ids>` on every land and fails one whose own files raise a count. A rise
+elsewhere is a note. After fixing a warning, lower its count with
+`arkitect ratchet --check <id> --decrease-baselines`; a count is never raised by tool, only by a reviewed hand edit.
 
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.

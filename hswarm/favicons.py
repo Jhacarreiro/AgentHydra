@@ -17,6 +17,7 @@ from urllib.parse import urljoin
 import httpx
 
 from . import config
+from .client import tls
 
 MAX_PAGE = 512 * 1024
 MAX_ICON = 256 * 1024
@@ -140,7 +141,7 @@ async def fetch(provider: str, client: httpx.AsyncClient | None = None) -> str:
     if not website:
         return "none"
     own = client is None
-    client = client or httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=HEADERS)
+    client = client or httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=HEADERS, verify=tls())
     try:
         page, base = "", website
         got = await _get(client, website, MAX_PAGE)
@@ -164,7 +165,7 @@ async def fetch(provider: str, client: httpx.AsyncClient | None = None) -> str:
 async def fetch_all(providers: list[str]) -> dict[str, str]:
     """Fetch several providers' icons, six at a time over one client."""
     gate = asyncio.Semaphore(6)
-    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=HEADERS) as client:
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers=HEADERS, verify=tls()) as client:
         async def one(p):
             async with gate:
                 return p, await fetch(p, client)

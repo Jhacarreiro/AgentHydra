@@ -1,6 +1,7 @@
 // server/src/login-sync-arrivals.ts — tell the owner when a login sync brings in an account this PC
-// did not have before. A pass collects one arrival per new instance it made here (core/cli-login-sync.ts,
-// core/desktop-login-sync.ts); this sends them as ONE notification over the reset/incident channel.
+// did not have before, or deletes one because another PC deleted it. A pass collects one arrival per
+// new instance it made here and one removal per instance it deleted (core/cli-login-sync.ts,
+// core/desktop-login-sync.ts); each kind goes as ONE notification over the reset/incident channel.
 //
 // Never names an account's email: an instance is named by its number, which is what the owner reads.
 
@@ -12,6 +13,15 @@ export interface LoginArrival {
   kind: 'cli' | 'desktop'
   num: number | null
   plan: string | null
+}
+
+/** One instance a sync deleted here because a PC deleted it (owner, 2026-10-16: "let us know that the
+ *  other person removed it"). `by` is that PC's name; `note` the reason its owner gave, when it opens. */
+export interface LoginRemoval {
+  kind: 'cli' | 'desktop'
+  num: number | null
+  by: string | null
+  note: string | null
 }
 
 const KIND_LABEL: Record<LoginArrival['kind'], string> = {
@@ -37,10 +47,38 @@ export function arrivalMessage(arrivals: LoginArrival[]): { title: string; body:
   }
 }
 
-/** Send one pass's arrivals over the desktop notification channel, when the owner has it on.
- *  Never throws: a failed toast must not take the sync pass down with it. */
-export async function notifyLoginArrivals(arrivals: LoginArrival[]): Promise<void> {
-  const msg = arrivalMessage(arrivals)
+const pcOf = (by: string | null): string => by ?? 'another PC'
+
+/** What the delete guard on this PC is told when the sync deletes an instance (lifecycle.ts and
+ *  cli-instances.ts ask every delete for a note). */
+export function removalReason(by: string | null, note: string | null): string {
+  return `Deleted on ${pcOf(by)}${note ? `: ${note}` : ''}`
+}
+
+/** The Login sync dialog's event line for an instance the sync deleted here. */
+export function removalEvent(by: string | null, note: string | null): string {
+  return `Deleted on ${pcOf(by)}, so deleted here too.${note ? ` Their note: “${note}”` : ''}`
+}
+
+/** One line per removal: "Claude desktop instance #7, deleted on PC-A: “not used any more”". */
+export function removalLine(r: LoginRemoval): string {
+  const who = r.num === null ? '' : ` #${r.num}`
+  return `${KIND_LABEL[r.kind]}${who}, deleted on ${pcOf(r.by)}${r.note ? `: “${r.note}”` : ''}`
+}
+
+/** The notification for one sync pass's removals, or null when nothing was deleted here. */
+export function removalMessage(removals: LoginRemoval[]): { title: string; body: string } | null {
+  if (removals.length === 0) return null
+  const n = removals.length
+  return {
+    title: n === 1 ? 'Login sync: 1 account deleted' : `Login sync: ${n} accounts deleted`,
+    body: `Deleted here too: ${removals.map(removalLine).join('; ')}.`,
+  }
+}
+
+/** Send one message over the desktop notification channel, when the owner has it on. Never throws: a
+ *  failed toast must not take the sync pass down with it. */
+async function notify(msg: { title: string; body: string } | null): Promise<void> {
   if (!msg) return
   const settings = getNotificationSettings()
   if (!settings.notifyEnabled || !settings.notifyDesktop) return
@@ -50,3 +88,11 @@ export async function notifyLoginArrivals(arrivals: LoginArrival[]): Promise<voi
     // best-effort, like every notification channel
   }
 }
+
+/** Send one pass's arrivals. */
+export const notifyLoginArrivals = (arrivals: LoginArrival[]): Promise<void> =>
+  notify(arrivalMessage(arrivals))
+
+/** Send one pass's removals. */
+export const notifyLoginRemovals = (removals: LoginRemoval[]): Promise<void> =>
+  notify(removalMessage(removals))

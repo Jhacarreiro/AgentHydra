@@ -10,7 +10,6 @@
 // sessions until one of them next changed (the other owner, 2026-10-04: a refresh showed none).
 
 import type { ServerEvent } from '@shared/protocol'
-import { DEFAULT_ACCOUNT_INFO } from './accounts'
 import { BridgeError } from './client'
 import type { Bridge } from './index'
 
@@ -43,7 +42,7 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 export interface PollerOptions {
-  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'> & Partial<Pick<Bridge, 'onWorkersChanged' | 'swarmJobs'>>
+  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'> & Partial<Pick<Bridge, 'onWorkersChanged' | 'swarmJobs' | 'warmIndexes'>>
   broadcast(event: ServerEvent): void
   wsClientCount(): number
   /** Connected windows on screen (ServerContext.wsVisibleCount); without it every connected window counts. */
@@ -110,7 +109,7 @@ export function createPoller(o: PollerOptions) {
     emitIfChanged({ type: 'external.update', sessions: [] })
     emitIfChanged({ type: 'climayte.update', workers: [] })
     emitIfChanged({ type: 'swarm.update', jobs: [] })
-    emitIfChanged({ type: 'accounts.update', accounts: [DEFAULT_ACCOUNT_INFO] })
+    emitIfChanged({ type: 'accounts.update', accounts: [] })
     accountsAt = 0
   }
 
@@ -159,6 +158,8 @@ export function createPoller(o: PollerOptions) {
         }, () => null),
     ])
     // Nothing running (and both reads answered): the timer can rest between polls.
+    // Rides this cadence: one idle recent session's index is rebuilt per poll, in the background, never awaited.
+    if (up && sessions) void o.bridge.warmIndexes?.(sessions)
     idle = !!up && !!sessions && !!workers && !sessions.some((x) => x.status === 'working' || x.status === 'needs_you') && !workers.some((w) => w.active)
   }
 

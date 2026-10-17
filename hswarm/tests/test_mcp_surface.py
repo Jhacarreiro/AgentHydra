@@ -3,6 +3,7 @@ shape of the answers (2026-10-02). Called at the MCP boundary (mcp.call_tool, mc
 argument model and serializer are part of the behaviour, and at the tool function where they are not."""
 import asyncio
 import json
+import threading
 
 import pytest
 
@@ -62,7 +63,7 @@ def test_a_misspelled_argument_is_refused_with_the_nearest_name_and_nothing_is_s
     assert mgr.submitted == 0
 
 
-def test_server_behind_is_a_sentence_once_per_chat_then_a_flag(monkeypatch):
+def test_server_behind_is_read_off_the_loop_and_is_a_sentence_once_per_chat_then_a_flag(monkeypatch):
     class Job:
         id = "j1"
         state = "done"  # finished inside the call, so hswarm_run stamps no returned_at
@@ -77,18 +78,26 @@ def test_server_behind_is_a_sentence_once_per_chat_then_a_flag(monkeypatch):
     monkeypatch.setattr(mcp_server, "manager", lambda: Mgr())
     monkeypatch.setattr(mcp_server, "job_payload", lambda *a, **k: {"summary": {}, "results": []})
     monkeypatch.setattr(dispatch, "route_outlook", lambda *a, **k: None)
-    monkeypatch.setattr(shared, "behind", lambda: sentence)
+    read_on, loops = [], []
+
+    def behind():  # a live server asks git here: 0.1-0.9 s that GET /health waited out on the loop (2026-10-16)
+        read_on.append(threading.get_ident())
+        return sentence
+
+    monkeypatch.setattr(shared, "behind", behind)
     monkeypatch.setattr(mcp_server, "_told_behind", set())
 
     async def run_as(chat):
         token = shared.REQUEST.set({"mcp_session": chat})
         try:
+            loops.append(threading.get_ident())
             return (await mcp_server.hswarm_run(tasks=["say OK"], tools="none", wait=False))["server_behind"]
         finally:
             shared.REQUEST.reset(token)
 
     assert [asyncio.run(run_as("chat-a")) for _ in range(2)] == [sentence, True]
     assert asyncio.run(run_as("chat-b")) == sentence  # another chat on the shared server has not been told yet
+    assert len(read_on) == 3 and not set(read_on) & set(loops)  # every read on a thread, none on the loop
 
 
 def test_select_answers_with_names_and_flags_and_the_whole_plan_only_when_asked(monkeypatch):

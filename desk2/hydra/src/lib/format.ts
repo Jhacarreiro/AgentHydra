@@ -50,6 +50,7 @@ export type BadgeVariant =
   | 'primary'
   | 'success'
   | 'warning'
+  | 'limited'
   | 'info'
   | 'outline'
   | 'ghost'
@@ -71,7 +72,8 @@ const QUEUE_STATUS: Record<QueueStatus, StatusMeta> = {
   // red.
   unverified: { label: 'Unverified', icon: CircleQuestionMark, variant: 'warning' },
   failed: { label: 'Failed', icon: XCircle, variant: 'destructive' },
-  rate_limited: { label: 'Rate limited', icon: TriangleAlert, variant: 'warning' },
+  // A limit resets by itself, so the usage-limit pink, not the yellow that means it waits on you (owner, 2026-10-17).
+  rate_limited: { label: 'Rate limited', icon: TriangleAlert, variant: 'limited' },
   // Anthropic's servers were saturated (529) — NOT your usage limit, and not a broken run. It is
   // retried automatically first, so a row only reads this once the overload outlasted the backoff.
   // 'info', not 'warning': nothing is wrong with the user's account or their prompt.

@@ -13,7 +13,8 @@
 // THE RULES
 // - Only a CLI instance LINKED to a desktop instance (linkCliInstanceToDesktop: "Add a CLI login…"
 //   on the desktop row) is fed, and only while it has no login of its own: a credential with a
-//   refresh token is a real CLI sign-in and is never touched.
+//   refresh token is a real CLI sign-in and is preserved while healthy. An idle expired or
+//   explicitly signed-out linked login may take a fresh desktop grant after reauthentication.
 // - No refresh token is copied. The desktop app owns that one; a CLI that refreshed with it would
 //   rotate it and sign the desktop out. The fed login lasts as long as the grant (weeks) and is
 //   replaced whenever the desktop app renews its own, so a desktop instance left closed past the
@@ -30,6 +31,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { readLiveRegistry } from '../live-registry'
 import { fetchProfile, type ProfileResponse } from './accounts'
 import { listCliInstances } from './cli-instances'
 import { credPath } from './cli-login-move'
@@ -95,21 +97,73 @@ export async function desktopCliCredential(desktopDir: string): Promise<CliOauth
   return tokens?.v2 ? cliCredentialFromDesktop(tokens.v2) : null
 }
 
-export type FeedResult = 'fed' | 'current' | 'own-login' | 'no-desktop-login' | 'not-linked'
+export type FeedResult =
+  | 'fed'
+  | 'current'
+  | 'own-login'
+  | 'no-desktop-login'
+  | 'not-linked'
+  | 'busy'
+
+type FeedAuthCheck = (id: string, expectedEmail?: string) => Promise<unknown>
+let checkFedLogin: FeedAuthCheck | null = null
+/** The daemon verifies renewed linked logins through its normal signed-out wall machinery. */
+export function setDesktopCliAuthChecker(check: FeedAuthCheck | null): FeedAuthCheck | null {
+  const previous = checkFedLogin
+  checkFedLogin = check
+  return previous
+}
 
 /** Give one linked CLI instance its desktop instance's login (see the header). */
-export async function feedCliFromDesktop(cli: {
-  configDir: string
-  associatedDesktopDir?: string | null
-}): Promise<FeedResult> {
+export async function feedCliFromDesktop(
+  cli: {
+    id?: string
+    configDir: string
+    associatedDesktopDir?: string | null
+    loggedIn?: boolean
+    loginNote?: string | null
+    accountEmail?: string | null
+    inUse?: boolean
+    liveSessions?: number
+    isRunning?: boolean
+    isDesktopRunning?: boolean
+    movedAway?: unknown
+  },
+  readDesktop = desktopCliCredential,
+): Promise<FeedResult> {
   if (!cli.associatedDesktopDir) return 'not-linked'
-  if (hasOwnCliLogin(cli.configDir)) return 'own-login'
-  const cred = await desktopCliCredential(cli.associatedDesktopDir)
-  if (!cred) return 'no-desktop-login'
   const path = credPath(cli.configDir)
-  const file = readCredentials(path) ?? {}
-  if ((file.claudeAiOauth as CliOauth | undefined)?.accessToken === cred.accessToken)
-    return 'current'
+  const before = existsSync(path) ? readFileSync(path) : null
+  let file: Record<string, unknown> = {}
+  try {
+    const parsed = JSON.parse(before?.toString('utf8') ?? '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) file = parsed
+  } catch {
+    /* Unreadable credentials have no independent grant to preserve. */
+  }
+  const own = file.claudeAiOauth as CliOauth | undefined
+  const ownLogin = typeof own?.refreshToken === 'string' && own.refreshToken.length > 0
+  const signedOut = cli.loggedIn === false && cli.loginNote?.startsWith('Signed out:') === true
+  const restricted = !!cli.loginNote && !cli.loginNote.startsWith('Signed out:')
+  const expired = Number(own?.expiresAt) > 0 && Number(own?.expiresAt) <= Date.now()
+  const renewInactive = !restricted && (signedOut || expired) && !cli.movedAway
+  const renewOwn = ownLogin && renewInactive
+  if (ownLogin && !renewOwn) return 'own-login'
+  const busy = () =>
+    !!(
+      cli.inUse ||
+      cli.liveSessions ||
+      cli.isRunning ||
+      cli.isDesktopRunning ||
+      readLiveRegistry(cli.configDir, { transcripts: false }).length
+    )
+  if (renewInactive && busy()) return 'busy'
+  const cred = await readDesktop(cli.associatedDesktopDir)
+  if (!cred) return 'no-desktop-login'
+  if (own?.accessToken === cred.accessToken) return 'current'
+  if (renewInactive && busy()) return 'busy'
+  if (renewInactive && (!before || !existsSync(path) || !readFileSync(path).equals(before)))
+    return 'own-login'
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.tmp`
   try {
@@ -118,6 +172,8 @@ export async function feedCliFromDesktop(cli: {
   } finally {
     rmSync(tmp, { force: true })
   }
+  if (renewInactive && cli.id && checkFedLogin)
+    await checkFedLogin(cli.id, cli.accountEmail ?? undefined)
   return 'fed'
 }
 

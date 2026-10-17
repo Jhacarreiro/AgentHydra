@@ -1,12 +1,16 @@
 // server/tests/hswarm.test.ts - the HydraSwarm sidecar the daemon runs (server/src/hswarm.ts).
 //
 // A sidecar that exits is started again on its own, and a wrong AGENTHYDRA_HSWARM_DIR is reported
-// by name rather than quietly swapped for another copy of the package.
+// by name rather than quietly swapped for another copy of the package. On Windows the server a daemon
+// started outlives that daemon's relaunch, and the next daemon adopts it as its own.
 
-import { afterAll, afterEach, expect, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { killProcessTree } from '../src/core/process'
+import { windowsTcpTable } from '../src/core/win-tcp-table'
 import {
   getHSwarmStatus,
   hswarmDir,
@@ -175,7 +179,7 @@ test('our own server that stops answering is reported silent, then ended and sta
 })
 
 test('an adopted server is watched and replaced by our own child once it stops answering', async () => {
-  let live = true
+  let live = true // until it exits: then nothing answers and its pid is gone
   const adoptedDir = withPackage('adopted')
   const probe = async () => (live ? { hswarm: true, pid: 4242, package: adoptedDir } : null)
   let spawns = 0
@@ -203,6 +207,7 @@ test('an adopted server is watched and replaced by our own child once it stops a
     importSpawn,
     importFirstMs: 5,
     probe,
+    alive: () => live,
     watchEveryMs: 5,
     port: 1,
   })
@@ -226,6 +231,7 @@ function serverOnPort(pkg: string | undefined) {
   return {
     killed,
     probe: async () => (up ? { hswarm: true, pid: 4242, package: pkg } : null),
+    alive: () => up,
     kill: (pid: number) => {
       killed.push(pid)
       up = false
@@ -304,6 +310,7 @@ test('a server running our own package folder is adopted and left alone', async 
     dir,
     logDir: join(tmp, 'logs'),
     probe: server.probe,
+    alive: server.alive,
     kill: server.kill,
     spawn,
     watchEveryMs: 60_000,
@@ -313,6 +320,99 @@ test('a server running our own package folder is adopted and left alone', async 
   expect(calls).toHaveLength(0)
   expect(getHSwarmStatus()).toMatchObject({ running: true, pid: 4242 })
 })
+
+describe.skipIf(process.platform !== 'win32' || !Bun.which('python'))(
+  'a daemon relaunch on Windows',
+  () => {
+    // The daemon is a Bun process, and every child Bun.spawn starts on Windows sits in Bun's own
+    // kill-on-close job, so a daemon that exits (each self-update relaunch) ended the server and every
+    // hswarm call in flight on it. Here a real daemon process starts a real server (a stand-in package
+    // that answers /health as hswarm does, as slowly as a busy one: 1 s) and exits the way a relaunch's
+    // predecessor does.
+    test('the server the old daemon started keeps serving; the next daemon adopts its pid, starts nothing, and its stop ends it', async () => {
+      const pkg = withPackage('relaunch')
+      writeFileSync(
+        join(pkg, 'hswarm', '__main__.py'),
+        `import json, os, sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port = int(sys.argv[sys.argv.index('--port') + 1])
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        time.sleep(1)
+        body = json.dumps({'hswarm': True, 'pid': os.getpid(), 'package': os.getcwd()}).encode()
+        self.send_response(200)
+        self.send_header('content-type', 'application/json')
+        self.send_header('content-length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+HTTPServer(('127.0.0.1', port), H).serve_forever()
+`,
+      )
+      const free = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('') })
+      const port = free.port as number
+      free.stop(true)
+      const opts = {
+        enabled: true,
+        dir: pkg,
+        port,
+        logDir: join(tmp, 'relaunch-logs'),
+        sideRun: false,
+      }
+      const daemon = join(tmp, 'relaunch-daemon.ts')
+      writeFileSync(
+        daemon,
+        `const hs = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, '../src/hswarm.ts')).href)})
+await hs.startHSwarm({ ...${JSON.stringify(opts)}, watchEveryMs: 100 })
+for (let i = 0; i < 200; i++) {
+  const s = hs.getHSwarmStatus()
+  if (s.answering) {
+    console.log(JSON.stringify({ pid: s.pid }))
+    await hs.stopHSwarm({ leaveRunning: true }) // what the daemon's relaunch does on its way out
+    process.exit(0)
+  }
+  await Bun.sleep(100)
+}
+console.log(JSON.stringify({ status: hs.getHSwarmStatus() }))
+process.exit(1)
+`,
+      )
+      const answer = () =>
+        fetch(`http://127.0.0.1:${port}/health`).then(
+          (r) => r.json() as Promise<{ pid: number }>,
+          () => 'nothing listening',
+        )
+
+      let pid: number | null = null
+      try {
+        const old = Bun.spawn([process.execPath, daemon], {
+          stdout: 'pipe',
+          stderr: 'inherit',
+          windowsHide: true,
+        })
+        const said = (await new Response(old.stdout).text()).trim().split('\n').pop() as string
+        await old.exited
+        expect(JSON.parse(said)).toMatchObject({ pid: expect.any(Number) })
+        pid = (JSON.parse(said) as { pid: number }).pid
+
+        await Bun.sleep(1000) // what ends with the old daemon has ended by now
+        expect(await answer()).toEqual(expect.objectContaining({ pid }))
+
+        const { calls, spawn } = countingSpawn()
+        await startHSwarm({ ...opts, spawn, watchEveryMs: 60_000 })
+        expect(getHSwarmStatus()).toMatchObject({ running: true, pid })
+        expect(calls).toHaveLength(0)
+
+        await stopHSwarm()
+        expect(await answer()).toBe('nothing listening')
+      } finally {
+        const listener = windowsTcpTable()?.find((r) => r.localPort === port && r.state === 2)
+        for (const p of new Set([pid, listener?.pid ?? null])) if (p) killProcessTree(p)
+      }
+    }, 60_000)
+  },
+)
 
 test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and the stats DB is left to HSwarm', async () => {
   mkdirSync(join(tmp, '.zswarm'), { recursive: true })

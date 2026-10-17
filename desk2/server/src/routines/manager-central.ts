@@ -2,13 +2,13 @@
 // the store; without it nothing here runs. A copy of each routine document is kept in <desk home>/routines/central/, so
 // the routines run from it while the store cannot be reached; it is read again from the store at most every 5 minutes
 // (at once when the page asks for a fresh look), and a look turns it into entries and proposals beside the local files.
-// The owner's approve, discard and edit, and any caller's central propose, write the store first and then the copy. The
-// run board under the same repo key (claims and the run log) is routines/manager-board.ts's.
+// The owner's approve, discard, edit and move, and any caller's central propose, write the store first and then the copy.
+// The run board under the same repo key (claims and the run log) is routines/manager-board.ts's.
 
 import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { RoutineProposal, RoutineProposalRequest, RoutineStoreStatus } from '@shared/routines'
+import type { RoutineDefinition, RoutineProposal, RoutineProposalRequest, RoutineStoreStatus } from '@shared/routines'
 import { renameOver, writeFlushed } from '../write-flushed'
 import {
   approvedText,
@@ -16,6 +16,7 @@ import {
   checkApproval,
   definitionOf,
   definitionOn,
+  documentOf,
   DOC_FOLDER,
   FORMAT,
   parseDoc,
@@ -28,7 +29,7 @@ import {
   type StoreConfig,
   type TrustedKey,
 } from './central'
-import { ROUTINE_ID, type CentralMark, type Entry } from './manifest'
+import { applyMeta, ROUTINE_ID, type CentralMark, type Entry, type MetaValues } from './manifest'
 import { message } from './proc'
 import type { RunEvent } from './runs'
 import { crainiumRunBoard, crainiumStore, RUNS_TOOL, StoreError, type RoutineStore, type RunBoard } from './store-crainium'
@@ -226,33 +227,39 @@ function proposalOf(doc: RoutineDoc, why: string): RoutineProposal {
 /** The copies as a look reads them: each approved routine as an entry (run here when pinned here or shared with this runner,
  *  else listed as elsewhere), each other document as a proposal. A document that is not a routine, or has the id of one of
  *  this computer's routine or proposal files (`localIds`: the file is the one listed and run), goes to `problems`, never
- *  listed. Only a schedule routine is shared: a status or Windows-task one has no slot to claim, so it is pinned or broken. */
-export function centralEntries(c: Central, localIds: Set<string>): { entries: Entry[]; proposals: RoutineProposal[] } {
+ *  listed; one this computer is moving its file into (`moving`, routines/manager-move.ts) is a proposal while it waits for
+ *  the owner's yes, and the file runs meanwhile. Only a schedule routine is shared: a status or Windows-task one has no slot
+ *  to claim, so it is pinned or broken. */
+export function centralEntries(c: Central, localIds: Set<string>, moving: Set<string> = new Set()): { entries: Entry[]; proposals: RoutineProposal[] } {
   const entries: Entry[] = []
   const proposals: RoutineProposal[] = []
   c.problems = []
   for (const [id, cached] of [...c.docs].sort(([a], [b]) => a.localeCompare(b))) {
-    if (localIds.has(id)) {
-      c.problems.push({ id, reason: `a file on this computer (routines/${id}.json or a proposal) has the same id, and the file is the one listed here` })
-      continue
-    }
     let doc: RoutineDoc
     try {
+      if (localIds.has(id) && !moving.has(id)) throw new Error(`a file on this computer (routines/${id}.json or a proposal) has the same id, and the file is the one listed here`)
       doc = parseDoc(id, cached.text)
     } catch (err) {
       c.problems.push({ id, reason: message(err) })
       continue
     }
     const approval = checkApproval(doc, c.trusted)
+    if (localIds.has(id)) {
+      if (approval.ok) c.problems.push({ id, reason: `its move is approved, and routines/${id}.json is not retired yet: the file runs until it is` })
+      else proposals.push({ ...proposalOf(doc, doc.why ?? `Not approved yet: ${approval.why}.`), moving: true })
+      continue
+    }
     if (!approval.ok) {
       proposals.push(proposalOf(doc, doc.why ?? `Not approved yet: ${approval.why}.`))
       continue
     }
     const zone = typeof doc.front.timeZone === 'string' ? { timeZone: doc.front.timeZone } : {}
-    const central: CentralMark = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, ...placementOf(doc.runsOn, c.runner), ...zone }
+    const central: CentralMark = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, ...placementOf(doc.runsOn, c.runner, doc.eachRunner), ...zone }
     try {
       if (central.placement === 'shared' && doc.front.schedule === undefined)
-        throw new Error(`it runs on any runner labelled ${doc.runsOn.join(', ')}, and only a schedule routine is shared between runners: name the runner it runs on in its runsOn`)
+        throw new Error(
+          `it runs on any runner labelled ${doc.runsOn.join(', ')}, and only a schedule routine is shared between runners: name the runner it runs on in its runsOn, or set eachRunner so every such runner runs its own`,
+        )
       entries.push({ id, def: central.placement === 'elsewhere' ? definitionOf(doc) : definitionOn(doc, c.runner), broken: null, central })
     } catch (err) {
       entries.push({ id, def: null, broken: message(err), name: doc.name, central })
@@ -280,7 +287,7 @@ export function storeStatus(c: Central | null, error: string | null): RoutineSto
 
 /** A refused central action: its HTTP status and reason. */
 export interface Refusal {
-  status: 400 | 404 | 409 | 502
+  status: 400 | 404 | 409 | 500 | 502
   error: string
 }
 
@@ -311,7 +318,7 @@ const nowIso = (ms: number): string => new Date(ms).toISOString()
 export async function proposeCentral(c: Central, raw: RoutineProposalRequest, localIds: Set<string>): Promise<Refusal | null> {
   const { id, name, why, prompt, store: _store, ...rest } = raw as RoutineProposalRequest & Record<string, unknown>
   if (typeof id !== 'string' || !ROUTINE_ID.test(id)) return { status: 400, error: 'the proposal is refused: its id is 1 to 40 of a-z, 0-9 and -, starting with a letter or digit' }
-  if ('approval' in rest) return { status: 400, error: 'the proposal is refused: a proposal carries no approval; only the owner approves' }
+  if ('approval' in rest) return { status: 400, error: 'the proposal is refused: a proposal carries no approval; approve signs it' }
   const front: Record<string, unknown> = { kind: 'routine', format: FORMAT, title: name, ...rest, why, runsOn: rest.runsOn ?? [c.runner.id] }
   if (front.schedule !== undefined && front.timeZone === undefined) front.timeZone = c.runner.zone
   let doc: RoutineDoc
@@ -343,6 +350,34 @@ export async function approveCentral(c: Central, id: string, localIds: Set<strin
   if ('status' in found) return found
   if (localIds.has(id)) return { status: 409, error: `a routine "${id}" already exists on this computer` }
   if (checkApproval(found.doc, c.trusted).ok) return { status: 409, error: `"${id}" is approved already` }
+  return write(c, id, found.cached.path, approvedText(found.doc, c.key, c.config.approverName, nowIso(now)), found.cached.docSha)
+}
+
+/** The owner's move of a local routine (routines/manager-move.ts): its document (central.ts documentOf, pinned to this runner),
+ *  checked as one this runner runs, written to the store as a new document, unapproved. The sha it was proposed with, or the
+ *  refusal. */
+export async function proposeMove(c: Central, def: RoutineDefinition, why: string): Promise<{ sha: string } | Refusal> {
+  if (c.docs.has(def.id)) return { status: 409, error: `"${def.id}" already exists in the store` }
+  let doc: RoutineDoc
+  try {
+    const { front, body } = documentOf(def, c.runner, why)
+    doc = parseDoc(def.id, renderDoc(front, body))
+    definitionOn(doc, c.runner)
+  } catch (err) {
+    return { status: 409, error: `"${def.id}" was not moved: ${message(err)}` }
+  }
+  const refused = await write(c, def.id, `${DOC_FOLDER}${def.id}.md`, renderDoc(doc.front, doc.body), null)
+  if (refused) return refused.status === 409 ? { status: 409, error: `"${def.id}" already exists in the store` } : refused
+  return { sha: doc.sha }
+}
+
+/** The owner's yes to a move: as approveCentral, though the routine's file is still here (the move retires it once this
+ *  lands), and only for the document exactly as it was moved (`sha`). One a trusted key approved already needs no signing. */
+export async function approveMove(c: Central, id: string, sha: string, now: number): Promise<Refusal | null> {
+  const found = docFor(c, id, `no move of "${id}" is waiting`)
+  if ('status' in found) return found
+  if (checkApproval(found.doc, c.trusted).ok) return null
+  if (found.doc.sha !== sha) return { status: 409, error: `"${id}" changed in the store after it was moved: discard the move, then move it again` }
   return write(c, id, found.cached.path, approvedText(found.doc, c.key, c.config.approverName, nowIso(now)), found.cached.docSha)
 }
 
@@ -386,4 +421,21 @@ export async function editCentral(c: Central, id: string, set: Record<string, un
     return { status: 409, error: `"${id}" was not saved: ${message(err)}` }
   }
   return write(c, id, found.cached.path, approvedText(next, c.key, c.config.approverName, nowIso(now)), found.cached.docSha)
+}
+
+/** POST meta on a central routine or proposal (any caller): its group and campaigns set, removed or kept, the rest of the
+ *  document as it was. Its approval is kept exactly as it is and not signed again: both keys are unsigned (central.ts UNSIGNED),
+ *  so an approved routine stays approved and runs. The store's copy is this computer's; a changed store answers 409. */
+export async function metaCentral(c: Central, id: string, values: MetaValues): Promise<Refusal | null> {
+  const found = docFor(c, id, `no routine "${id}" is registered here or in the store`)
+  if ('status' in found) return found
+  const front = { ...found.doc.front }
+  applyMeta(front, values)
+  let next: RoutineDoc
+  try {
+    next = parseDoc(id, renderDoc(front, found.doc.body))
+  } catch (err) {
+    return { status: 409, error: `"${id}" was not saved: ${message(err)}` }
+  }
+  return write(c, id, found.cached.path, renderDoc(next.front, next.body), found.cached.docSha)
 }

@@ -212,6 +212,36 @@ class RowBudgetTest(unittest.TestCase):
         self.assertEqual(deliverylib.get(a["id"])["state"], "failed",
                          "a staged row is typed again by the next cycle")
 
+    def test_a_socket_dropped_mid_send_is_judged_by_the_transcript(self):
+        """2026-10-16, the timeout's sibling. A connection reset after the POST went out says
+        nothing about whether the route typed. Read as a not-yet, a send that HAD landed was typed
+        again by the next cycle; the transcript decides. Chat A grew during the call (the reply
+        may have taken: never sent again); chat B did not (nothing landed: staged for next cycle)."""
+        rows = {sid: self._stage(sid) for sid in (SID_A, SID_B)}
+
+        def reset(path, body=None, timeout=None):
+            if path.endswith("/message"):
+                if SID_A in path:
+                    with self.paths[SID_A].open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({"type": "user", "message": {"content": "Carry on"}}) + "\n")
+                raise hydralib.DaemonError(
+                    path, None, "[WinError 10054] An existing connection was forcibly closed")
+            return hydralib._request("POST", path, body if body is not None else {},
+                                     timeout=timeout)
+
+        res = {}
+        with mock.patch.object(hydralib, "api_post", side_effect=reset):
+            for sid, row in rows.items():
+                res[sid] = courier.deliver_one(row, {"instance": "temp1", "title": f"chat {sid[:4]}",
+                                                     "cliSessionId": sid, "live": None},
+                                               budget_secs=BUDGET)
+
+        self.assertTrue(res[SID_A].get("mayHaveLanded"), res[SID_A])
+        self.assertEqual(deliverylib.get(rows[SID_A]["id"])["state"], "failed",
+                         "a staged row is typed again by the next cycle")
+        self.assertTrue(res[SID_B].get("deferred"), res[SID_B])
+        self.assertEqual(deliverylib.get(rows[SID_B]["id"])["state"], "staged")
+
 
 if __name__ == "__main__":
     unittest.main()

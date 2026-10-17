@@ -11,10 +11,11 @@ const factory: ConnectorFactory = ({ home }) => {
     info: {
       id: 'browser',
       name: 'Browser',
-      blurb: "Built into AgentHydra: lets a chat see the saved browsers of its folder, the pages open in them and which chat owns each page.",
+      blurb: 'Lets a chat see the saved browsers of its folder, the pages open in them and which chat owns each page.',
       homepage: 'https://github.com/LunarWerxs/AgentHydra',
       installable: false,
       pane: false,
+      builtIn: true,
     },
     async detect() {
       // Usable always: the service starts on demand, as the dev servers' does.

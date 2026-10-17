@@ -83,13 +83,22 @@ const toggleTier = (tier: FourmanTier) => {
   openTiers.value = next
 }
 
+// The minute refresh runs only while the window is shown; coming back looks at once.
 let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
+function pace() {
+  if (timer) clearInterval(timer)
+  timer = null
+  if (document.hidden) return
   void load()
-  void loadKeys()
   timer = setInterval(() => void load(), REFRESH_MS)
+}
+onMounted(() => {
+  document.addEventListener('visibilitychange', pace)
+  pace()
+  void loadKeys()
 })
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', pace)
   if (timer) clearInterval(timer)
 })
 </script>

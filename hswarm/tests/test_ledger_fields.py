@@ -57,6 +57,9 @@ def test_a_free_try_that_failed_becomes_a_free_miss_row(fake):
     row = ledger.free_miss_row(note, "j1", "t0")
     assert (row["free_miss"], row["provider"], row["status"], row["cost_usd"], row["model"]) == (True, "free", "error", 0.0, "free:gpt-5-6-mini")
     assert row["error_kind"] == "unavailable" and row["job"] == "j1" and row["task"] == "t0"
+    # The reason survives in the row: the task's route note is replaced by the leg that served it.
+    said = ledger.free_miss_row({**_note(), "error": "free_chat: the account is signed out"}, "j1", "t0")
+    assert said["free_error"] == "free_chat: the account is signed out"
 
 
 def test_a_refused_send_names_the_model_from_the_account_provider(fake, monkeypatch):

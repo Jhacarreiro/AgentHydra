@@ -37,6 +37,8 @@ const keyOf = (l: DevWebLogLine): string => (l.seq !== undefined ? `#${l.seq}` :
 function merge(into: DevWebLogLine[], add: DevWebLogLine[]): DevWebLogLine[] {
   const seen = new Set(into.map(keyOf))
   const fresh = add.filter((l) => !seen.has(keyOf(l)) && (l.seq === undefined || l.seq > clearedTo))
+  // Nothing new (the usual poll): hand back the same array so the view keeps its lines untouched.
+  if (!fresh.length) return into
   return [...into, ...fresh].sort((a, b) => (a.seq !== undefined && b.seq !== undefined ? a.seq - b.seq : a.ts - b.ts))
 }
 

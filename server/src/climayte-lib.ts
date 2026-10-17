@@ -88,7 +88,7 @@ export interface CliMayteAttempt {
    *  live CLI's stdin mid-turn (climayteSend). `deliveries` lists them in order; `accepted` is set once
    *  the runner answered 200. Whether the CLI read one is told by its echo on the stdout log. */
   deliver?: { token: string; portFile: string; delivered: string }
-  deliveries?: { requestId: string; text: string; accepted: boolean }[]
+  deliveries?: { requestId: string; text: string; accepted: boolean; read?: true }[]
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
    *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading
@@ -212,6 +212,18 @@ export function roleOf(w: {
   return w.desk?.manager ? 'seat' : 'prime'
 }
 
+/** A Hydra Core seat: a chat sat as a catalog persona under a Prime (climayte.ts seatTask), whose Prime sums it up
+ *  with the time left, so it estimates each message (SEAT_ETA_INSTRUCTION). A Desk chat pinned to a manager is a
+ *  seat by roleOf too, but has no persona and no Prime above it to show an estimate. */
+export function isCoreSeat(w: {
+  role?: CliMayteRole
+  chat?: boolean
+  desk?: { manager?: string }
+  persona?: string
+}): boolean {
+  return w.chat === true && !!w.persona && roleOf(w) === 'seat'
+}
+
 export const DRONE_REFUSAL =
   'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
 
@@ -238,6 +250,12 @@ export function verdictCoversNewestWork(w: {
 }): boolean {
   const at = w.verdicts?.at(-1)?.at
   return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
+}
+
+/** A message request id a worker took (CliMayteWorker.sendIds) and when (epoch ms). */
+export interface CliMayteSendId {
+  id: string
+  at: number
 }
 
 export interface CliMayteWorker {
@@ -306,9 +324,10 @@ export interface CliMayteWorker {
    *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
    *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */
   requestId?: string
-  /** The newest message request ids it took (climayteSend `requestId`, at most SEND_IDS_KEPT): the
-   *  same message sent again is answered as taken and queued once. */
-  sendIds?: string[]
+  /** The message request ids it took within SEND_ID_WINDOW_MS (climayteSend `requestId`), each with
+   *  when it was taken: the same message sent again is answered as taken and queued once. A bare
+   *  string is an id saved before they carried their time (climayte.ts keptSendIds). */
+  sendIds?: (CliMayteSendId | string)[]
   /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
    *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
   sealed?: CliMayteSealed
@@ -1492,8 +1511,10 @@ export const RECAP_HEADER = '## What I did'
 export function statusTurns(w: Pick<CliMayteWorker, 'result' | 'results' | 'reports'>): string[] {
   const now = w.results?.length ? w.results : w.result ? [w.result] : []
   if (now.some((t) => t.includes(RECAP_HEADER))) return now
-  for (const r of [...(w.reports ?? [])].reverse()) {
-    const turn = [...r.results].reverse().find((t) => t.includes(RECAP_HEADER))
+  const reports = w.reports ?? []
+  for (let i = reports.length - 1; i >= 0; i--) {
+    const r = reports[i]!
+    const turn = r.results.findLast((t) => t.includes(RECAP_HEADER))
     if (turn)
       return [
         `[Earlier report, for: ${r.message}]
@@ -1678,7 +1699,18 @@ function jsonlUnder(dir: string, depth: number): string[] {
   )
 }
 
-const oneLine = (s: string, n: number): string => s.replace(/\s+/g, ' ').trim().slice(0, n)
+function oneLine(s: string, n: number): string {
+  if (s.length <= 65_536) return s.replace(/\s+/g, ' ').trim().slice(0, n)
+  const text = s.trim()
+  if (!text) return ''
+  const k = Math.max(n * 8, 4096)
+  const head = text.slice(0, k).replace(/\s+/g, ' ')
+  // An extra normalized character proves the requested prefix is complete, even at a space.
+  // Sparse text falls back after one small probe instead of repeatedly rescanning long gaps.
+  const normalized = head.length >= n + 1 || text.length <= k ? head : text.replace(/\s+/g, ' ')
+  // Copy only the retained UTF-16 units, so a tiny stored summary cannot keep the body alive.
+  return normalized.slice(0, n).split('').join('')
+}
 
 export function summarizeEvent(raw: unknown): string | null {
   const ev = raw as any
@@ -1690,8 +1722,9 @@ export function summarizeEvent(raw: unknown): string | null {
   if (ev?.type === 'system' && ev.subtype === 'init') return `started (${ev.model ?? 'unknown'})`
   if (ev?.type !== 'assistant' || !Array.isArray(ev.message?.content)) return null
   for (const b of ev.message.content) {
-    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-      return `said: ${oneLine(b.text, 140)}`
+    if (b?.type === 'text' && typeof b.text === 'string') {
+      const preview = oneLine(b.text, 140)
+      if (preview) return `said: ${preview}`
     }
     if (b?.type === 'tool_use') {
       const i = b.input ?? {}
@@ -2290,9 +2323,14 @@ export function leanText(w: CliMayteWorker): CliMayteLeanText {
 }
 
 /** Copy ordinary list fields without invoking any packed-text accessor. */
-function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+function withoutWorkerText(
+  w: CliMayteWorker,
+  text: CliMayteLeanText,
+  omit?: ReadonlySet<string>,
+): CliMayteWorker {
   const row: Record<string, unknown> = {}
   for (const key of Object.keys(w)) {
+    if (omit?.has(key)) continue
     if (key === 'prompt') row.prompt = text.prompt
     else if (key === 'result') row.result = null
     else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
@@ -2316,13 +2354,68 @@ export function toView(
   lookup?: OriginLookup,
   text?: CliMayteLeanText,
 ): CliMayteWorkerView {
-  const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
+  return projectWorkerView(w, now, FULL_VIEW_PROJECTION, lookup, text)
+}
+
+/** A list chooses its final attempt/verdict rows before they are built. Common fields stay on the
+ *  same fresh view, including older or unknown worker fields copied from the record. */
+export interface WorkerViewProjection<A, V> {
+  attempts(w: CliMayteWorker): A[]
+  verdicts(w: CliMayteWorker): V[] | undefined
+  /** Opt-in list contracts can leave unused raw fields unread; common derived fields stay fresh. */
+  omitWorkerFields?: ReadonlySet<string>
+}
+
+type ProjectedWorkerView<A, V> = Omit<CliMayteWorkerView, 'attempts' | 'verdicts'> & {
+  attempts: A[]
+  verdicts?: V[]
+}
+
+const FULL_VIEW_PROJECTION: WorkerViewProjection<
+  CliMayteWorkerView['attempts'][number],
+  NonNullable<CliMayteWorkerView['verdicts']>[number]
+> = {
+  verdicts: (w) =>
+    w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+    })),
+  attempts: (w) =>
+    w.attempts.map((a, i) => {
+      const because = attemptCause(w, i)
+      return {
+        account: { id: a.account.id, num: a.account.num, name: a.account.name },
+        outcome: a.outcome,
+        notice: a.notice,
+        requested: a.requested,
+        model: a.model,
+        ...(a.ceiling ? { ceiling: true } : {}),
+        tokens: a.tokens,
+        costUsd: a.spend ? a.spend.costUsd : null,
+        turns: a.spend ? a.spend.turns : null,
+        pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
+        rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
+        ...(because ? { because } : {}),
+        ...(a.left?.length ? { left: a.left } : {}),
+        ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
+      }
+    }),
+}
+
+export function projectWorkerView<A, V>(
+  w: CliMayteWorker,
+  now: number,
+  projection: WorkerViewProjection<A, V>,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): ProjectedWorkerView<A, V> {
+  const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...(text ? withoutWorkerText(w, text) : w),
+    ...(text ? withoutWorkerText(w, text, projection.omitWorkerFields) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
-    // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
+    // Bookkeeping for repeated sends, ten minutes of ids: no view reads it.
     sendIds: undefined,
     prompt: text ? text.prompt : w.prompt.slice(0, 300),
     ...(text ? undefined : keptReport(w)),
@@ -2338,27 +2431,9 @@ export function toView(
     saidLine: undefined,
     saidAt: undefined,
     stateAt: undefined,
-    reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
-    verdicts: w.verdicts?.map(({ units, ...v }) => ({
-      ...v,
-      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
-    })),
-    attempts: w.attempts.map((a, i) => ({
-      account: { id: a.account.id, num: a.account.num, name: a.account.name },
-      outcome: a.outcome,
-      notice: a.notice,
-      requested: a.requested,
-      model: a.model,
-      ...(a.ceiling ? { ceiling: true } : {}),
-      tokens: a.tokens,
-      costUsd: a.spend ? a.spend.costUsd : null,
-      turns: a.spend ? a.spend.turns : null,
-      pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
-      rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
-      ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
-      ...(a.left?.length ? { left: a.left } : {}),
-      ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
-    })),
+    reportedModel: w.attempts.findLast((a) => a.model)?.model ?? null,
+    verdicts: projection.verdicts(w),
+    attempts: projection.attempts(w),
     used: (() => {
       const all = w.attempts.reduce(
         (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),

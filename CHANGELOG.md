@@ -7,13 +7,39 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-**TL;DR**
+- **ChatGPT Free sends no longer stop working after the browser service goes idle.** On Windows the background browser could get stuck while shutting down, and every ChatGPT send then failed after about 25 seconds until it was killed by hand. It now always finishes shutting down, and a failed send says why instead of only "interrupted".
 
-- **Codex chats from your other PCs appear here, and Desk can continue them**
-- **Codex starts on a Mac or Linux PC that runs AgentHydra as a service**
+- **A central routine can run on every computer at once.** `"eachRunner": true` in a routine document makes every runner carrying its `runsOn` labels run its own copy over its own data, unclaimed and of any kind, status routines included. It is signed with the rest of the document, and a Desk older than this lists such a document as broken rather than running it.
 
-**Everything in Unreleased**
+- **Rejected and cleared logins no longer look available.** Empty CLI and decrypted Desktop credentials report signed out. An explicit authentication rejection marks only the unchanged CLI or Codex login it checked; network failures and verification refusals do not mark accounts dead.
 
+- **A fresh Desktop login can restore its linked CLI.** An idle linked CLI with an expired or rejected login can take the Desktop's fresh grant, and a verified account check clears its signed-out state. Healthy independent CLI logins and active work stay protected.
+
+- **See available accounts and a quieter status header.** The account kind counts exclude signed-out and inactive entries while keeping those rows available for repair. Scheduler status is shorter and the helper indicator shows its count, with details still available on demand.
+
+- **Renew existing Free and Go accounts without a capacity limit.** Refreshing a saved account, including a signed-out or retired one, keeps its existing entry and never displaces another account. The configured limit still applies to new imports, and every renewal still verifies the account and its plan.
+
+- **Make room in the Free pool without losing saved logins.** An idle Free account can leave the active pool while keeping its login and history. Busy, pending and paid accounts stay protected.
+
+- **Claude verification refusals preserve saved logins.** A temporary verification page no longer marks an account signed out. Explicit expired or invalid sessions still require renewal.
+
+- **Fresh ChatGPT logins finish importing when cookies refresh.** The account check now proves the saved login after a legitimate refresh, while still rejecting a different account or a later change. A valid renewal no longer stays pending just because ChatGPT rotated its cookies.
+- **Logging out on one PC is no longer undone by another.** A Claude session or Desktop app still running on the other PC refreshes its login, and login sync took that refresh for a new sign-in and signed the account back in everywhere; now only a real sign-in after the logout does. A Desktop copy is also judged newer by its own sign-in grant, not by a year-long one beside it.
+- **People sync keeps a newer CrAInium edit over an unchanged copy here.** A checkout, copy or restore that rewrote a person's files without changing them made that old copy look newer and replace the edit; now a copy unchanged since the last sync never wins.
+- **Much more work goes to your Free accounts.** Read and web tasks try your Free accounts before CliMayte and paid models, and a task that fails on one Free account moves to another, keeping its progress, instead of going straight to a paid model. Tool-free work asks the Free model that suits it (Sonnet for decisions and research), and a task with nowhere to go waits briefly for a Free account before paying.
+- **ChatGPT Free sends work again.** A send no longer fails when the ChatGPT page changes the typed text or is slow to switch to Temporary Chat: the message that goes out is your exact prompt, sent only once the page shows Temporary Chat on, and the chat is still checked to be temporary afterwards. A failure now says which check failed.
+- **Claude Free accounts are not overloaded.** Each takes one HSwarm task at a time, an account whose 5-hour window has reset counts as having room again, and a finished answer is no longer thrown away when Claude is slow to store it.
+- **A Free outage shows up.** `hswarm doctor` warns when a Free provider is resting or failing most of its sends, and AgentHydra keeps a failing provider's rest across restarts.
+- **A chat with a background task still running no longer looks idle in the sidebar.** A Claude Desktop or CLI chat whose reply has finished while its background command, watcher or workflow still runs now shows the orange running dot at full brightness, as AgentHydra's own chats do, instead of the dim idle ring.
+- **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
+- **Connectors is a compact table.** Settings → Connectors lists each connector on one line with its type, status, action and switch; details open under it. A connector that is not installed can no longer be switched on.
+- **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
+- **A Tools tab.** Managers and routines in one place: an overview of each at a glance, the sidebar split into Managers and Routines, and each one's page. The managers moved here from HSwarm.
+- **Routines show the campaigns they work for.** A routine names its campaigns, and its page shows each one's sent, replied, bounced and ready counts, its last run, and what is happening now and next.
+- **The Instances filter applies to every row.** CLI, Free and DeepSeek harness rows now follow the plan and status filters, and the plan list offers their plans too.
+- **A login warning clears itself after you sign in.** A running app whose login could not be confirmed is checked again every few seconds, so its warning goes away soon after you sign back in.
+- **A closed app shows as closed within seconds.** Closing a Claude, Codex or CLI session outside AgentHydra now shows on its row in a few seconds instead of at the next refresh. A process check that times out no longer shows every Codex app as closed.
+- **Shared chats no longer fill the sync store.** Each PC keeps its own copy, so the store now lets go of a chat's transcript as soon as your other PCs have it, instead of keeping every chat whole until the store is full. A PC that joins later or lost its copy asks for the chat again and gets it whole, and when room is short your most recently active chats go first.
 - **Codex chats from your other PCs appear here, and Desk can continue them.** Each PC can send its Codex chats
   to one AgentHydra you pick as the hub, which lists, searches and opens them beside its own, each marked with its
   PC. While that PC is on, Desk continues one of its chats there, on that PC's files and Codex sign-in, asking for
@@ -22,6 +48,89 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   than your terminal does, so AgentHydra could miss Codex, or find an npm install of it that could not start. It
   now looks where Codex is usually installed and starts it so it finds its own Node.js, and a Codex that fails to
   start says why.
+
+## [2.0.5] - 2026-10-16
+
+**TL;DR**
+
+- **AgentHydra is now free for noncommercial use**
+- **Routines replace ArchAIngel: scheduled jobs you approve, kept in one central place every PC can read**
+- **Codex chats continue in AgentHydra's window and move between Codex accounts with all their history**
+- **Pick several chats in the sidebar and act on them at once; park, duplicate or add a note to any chat**
+- **A chat sums up the seats it opened and shows what it handed to HSwarm and CliMayte**
+- **Command packs bring a team's slash commands and skills to every account**
+- **CliMayte is part of HSwarm, and Free ChatGPT and Claude accounts take on more of its work**
+- **People, and Sue, Dredd and the price check, are private add-ons; your people can follow you to other PCs**
+- **A revoked login no longer shows as "rate limited", and signing in again fixes it**
+- **AgentHydra no longer freezes for about an hour a day, and uses about half the CPU while CliMayte works**
+- **AgentHydra no longer types into your Claude windows by itself**
+- **Stuck shared chats finish, and a full chat store clears itself**
+- **Restart to update restarts AgentHydra itself too, and your always-on helpers keep running through it**
+- **Build tools are updated past three security advisories**
+
+**Everything in 2.0.5**
+
+- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
+- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
+- **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
+- **Codex chats import again when every Claude account is full.** Since the Default login left Hydra Desk, continuing a Codex chat from outside Desk was refused with "no account has room" whenever no Claude account had room, though a Codex chat runs on Codex. Its Claude account is only where it would go if switched back to Claude, so CliMayte now places it instead.
+- **Stuck shared chats finish, and a full chat store clears itself.** A shared chat whose transcript moved to a new session no longer sits at "receiving" on your other PC: it is sent again from the start, and a PC that finds pieces of a chat missing asks for it again. Once a day the sync store also frees transcript pieces no chat uses anymore, which had filled its room and stopped new chats from being shared.
+- **Hydra Desk no longer shows the built-in Default login.** It is absent from account lists, pickers and Settings, and new, imported, moved or retried chats go to a signed-in account with room. Existing chats recorded on it still open with their transcript.
+- **Unchanged Free chat lists keep their history cache.** Background account checks no longer make the app download and process the whole chat history when nothing changed. Real chat updates, titles and errors still refresh it.
+- **Background helpers discard output their callers do not need.** CliMayte process checks still drain error pipes, but no longer decode and retain their text when error output was explicitly disabled. Requested output and timeout cleanup keep their existing behavior.
+- **Timed-out helpers release unfinished pipe readers.** A pipe held open after the capture deadline no longer keeps decoding or retaining output in the background. Partial output and the existing process cleanup remain available.
+- **Timed-out Free helpers no longer wait indefinitely for inherited output pipes.** Timeout, cancellation and output limits settle after a short cleanup grace while preserving partial output and the stop reason. Ordinary helper completion and hidden process launches keep their existing behavior.
+- **Free history rows stay cached during account-status refreshes.** Login and quota updates no longer rebuild unchanged chat rows. Account labels, membership, ordering and real history changes still refresh normally.
+- **CliMayte builds long-message previews from a bounded prefix.** Large assistant reports and tool commands avoid normalizing text their activity summary discards. Whitespace, Unicode and displayed summaries keep their existing behavior.
+- **Expired Free Claude logins stop automatic reads and nudges.** An explicit login-expired response now marks the login signed out while preserving its recorded account details. Temporary connection and browser-verification failures still leave the login status unchanged.
+- **A chat now sums up the seats it opened.** Under its last message, a line reads like "3 seats · Mia needs you · Ava, Leo working · 4 agents running · about 1 h left", and each name opens that seat. Seats now estimate each message, and the time left comes from their estimates and their agents'; without one, it says how long the seats have been at it.
+- **Command packs bring a team's slash commands and skills to every account.** Add a git repo in Settings → Command packs, and its commands and skills are copied into every Claude and Codex account on this PC and kept current every 10 minutes. A copy someone edited, or a file of their own with the same name, is kept as it is.
+- **A routine can move to the central store from its card.** With a central store set, each of this PC's routines has Move to central. The routine keeps running from its file until you approve the move; approving runs it from the store and puts the file away in the same step, so it never runs twice, and discarding keeps the file as it was.
+- **HSwarm finds each key's own region.** DashScope, StepFun, Moonshot and Z.ai keys that only work in the region that issued them, such as China-issued keys, are now found on their own region and kept there. They no longer look revoked, keys from different regions share one pool, and no per-machine endpoint setting is needed.
+- **Refreshed CLI logins can clear an outdated signed-out status.** A read-only server check verifies the current login and account before lifting its authentication block. Rejected logins, account restrictions and genuine rate limits stay protected.
+- **HSwarm service providers can use query-parameter authentication.** Explicitly configured services and their credential checks send the selected key in the required query field. Other providers keep their existing headers and key rotation behavior.
+- **Windows process checks use a lighter snapshot when available.** Supported Windows versions return process identities without collecting full process statistics. Existing fallback, freshness and unknown-state safeguards stay enforced.
+- **Message previews release the pasted text they no longer need.** Transcript indexes stop at the first nonblank line and detach short previews from large earlier prompts with bounded copy work. Preview text, message order and the newest full prompt stay the same.
+- **Session-file searches keep filesystem work bounded.** Overlapping searches share a small queue instead of creating large bursts of retained filesystem workers. Cwd priority, newest-copy selection and fresh file discovery stay the same.
+- **Free browser cleanup releases discarded response bodies sooner.** Oversized optional snapshots are released before cookie saving and browser cleanup finish. Accepted snapshots and reply confirmation keep their existing behavior.
+- **Shared path strings expire during cache-hit-only activity too.** The sharing pool now advances its retention windows even when every lookup already exists, and clears both expired windows after a long idle gap. Existing string values and eligible sharing remain the same.
+- **HSwarm routes image generation to the cheapest provider that still has credit.** `hswarm image` knows which providers can make or edit images (RunPod and Replicate FLUX, Stability, Ideogram, Leonardo, OpenAI), what each costs, and which keys are still funded; it serves the cheapest one, and moves on when a key is spent or a provider's content filter refuses the picture.
+- **CliMayte's pane leaves unused launch records out of its lists.** Expanded history transfers less data while keeping task status, actions, verdict tooltips and origin labels. Full task details and other list readers keep their existing responses.
+- **Large chat tails trim old records in one pass.** Removing old message groups no longer repeatedly moves the surviving history. Tool pinning, byte limits and incremental ordering keep their existing behavior.
+- **Free readback rejects obviously oversized snapshots before copying them.** A bounded inspection avoids encoding large optional conversation snapshots only to discard them. Other snapshots still pass the same exact byte-limit and JSON validation.
+- **Session lists index only stores that can own subagents.** Large unrelated histories avoid building discarded parent-lookup entries. Store identity, duplicate handling, cycles and displayed ordering keep their existing behavior.
+- **Unchanged OpenCode previews reuse bounded rendered responses.** Small responses avoid rereading and reparsing quiet session history. Fresh database and WAL checks, caller isolation and cache limits remain enforced.
+- **Large chat reads release backing text after later replacements.** Cached long records track their original read so replacing most of a large chunk also releases its surviving text from that chunk. Small-record reads keep their existing lightweight path.
+- **A revoked login no longer shows as "rate limited".** Anthropic answers a revoked login's usage check as if it were rate-limited, so an account could say "wait, it clears on its own" for days. AgentHydra now asks Anthropic which it is and says when a login was revoked, on desktop and CLI rows alike.
+- **Signing in again now fixes a revoked desktop login.** The Claude app keeps a saved login through a sign-in to the same account and goes on using it until its expiry date, even after Anthropic revoked it. AgentHydra removes revoked logins from an instance while it is closed, so the app makes new ones the next time you open it, and Login sync no longer copies them back from your other PC.
+- **HSwarm can use OVHcloud's free hosted models with no key or account.** Seven open models (gpt-oss 120B and 20B, Qwen3.8 27B, Qwen3.6 27B, Qwen3.5 397B, Llama 3.3 70B, Mistral Small 3.2) run on OVHcloud's servers at 2 requests a minute each. Name one to use it; automatic routing never fans out onto them.
+- **HSwarm moves past keys that cannot serve a model instead of failing the task.** A key whose plan leaves a model out now hands the task to another key or another route, and a key whose account has an unpaid bill is set aside like an empty one.
+- **HSwarm no longer tries a Cerebras model its free keys cannot use.** Qwen3.8 27B on Cerebras is paid-only; other routes serve it.
+- **Large usage queries keep every ledger boundary row.** Async paging includes unattributed usage and the full range of session keys. Fallback paging also advances past large groups of rows sharing one session.
+- **Account token windows share small query batches.** Accounts with the same window start share bounded reads instead of repeatedly scanning the same hourly history. Each account keeps its own totals, reset boundaries and fresh-store checks.
+- **Chat history caches release superseded transcript versions.** Reads containing mostly replaced records detach the surviving text instead of keeping the discarded versions alive. Ordinary reads, pending updates and transcript ordering keep their existing behavior.
+- **Large Free replies avoid repeated socket-buffer rescans.** Chunked coordinator responses assemble each protocol line once, reducing temporary memory and parsing work. Request identity, cancellation, output limits and no-replay safeguards remain enforced.
+- **Codex and remote session details skip unrelated desktop scans.** Opening those conversations no longer rebuilds Claude Desktop metadata that their detail view does not use. Local Claude details still resolve fresh desktop state.
+- **CliMayte groups time estimates without repeatedly copying its history.** Large estimate histories build their prompt-version groups in one pass, preserving displayed statistics and review ordering.
+- **Desktop login checks share the filesystem limit.** Overlapping status refreshes and sync passes avoid separate bursts of cookie-database checks and temporary copies. Fresh sign-in detection and temporary-copy cleanup keep their existing behavior.
+- **Queued CliMayte logs allocate their read buffers when admitted.** Large catch-up bursts avoid holding a raw unread-tail buffer for every waiting log. Cursor checks, decoded events and file cleanup remain unchanged.
+- **Live-session and account-history lookups share the filesystem limit.** Transcript existence checks and directory listings join the same queue as other readers. Direct and fallback transcript paths, history ordering and unreadable-record handling stay the same.
+- **CliMayte's history and running logs share the filesystem limit.** Background effort scans, live log reads and registration listings no longer grow separate bursts of retained filesystem workers. Freshness checks, concurrent stop handling and guaranteed file cleanup keep their existing behavior.
+- **Free Claude accounts confirm a chat is private before sending anything.** A new chat is created first, and its message goes out only after Claude confirms the chat is Incognito; otherwise nothing is sent. The unused option for ordinary, non-private chats is gone, so Free accounts can only ever use private chats.
+- **Confirmed Free replies avoid another Python process.** Small browser-confirmed replies use the same validation in the existing account worker after browser cleanup. Replies needing HTTP keep their owned process, and account locks, cancellation, cookie saving and output limits remain enforced.
+- **Unfinished links no longer stall Free reply rendering.** Incomplete link tokens stay unchanged without repeatedly scanning the same text. Completed links, citations and code blocks keep their existing output.
+- **Windows caller tracing reuses its native buffer.** Each request still reads fresh connection ownership, while warm reads avoid a redundant table-size lookup. Failed or malformed reads never return an old identity.
+- **Free page timeouts explain what was observed.** Safe readiness details distinguish loading, missing composers and session lookup failures. Visible login and verification prompts remain detectable when a session lookup fails, without treating the lookup failure itself as a request for human help.
+- **Unchanged Claude folders reuse their transcript paths.** Refreshes avoid rebuilding the same absolute path strings while retaining directory relists, file checks and new or removed transcript detection.
+- **Large scoped CliMayte reads avoid repeated membership searches.** Account-history filters build their membership once per read and skip temporary session arrays. Ordering, live changes and waiting reads keep their existing behavior.
+- **CliMayte's compact history builds only the details it displays.** Large lists avoid constructing discarded attempt fields and copying attempt arrays, while full reports and fresh status reads keep their existing behavior.
+- **Free continuations inspect their selected history once.** Model selection and previous message IDs share one validated projection, which is released before the browser wait. MCP guidance also stops recommending legacy prewarming for automatic sends.
+- **Always-on helpers and the HSwarm server keep running when AgentHydra updates itself.** On Windows they used to end at every self-update restart, along with any request they were serving. The restarted AgentHydra now picks them up where they are, and a program that only shares a helper's port is left alone.
+- **CliMayte keeps quiet history compressed during notification checks.** Heartbeats read only the ownership fields they need, preserving old reports in their compact form. Questions, completion notices and delivery rules stay the same.
+- **Transcript refreshes reuse paths they already calculated.** Scanning history avoids normalizing the same file path again when building its records, while retaining the existing file checks and parent relationships.
+- **Free page preparation avoids repeated sign-in checks while the page loads.** Authentication is still verified when the composer or a login or verification prompt appears, before any message can be sent.
+- **CliMayte avoids replaying messages its running worker already read.** Delivery receipts follow the complete log stream instead of its short display tail, including acknowledgements that arrive after a turn finishes.
+- **CliMayte skips unnecessary checks of finished workers.** Quiet history avoids runner payload reads and check polling, while pending cleanup still receives the full safety checks.
 - **CliMayte reads less transcript data to find an attempt's first request.** Spend calculation stops once it finds the matching usage record, using the same token parser and time window. Long records decode in chunks without assembling an extra full byte buffer.
 - **Desk's freeze profiler uses less background CPU.** After a freeze starts diagnostics, it samples at the same measured interval as the main daemon. Freeze thresholds and named-function reports remain unchanged.
 - **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.

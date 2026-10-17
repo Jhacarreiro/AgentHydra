@@ -1,6 +1,19 @@
 # Alibaba DashScope (Qwen), international endpoint.
 
 base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+# A Model Studio key works only in the region that issued it; elsewhere it answers 401 invalid_api_key. The shared
+# OpenAI-compatible endpoints of Alibaba's Base URL overview (https://www.alibabacloud.com/help/en/model-studio/base-url):
+# Singapore, China (Beijing), China (Hong Kong), US (Virginia; its models carry a "-us" suffix). A key that 401s here is
+# looked for on the others once and kept on the region that serves it (client.find_region), so no per-machine base_url.
+region_base_urls = [
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+]
+# The free credential check, and the GET a region is asked with. Alibaba documents the native /api/v1/models list;
+# this OpenAI-compatible one answered 200 with 176 models for China keys on 2026-10-16 and 401 without a key.
+check_path = "/models"
 transport = "openai"
 capabilities = ["chat"]
 passthrough = ["dashscope:"]

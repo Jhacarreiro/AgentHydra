@@ -117,9 +117,9 @@ hswarm service pinecone index_stats --key-fingerprint=0123abcd
 ```
 
 StepFun defaults to the international standard API, `https://api.stepfun.ai/v1`. A China-issued
-key needs the China account's `https://api.stepfun.com/v1` endpoint. Set that `base_url` in the
-user's `~/.hswarm/providers/stepfun.toml` overlay when applicable; H Swarm does not try keys across
-regional account systems. Step Plan subscriptions also require their account-specific
+key needs the China account's `https://api.stepfun.com/v1` endpoint; both are in the provider's
+`region_base_urls`, and a key that answers 401 on one is looked for on the other once and kept where it
+answers (see "Regional keys" below). Step Plan subscriptions also require their account-specific
 `/step_plan/v1` endpoint. The model catalog also includes speech synthesis, realtime and image models;
 `chat_model_pattern` keeps those out of chat discovery while allowing the documented Step, Step-R,
 StepAudio chat and Step-1o vision models, which return text through Chat Completions. See
@@ -131,10 +131,23 @@ New language-model catalogs are reachable by explicit model ID through `baseten:
 `stepfun:`. These carry no guessed
 token prices or benchmark ranking. An evaluated AUTO route is added only with supporting evidence.
 
-DashScope's built-in URL is its legacy international Singapore endpoint. API keys are regional;
-configure the account's documented region/workspace `base_url` in the local provider overlay.
-An authentication refusal from another region does not establish that a key is revoked.
-See [Alibaba's OpenAI compatibility and regional endpoint documentation](https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope).
+DashScope's built-in URL is its international Singapore endpoint. API keys are regional: a key answers
+401 `invalid_api_key` outside the region that issued it. Its `region_base_urls` are the four shared
+OpenAI-compatible endpoints of [Alibaba's Base URL overview](https://www.alibabacloud.com/help/en/model-studio/base-url):
+Singapore, China (Beijing), China (Hong Kong) and US (Virginia, whose models carry a `-us` suffix). A
+workspace-dedicated `base_url` (`{WorkspaceId}.<region>.maas.aliyuncs.com`) still goes in the local
+provider overlay.
+
+**Regional keys.** DashScope, StepFun, Moonshot (`api.moonshot.ai` / `api.moonshot.cn`) and Z.ai
+(`api.z.ai` / `open.bigmodel.cn`) list every region in `region_base_urls`. When a key answers 401 on
+the URL it was sent to (a chat call, a model-list or balance GET, the Anthropic facade, or the
+`hswarm keys` credential check), each other listed region is asked once for the provider's free
+`check_path` or `models_path` with that key. The first that answers 200 is written to the key's row of
+the shared key state (its fingerprint, never the key), and every later request with that key goes
+there; the 401 that found it costs no strike. A key is never sent to a host outside its provider's
+`base_url` and `region_base_urls`, and a key every region refuses takes its strike and rests as
+before. Keys from different regions therefore share one pool, and the region is found again on each
+machine, so nothing per-machine has to travel with the keys.
 Providers without a chat model catalog endpoint still accept explicit model IDs through their prefix.
 
 Provider operations are configurable in `providers/<provider>.toml`: `transport`, `capabilities`,

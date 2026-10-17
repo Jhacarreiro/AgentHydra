@@ -146,18 +146,19 @@ function planFor(inst: CliInstance): string | null {
 }
 
 /**
- * What one CLI row is, as far as the filter is concerned.
+ * What one CLI row is, as far as the filter is concerned. Every facet acts on it (owner, 2026-10-16: "make every
+ * row type obey every filter", after rows of other kinds showed through a plan filter).
  *
- * `open` is deliberately absent, not `false`: a CLI login, linked or not, is a CLAUDE_CONFIG_DIR,
- * not an app, so it is never open OR closed, and the filter's "an unknown fact never sets a row aside"
- * rule leaves this table alone when you filter by status. Claiming `false` would empty it the
- * moment someone asked for the open accounts. Its plan is left out too, as the filter flyout
- * offers no CLI plans (InstancesView's presentPlans), so a plan the menu cannot name never sets a
- * CLI row aside.
+ * `plan` is the plan its Plan cell shows (its own, else its linked desktop row's), so a plan selection sets aside
+ * a CLI login on another plan exactly as it does a desktop row; an unknown plan is still unknown and never sets one
+ * aside. `open` is whether a session runs on the login now (its live sessions, the row's "Now"): a CLI login has no
+ * window, so "open" means in use. A list that does not say how many sessions are live leaves it unknown.
  */
 const filterFacts = (inst: CliInstance) => ({
   usage: usageFor(inst),
   signedIn: inst.loggedIn,
+  plan: planFor(inst),
+  open: inst.liveSessions == null ? null : inst.liveSessions > 0,
   search: searchText(
     inst.num,
     inst.name,
@@ -474,13 +475,13 @@ function openDeleteDialog(inst: CliInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDeleteConfirm(confirmName: string) {
+async function onDeleteConfirm(note: string) {
   const inst = deleteTarget.value
   if (!inst) return
   deleting.value = true
   deleteError.value = null
   try {
-    const result = await remove(inst.id, confirmName)
+    const result = await remove(inst.id, note)
     if (result?.ok) {
       toast.success(t('cliInstances.toastDeleted'))
       // Quick add must not sign in again into an instance that is gone.
@@ -905,7 +906,6 @@ defineExpose({
   <DeleteInstanceDialog
     namespace="cliInstances"
     v-model:open="deleteOpen"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDeleteConfirm"

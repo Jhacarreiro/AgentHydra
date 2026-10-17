@@ -3,8 +3,6 @@ import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AccountInfo, AccountRef, ChatSummary, CliMayteWorker, ImportSessionRequest, TranscriptItem } from '@shared/protocol'
 import { titleFrom } from '@shared/chat-title'
-import { DEFAULT_ACCOUNT } from '../bridge'
-import { hasRoom } from '../bridge/accounts'
 import { retryItemsOf } from './send-retry'
 import { withoutNamedLines } from './system-text'
 import { IMPORT_TITLE, type Entry, type RetryPace, type StoredRecord, type UserItem } from './chat-manager-types'
@@ -50,14 +48,6 @@ export function importTitle(req: ImportSessionRequest, items: TranscriptItem[], 
 
 /** '#126' for a numbered account, else its label. */
 export const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
-
-/** The healthiest account not tried yet: one with room (hasRoom), the owner's highest priority first, then the least
- *  used; the default login last. */
-export function pickHealthy(accounts: AccountInfo[], tried: string[]): AccountInfo | null {
-  const ok = accounts.filter((a) => !tried.includes(a.id) && hasRoom(a))
-  const load = (a: AccountInfo): number => (a.id === DEFAULT_ACCOUNT.id ? 1000 : Math.max(a.fiveHourPct ?? 0, a.weeklyPct ?? 0))
-  return ok.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || load(a) - load(b))[0] ?? null
-}
 
 /** Doubles the wait before the next try, from firstMs up to maxMs. */
 export function retryLater(pace: RetryPace): void {

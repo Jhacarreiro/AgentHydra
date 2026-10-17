@@ -80,12 +80,12 @@ function fakeCodex(o: { resumeError?: string; up?: Promise<void> } = {}) {
   return { open, turnStarts, thread, calls, held, opening: () => opening }
 }
 
-async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats; up?: Promise<void>; codex?: CodexDirectory } = {}) {
+async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats; up?: Promise<void>; claudePct?: number; codex?: CodexDirectory } = {}) {
   const home = temp('desk-pin-home-')
   const cwd = temp('desk-pin-cwd-')
   mkdirSync(cwd, { recursive: true })
   process.env.HYDRA_DESK_HOME = home
-  const account: AccountInfo = { id: 'acct-1', label: '#1 user (Pro)', configDir: temp('desk-pin-acct-'), number: 1, email: null, plan: 'Pro', signedIn: true, fiveHourPct: 10, weeklyPct: 10, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false }
+  const account: AccountInfo = { id: 'acct-1', label: '#1 user (Pro)', configDir: temp('desk-pin-acct-'), number: 1, email: null, plan: 'Pro', signedIn: true, fiveHourPct: o.claudePct ?? 10, weeklyPct: 10, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false }
   const codex: CodexDirectory = o.codex ?? {
     instances: async () => [ALPHA, BETA],
     usage: async (id) => ({ snapshot: { session: { pct: id === ALPHA.id ? 10 : 40 }, weekAll: { pct: 5 } } }),
@@ -231,6 +231,16 @@ test('a Codex chat run outside Desk continues here in its own thread, on the acc
   expect(fake.held()).toEqual([])
   expect(fake.calls('thread/unsubscribe')).toEqual([{ home: BETA.codexHome, threadId }])
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Two files.', 'Carrying on.'])
+})
+
+test('a Codex chat run outside Desk continues here while no Claude account has room: its Claude account is only where a pin back would go', async () => {
+  const threadId = '0f0f0f0f-1111-4222-8333-666666666666'
+  const cwd = temp('desk-pin-full-')
+  const outside: ExternalSession = { id: threadId, title: 'Full', cwd, source: 'codex', instance: '#8 beta', status: 'idle', activity: null, lastActivityAt: 2, model: null, accountId: null, codexAccountId: BETA.id, canResume: true, fromPc: null, pinned: false, archived: false, unread: false, group: null }
+  const { m } = await setup({ external: [outside], items: { [threadId]: [] }, claudePct: 99 })
+
+  const chat = await m.importSession({ sessionId: threadId })
+  expect(chat).toMatchObject({ service: 'codex', cwd, serviceThreads: { codex: { accountId: BETA.id, threadId } } })
 })
 
 test("a Codex chat its Codex app holds open waits, in a sentence, and is never started over in a new thread", async () => {
@@ -408,6 +418,154 @@ function fakeFree(instances: FreeInstance[]) {
   const finish = (result: FreeResult, requestId?: unknown) => Object.assign(requestId === undefined ? [...jobs.values()].at(-1)! : jobs.get(String(requestId))!, { state: 'done', result })
   return { free, asked, finish, cancelled }
 }
+
+test('pending and retired ChatGPT logins are not ready accounts and never win a new chat pick', async () => {
+  const pending = { ...GPT(1, 'pending', true), poolState: 'pending' as const }
+  const retired = { ...GPT(2, 'retired', true), poolState: 'retired' as const }
+  const accounts = [pending, retired] as FreeInstance[]
+  const f = fakeFree(accounts)
+  const { m, chat } = await setup({ free: f.free })
+  expect((await m.services()).find((s) => s.kind === 'chatgpt')).toMatchObject({ ready: false, accounts: 0 })
+  const active = GPT(3, 'active', false)
+  accounts.push(active)
+  expect((await m.services()).find((s) => s.kind === 'chatgpt')).toMatchObject({ ready: true, accounts: 1 })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Use an active account')
+  await waitFor(() => f.asked.length === 1)
+  expect(f.asked[0]).toMatchObject({ instanceId: active.id, command: 'chat' })
+  f.finish({ ok: true, chat_id: '88888888-2222-4333-8444-000000000001', response: 'Active answer.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  expect(m.get(chat.id).serviceThreads?.chatgpt?.accountId).toBe(active.id)
+})
+
+for (const poolState of ['pending', 'retired'] as const) {
+  test(`a bound ChatGPT thread on a ${poolState} login keeps its owner and asks to wait or renew`, async () => {
+    const owner = GPT(3, 'owner', true)
+    const accounts = [owner, GPT(4, 'other', false)]
+    const f = fakeFree(accounts)
+    const { m, chat } = await setup({ free: f.free })
+    await m.patch(chat.id, { service: 'chatgpt' })
+    await m.send(chat.id, 'Establish the thread')
+    await waitFor(() => f.asked.length === 1)
+    const chatId = '88888888-2222-4333-8444-000000000002'
+    f.finish({ ok: true, chat_id: chatId, response: 'Thread established.' })
+    await waitFor(() => m.get(chat.id).status === 'idle')
+    const binding = { accountId: owner.id, label: '#3 owner', threadId: chatId }
+    expect(m.get(chat.id).serviceThreads?.chatgpt).toEqual(binding)
+
+    // Replacement snapshots are what the real inventory returns; retirement may also mark a login signed out.
+    accounts[0] = { ...owner, poolState, loggedIn: poolState === 'pending' }
+    await m.send(chat.id, 'Continue the same thread')
+    await waitFor(() => m.listItems(chat.id).filter((i) => i.kind === 'result').length === 2)
+    expect(f.asked).toHaveLength(1)
+    const result = m.listItems(chat.id).filter((i) => i.kind === 'result').at(-1)!
+    expect(result).toMatchObject({ ok: false })
+    expect(result.kind === 'result' && result.error).toContain(poolState === 'pending' ? 'Wait for it on the Free page' : 'Renew it on the Free page')
+    expect(m.get(chat.id).serviceThreads?.chatgpt).toEqual(binding)
+  })
+}
+
+test('a signed-out active ChatGPT owner still falls back to a new chat on another account', async () => {
+  const owner = GPT(3, 'owner', true)
+  const next = GPT(4, 'other', false)
+  const accounts = [owner, next]
+  const f = fakeFree(accounts)
+  const { m, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Establish the thread')
+  await waitFor(() => f.asked.length === 1)
+  f.finish({ ok: true, chat_id: '88888888-2222-4333-8444-000000000003', response: 'Thread established.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  accounts[0] = { ...owner, loggedIn: false }
+  await m.send(chat.id, 'Continue after sign-out')
+  await waitFor(() => f.asked.length === 2)
+  expect(f.asked[1]).toMatchObject({ instanceId: next.id, command: 'chat' })
+  f.finish({ ok: true, chat_id: '88888888-2222-4333-8444-000000000004', response: 'Continued.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  expect(m.get(chat.id).serviceThreads?.chatgpt?.accountId).toBe(next.id)
+})
+
+test('a new ChatGPT chat waiting on an account reselects an active login when that account is retired', async () => {
+  const owner = GPT(3, 'owner', true)
+  const next = GPT(4, 'other', false)
+  const accounts = [owner]
+  const f = fakeFree(accounts)
+  const busy = f.free.start({ requestId: 'busy-new-chat', instanceId: owner.id, command: 'chat' })
+  const { m, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Wait for a usable login')
+  await waitFor(() => m.get(chat.id).activity === 'Waiting for #3 owner to finish another message')
+  accounts[0] = { ...owner, poolState: 'retired' }
+  accounts.push(next)
+  f.finish({ ok: true, response: 'Other message finished.' }, busy.id)
+  await waitFor(() => f.asked.length === 2)
+  expect(f.asked[1]).toMatchObject({ instanceId: next.id, command: 'chat' })
+  f.finish({ ok: true, chat_id: '88888888-2222-4333-8444-000000000005', response: 'Active answer.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+})
+
+test('a waiting new ChatGPT chat fails clearly if its only account is retired rather than dispatching a stale pick', async () => {
+  const owner = GPT(3, 'owner', true)
+  const accounts = [owner]
+  const f = fakeFree(accounts)
+  const busy = f.free.start({ requestId: 'busy-only-chat', instanceId: owner.id, command: 'chat' })
+  const { m, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Wait for the only login')
+  await waitFor(() => m.get(chat.id).activity === 'Waiting for #3 owner to finish another message')
+  accounts[0] = { ...owner, poolState: 'retired' }
+  f.finish({ ok: true, response: 'Other message finished.' }, busy.id)
+  await waitFor(() => m.listItems(chat.id).some((i) => i.kind === 'result'))
+  expect(f.asked).toHaveLength(1)
+  expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: false, error: '#3 owner is retired from the ChatGPT pool. Renew it on the Free page, then send again.' })
+  expect(m.get(chat.id).serviceThreads?.chatgpt).toBeUndefined()
+})
+
+test('ChatGPT dispatch checks pool state again after an immediately resolved availability wait', async () => {
+  const owner = GPT(3, 'owner', true)
+  const accounts = [owner]
+  const f = fakeFree(accounts)
+  let changed = false
+  const free: FreeChats = {
+    ...f.free,
+    occupied: () => {
+      if (!changed) {
+        changed = true
+        queueMicrotask(() => { accounts[0] = { ...owner, poolState: 'pending' } })
+      }
+      return false
+    },
+  }
+  const { m, chat } = await setup({ free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Use a verified login')
+  await waitFor(() => m.listItems(chat.id).some((i) => i.kind === 'result'))
+  expect(changed).toBe(true)
+  expect(f.asked).toHaveLength(0)
+  expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: false, error: '#3 owner is waiting for its ChatGPT login import to finish. Wait for it on the Free page, then send again.' })
+})
+
+test('a waiting bound ChatGPT thread does not move to another login when its owner is retired', async () => {
+  const owner = GPT(3, 'owner', true)
+  const accounts = [owner, GPT(4, 'other', false)]
+  const f = fakeFree(accounts)
+  const { m, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'Establish the thread')
+  await waitFor(() => f.asked.length === 1)
+  const chatId = '88888888-2222-4333-8444-000000000006'
+  f.finish({ ok: true, chat_id: chatId, response: 'Thread established.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  const busy = f.free.start({ requestId: 'busy-bound-chat', instanceId: owner.id, command: 'chat' })
+  await m.send(chat.id, 'Continue the same thread')
+  await waitFor(() => m.get(chat.id).activity === 'Waiting for #3 owner to finish another message')
+  accounts[0] = { ...owner, poolState: 'retired' }
+  f.finish({ ok: true, response: 'Other message finished.' }, busy.id)
+  await waitFor(() => m.listItems(chat.id).filter((i) => i.kind === 'result').length === 2)
+  expect(f.asked).toHaveLength(2)
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'result').at(-1)).toMatchObject({ ok: false, error: '#3 owner is retired from the ChatGPT pool. Renew it on the Free page, then send again.' })
+  expect(m.get(chat.id).serviceThreads?.chatgpt).toEqual({ accountId: owner.id, label: '#3 owner', threadId: chatId })
+})
 
 test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that ChatGPT chat, and a limit moves it to another account', async () => {
   const A = GPT(3, 'alpha', true)

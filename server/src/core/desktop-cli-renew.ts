@@ -12,13 +12,18 @@
 // - Only a grant within RENEW_WITHIN_MS of its end, or past it, is refreshed.
 // - A refused or unreachable refresh writes nothing: the stored grant stays exactly as it was.
 // - The write is atomic and goes through the same config key the desktop login sync reads, so the
-//   sync sees the renewed grant as the newer copy.
+//   sync sees the renewed grant as the newer copy, and the next pass sends it at once.
+// - A login the login sync shares is refreshed by one PC only: the refresh rotates the refresh token,
+//   so a second PC refreshing the same one is refused (owner, 2026-10-16: "my Max/desktop accounts
+//   always need to sync"). This PC refreshes only once the store has taken its claim
+//   (cli-login-sync.ts claimDesktopRenewal); otherwise it waits for the renewed copy to land.
 //
 // ⛔ SECRETS: tokens go only to the desktop app's own token endpoint and back into the profile,
 // encrypted. Nothing here logs a token.
 
 import { listCliInstances } from './cli-instances'
 import { credPath } from './cli-login-move'
+import { claimDesktopRenewal, nudgeLoginSync } from './cli-login-sync'
 import { encryptSafeStorage } from './crypto'
 import { hasOwnCliLogin, readCredentials } from './desktop-cli-feed'
 import {
@@ -46,6 +51,9 @@ export interface RenewDeps {
   fetchFn?: typeof fetch
   running?: () => Promise<Set<string> | null>
   withinMs?: number
+  /** Whether this PC may refresh the account's grant now (null) or why it waits; the login sync's
+   *  claim by default. */
+  turn?: (uuid: string, grantExpiresAt: number, now: number) => Promise<string | null>
 }
 
 export type RenewOutcome =
@@ -167,8 +175,16 @@ export async function renewDesktopGrant(dir: string, deps: RenewDeps = {}): Prom
   const last = lastOutcome.get(dir)
   if (last?.outcome.state === 'refused' && now - last.at < RETRY_AFTER_REFUSAL_MS)
     return { state: 'skipped', why: COOLING_DOWN }
+  const wait = tokens?.uuid
+    ? await (deps.turn ?? claimDesktopRenewal)(tokens.uuid, expiresAt as number, now)
+    : null
+  if (wait) return remember(dir, { state: 'skipped', why: wait }, now)
   const fresh = await refreshGrant(refreshToken, now, deps.fetchFn)
-  if (!fresh.ok) return remember(dir, { state: 'refused', why: fresh.why }, now)
+  if (!fresh.ok) {
+    // The store may hold a copy another PC renewed: the next pass brings it.
+    nudgeLoginSync()
+    return remember(dir, { state: 'refused', why: fresh.why }, now)
+  }
   // The app may have opened during the refresh; a running app is never written.
   const again = await (deps.running ?? runningDesktopDirs)()
   if (!again || again.has(key))
@@ -195,7 +211,13 @@ export async function renewDesktopGrant(dir: string, deps: RenewDeps = {}): Prom
       { state: 'refused', why: 'the renewed login could not be written here' },
       now,
     )
+  nudgeLoginSync()
   return remember(dir, { state: 'renewed', expiresAt: fresh.expiresAt }, now)
+}
+
+/** Each linked profile's last renewal outcome and when, for the status: why a CLI login waits. */
+export function renewalOutcomes(): Array<{ dir: string; at: number; outcome: RenewOutcome }> {
+  return [...lastOutcome].map(([dir, v]) => ({ dir, ...v }))
 }
 
 /** The renewal pass over every linked desktop profile; one profile's failure never stops the rest. */
