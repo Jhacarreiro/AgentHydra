@@ -15,8 +15,8 @@ export type CachedConnector = Pick<ConnectorView, 'id' | 'name' | 'givesChats'> 
 
 export interface RailFacts {
   usage?: AhUsage
-  /** The prompts the session's transcript held when last shown: the header's turns where AgentHydra's usage has none. */
-  turns?: number
+  /** An outside Codex chat's turns over its whole thread (the index's sessionTurns), shown until the index arrives. */
+  codexTurns?: number
   delegation?: ServiceStats[]
 }
 

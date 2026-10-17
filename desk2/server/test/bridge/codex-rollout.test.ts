@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { codexTurnOpen, findCodexRollout, lastCodexContext, TURN_TAIL_BYTES } from '../../src/bridge/codex-rollout'
+import { codexTurnCount, codexTurnOpen, findCodexRollout, lastCodexContext, TURN_TAIL_BYTES } from '../../src/bridge/codex-rollout'
 
 const temps: string[] = []
 const temp = () => {
@@ -60,5 +60,27 @@ describe('a Codex chat rollout', () => {
     expect(open(mark('task_complete'), JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'task_started' } } }))).toBe(false)
     expect(open(item)).toBe(false)
     expect(open(mark('task_complete'), ...Array.from({ length: Math.ceil(TURN_TAIL_BYTES / item.length) + 10 }, () => item))).toBe(true)
+  })
+
+  test('its turns are its task_started marks over the whole file, counted again only where the file grew', async () => {
+    const f = join(temp(), 'rollout.jsonl')
+    const mark = (type: string) => JSON.stringify({ timestamp: '2019-10-23T10:00:00Z', type: 'event_msg', payload: { type } })
+    // A message that mentions the mark, and an event nesting its type, are not turns.
+    const said = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '{"payload":{"type":"task_started"}}' }] } })
+    const nested = JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'task_started' } } })
+    const turn = [mark('task_started'), said, nested, count(null), mark('task_complete')].join('\n') + '\n'
+    writeFileSync(f, turn.repeat(3))
+    expect(await codexTurnCount(f)).toBe(3)
+    // Codex appends while Desk reads: a count taken with a mark half written finds it once the rest is there.
+    const next = mark('task_started')
+    const cut = next.indexOf('task_started')
+    appendFileSync(f, next.slice(0, cut))
+    expect(await codexTurnCount(f)).toBe(3)
+    appendFileSync(f, next.slice(cut) + '\n' + turn)
+    expect(await codexTurnCount(f)).toBe(5)
+    expect(await codexTurnCount(f)).toBe(5)
+    // A file that shrank was replaced: counted from its start.
+    writeFileSync(f, turn)
+    expect(await codexTurnCount(f)).toBe(1)
   })
 })

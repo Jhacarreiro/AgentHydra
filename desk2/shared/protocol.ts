@@ -349,6 +349,10 @@ export interface TranscriptIndex {
   /** An outside Codex session's: the tokens its thread has used so far (its rollout's total_token_usage), which AgentHydra's
    *  usage route does not count for Codex; null when the rollout has none, absent on a Claude Code session. */
   sessionTokens?: number | null
+  /** An outside Codex session's: its thread's turns (its rollout's task_started marks over the whole file), which AgentHydra's
+   *  usage route does not count and the items Desk holds, the thread's newest part, cannot; null when no rollout was found,
+   *  absent on a Claude Code session. */
+  sessionTurns?: number | null
   /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
   tools?: ToolTally[]
   /** How long the session was working, in ms, over the whole transcript (shared/transcript-index.ts activeTime): its turns,

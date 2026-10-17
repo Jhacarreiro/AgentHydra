@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ChevronDown, ChevronUp, Coins, MessagesSquare, Monitor, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { SearchResult } from '@shared/find'
-import type { ExternalSession, TranscriptItem } from '@shared/protocol'
+import type { ExternalSession, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { actionError } from '@/lib/action-error'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -70,6 +70,8 @@ const props = defineProps<{
   session: ExternalSession | null
   /** Every item, for the turn count. */
   items: TranscriptItem[]
+  /** The server's index of the whole transcript, once read: an outside Codex chat's turns come from it. */
+  index?: TranscriptIndex | null
   /** What the transcript shows (the display filters applied): what Find searches. */
   shown: TranscriptItem[]
   /** Find over the whole transcript on the server (the items loaded are only its newest part); null when it cannot answer. */
@@ -165,19 +167,25 @@ async function openFolder() {
 const title = computed(() => row.value?.title || props.session?.title || 'Session')
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
 const shortId = computed(() => props.sessionId.slice(0, 8))
-// Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file),
-// else the prompts in the transcript shown: Desk reads only a long session file's last 8 MB. Until the transcript loads, the
-// count it showed last time (rail-cache.ts): an outside Codex chat, whose usage AgentHydra does not count, read "0 turns" for a
-// moment on every revisit, then its real count (2026-10-17).
-const prompts = computed(() => (props.items.length ? turnCount(props.items) : (railFacts(props.sessionId)?.turns ?? 0)))
-watch(prompts, (n) => {
-  if (props.items.length && props.sessionId) keepRailFacts(props.sessionId, { turns: n })
-})
+// Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file); for an outside Codex
+// chat, whose usage AgentHydra does not count, its thread's turns from the index (its rollout's, the server's count), shown
+// from the rail cache until the index arrives; else the prompts in the transcript shown: Desk reads only a long session file's
+// last 8 MB. A Codex chat counted its loaded page's prompts until 2026-10-17, "0 turns" while it loaded and then 15 of 124.
+const prompts = computed(() => turnCount(props.items))
+const codexTurns = computed(() => props.index?.sessionTurns ?? railFacts(props.sessionId)?.codexTurns ?? null)
+watch(
+  () => props.index?.sessionTurns,
+  (n) => {
+    if (n != null && props.sessionId) keepRailFacts(props.sessionId, { codexTurns: n })
+  },
+  { immediate: true }
+)
 const sessionTurns = computed(() => (usage.value?.status === 'ok' ? usage.value.tokens.turns : null))
-const turns = computed(() => sessionTurns.value ?? prompts.value)
+const turns = computed(() => sessionTurns.value ?? codexTurns.value ?? prompts.value)
 const turnsTip = computed(() => {
   const yours = `${prompts.value} of your ${prompts.value === 1 ? 'prompt is' : 'prompts are'} in the transcript shown here`
-  return sessionTurns.value === null ? yours : `Claude's turns over the whole session, as AgentHydra counts them for tokens and cost. ${yours}.`
+  if (sessionTurns.value !== null) return `Claude's turns over the whole session, as AgentHydra counts them for tokens and cost. ${yours}.`
+  return codexTurns.value === null ? yours : `Codex's turns over the whole thread, from its rollout file. ${yours}.`
 })
 const usageText = computed(() => usageSummary(usage.value))
 const usageTip = computed(() => usageDetail(usage.value))

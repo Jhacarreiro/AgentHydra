@@ -42,7 +42,7 @@ import {
 import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '@shared/transcript-index'
-import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
+import { codexTurnCount, codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
 import { createBackgroundTasks } from './background-tasks'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
@@ -782,8 +782,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     const kept = wholeKept.get(sessionId)
     if (key && kept && kept.key === key) return kept
     // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
-    // for a chat with none, a Codex rollout's last token_count (with its window).
+    // for a chat with none, a Codex rollout's last token_count (with its window), and its turns over the whole thread.
     let context: { tokens: number; window: number | null; total?: number | null } | null = null
+    let codexTurns: number | null = null
     try {
       if (key && file) {
         const tokens = lastContextTokens(file)
@@ -791,11 +792,12 @@ export function createBridge(opts: BridgeOptions = {}) {
       } else {
         const rollout = await codexRollout(sessionId)
         context = rollout ? lastCodexContext(rollout) : null
+        codexTurns = rollout ? await codexTurnCount(rollout) : null
       }
     } catch {
       // gone since it was found: no context, the rest of the index stands
     }
-    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null, sessionTokens: context?.total ?? null } }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null, sessionTokens: context?.total ?? null, sessionTurns: codexTurns } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)
