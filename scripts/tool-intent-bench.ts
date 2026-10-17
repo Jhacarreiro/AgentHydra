@@ -19,12 +19,15 @@ import {
 
 /** Invented asks, each with the tools that would answer it (any one counts). */
 const ASKS: [string, string[]][] = [
-  ['is this signup screen too cluttered for a new visitor', ['price_tag']],
-  ['this settings form has way too much on it', ['price_tag']],
-  ['I am about to redesign the pricing page, measure how busy it is first', ['price_tag']],
-  ['how heavy is the settings page for someone reading it', ['price_tag', 'price_tag_live']],
-  ['which page should I simplify first', ['price_tag_next']],
-  ['how much attention does the deployed homepage ask of people', ['price_tag_live']],
+  ['is this signup screen too cluttered for a new visitor', ['eli']],
+  ['this settings form has way too much on it', ['eli']],
+  ['I am about to redesign the pricing page, measure how busy it is first', ['eli']],
+  ['how heavy is the settings page for someone reading it', ['eli', 'eli_live']],
+  ['which page should I simplify first', ['eli_next']],
+  ['how much attention does the deployed homepage ask of people', ['eli_live']],
+  ['would a kid understand the words on this onboarding screen', ['eli', 'eli_live']],
+  ['this help text is full of jargon, is it too hard to follow', ['eli']],
+  ['is my reply to the customer written too technically', ['eli']],
   [
     'how much of my allowance is left before I hit the wall',
     ['check_my_usage', 'usage_budget', 'check_usage'],

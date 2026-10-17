@@ -2292,9 +2292,11 @@ Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained
 
 Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.${
   // Seen only as a name among hundreds of deferred tools, price_check read as a shop-price lookup
-  // and pages went out unpriced (2026-10-16); it is price_tag since. Only when the private price check is installed.
-  PRICECHECK_TOOLS.some((t) => t.name === 'price_tag')
-    ? '\n\nBefore and after you build, change or review a page or screen, price it with price_tag { mode: "page", page }: what it costs the person looking (words, controls, fields). Cheaper wins; say both prices.'
+  // and pages went out unpriced (2026-10-16); it was price_tag, and is eli (explain like I'm 12) since
+  // 2026-10-17, when it also began pricing how hard the words are for a child. Only when the private
+  // price check is installed.
+  PRICECHECK_TOOLS.some((t) => t.name === 'eli')
+    ? '\n\nBefore and after you build, change or review a page or screen, price it with eli { mode: "page", page }: what it costs the person looking (words, controls, fields) and whether a child could follow its words (eli.age). Text works too: eli { mode: "text", text }. Cheaper and younger win; say both prices.'
     : ''
 }`
 
@@ -2320,15 +2322,16 @@ export function runMcp(): Promise<void> {
  *  but its MCP process restarts onto new code with the daemon, so after a rename every call by the
  *  old name failed with "Unknown tool" mid-run (2026-10-01, Corch -> CliMayte: the orchestrator of
  *  a live run lost every corch_* tool and carried on through the HTTP routes). price_check* became
- *  price_tag* on 2026-10-16 (the owner: a name that says what it is for). */
+ *  price_tag* on 2026-10-16 (the owner: a name that says what it is for), and price_tag* became eli*
+ *  on 2026-10-17 (ELI, explain like I'm 12): both old names answer. */
 export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries([
   ...TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
     t.name.replace(/^climayte_/, 'corch_'),
     t.name,
   ]),
-  ...PRICECHECK_TOOLS.filter((t) => t.name.startsWith('price_tag')).map((t) => [
-    t.name.replace(/^price_tag/, 'price_check'),
-    t.name,
+  ...PRICECHECK_TOOLS.filter((t) => /^eli(_|$)/.test(t.name)).flatMap((t) => [
+    [t.name.replace(/^eli/, 'price_tag'), t.name],
+    [t.name.replace(/^eli/, 'price_check'), t.name],
   ]),
 ])
 

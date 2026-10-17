@@ -5,7 +5,7 @@ import { LISTED_TOOLS, REFUSING_TOOLS, TOOLS } from '../src/mcp'
 
 /** Every listed schema rides in every chat that loads them all; this is their budget (2026-10-11: about 15k tokens). */
 const LISTED_BUDGET_TOKENS = 16_000
-// 33: price_check (price_tag since 2026-10-16), 2026-10-14: the owner asked for the price checker in every chat.
+// 33: price_check (price_tag since 2026-10-16, eli since 2026-10-17), 2026-10-14: the owner asked for the price checker in every chat.
 const LISTED_MAX = 33
 
 const bytes = (t: (typeof TOOLS)[number]) =>
