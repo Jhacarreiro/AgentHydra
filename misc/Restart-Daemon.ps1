@@ -250,7 +250,7 @@ function Get-StaleTargets {
     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
     # A dead OwningProcess is a zombie socket (a killed daemon's port not yet reaped); it answers
     # nothing and can't be killed, so it drops out naturally.
-    if ($proc -and $proc.ProcessName -in @('bun', 'node')) { $probe.Add([int]$conn.LocalPort) }
+    if ($proc -and $proc.ProcessName -in @('bun', 'node', 'AgentHydra-daemon')) { $probe.Add([int]$conn.LocalPort) }
   }
 
   $targets = @{}
@@ -273,7 +273,7 @@ function Get-HungPointerTarget {
   param($Info)
   if (-not $Info -or -not $Info.pid) { return $null }
   $proc = Get-Process -Id ([int]$Info.pid) -ErrorAction SilentlyContinue
-  if (-not $proc -or $proc.ProcessName -notin @('bun', 'node')) { return $null }
+  if (-not $proc -or $proc.ProcessName -notin @('bun', 'node', 'AgentHydra-daemon')) { return $null }
   if (-not (Test-PredatesRestart -ProcessId $proc.Id)) { return $null }
   if ($Info.startedAt) {
     try {

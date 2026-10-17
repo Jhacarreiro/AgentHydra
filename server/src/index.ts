@@ -74,6 +74,7 @@ import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
 import { giveCodexInstancesOwnerAgents, reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
 import { setBeforeLaunchHook } from './core/instances'
+import { currentCopy, DAEMON_EXE_NAME, realRuntime, refreshCopy } from './core/own-name'
 import { pruneBeforeLaunch } from './core/revoked-grants'
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
@@ -1504,6 +1505,19 @@ function relaunchDaemon(): Promise<boolean> {
   return relaunchInFlight
 }
 
+/** Where the daemon's own-name copy of bun lives (server/src/core/own-name.ts). */
+function ownDaemonExePath(): string {
+  return join(CONFIG_DIR, 'bin', DAEMON_EXE_NAME)
+}
+
+/** What a checkout's successor runs on: the own-name copy when it is a current copy of the real bun,
+ *  so a daemon the tray started as bun.exe moves under its own name at its first relaunch; else the
+ *  running executable, as before. */
+function relaunchRuntime(): string {
+  if (process.platform !== 'win32' || !IS_PRIMARY_INSTALL) return process.execPath
+  return currentCopy(realRuntime(process.execPath), ownDaemonExePath()) ?? process.execPath
+}
+
 function spawnRelaunchSuccessor(): void {
   // In a compiled binary process.argv is ['bun', '<virtual embedded path>', ...realArgs] — a
   // placeholder pair, NOT respawnable. The shared kit builder handles that, pins the port we are
@@ -1513,7 +1527,7 @@ function spawnRelaunchSuccessor(): void {
   // successor must open the side-run's store, not the machine's (relaunch-identity.ts).
   const relaunchArgv = planRelaunchSuccessor({
     argv: process.argv,
-    execPath: IS_RELEASE ? LAUNCHER_PATH : process.execPath,
+    execPath: IS_RELEASE ? LAUNCHER_PATH : relaunchRuntime(),
     isCompiled: IS_RELEASE,
     boundPort,
   })
@@ -1782,6 +1796,24 @@ startShortfallWatch()
 // The owner's always-on helpers (<CONFIG_DIR>/helpers.json; server/src/helpers.ts). A side-run never
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
+
+// The daemon's own name (server/src/core/own-name.ts): keep <CONFIG_DIR>\bin\AgentHydra-daemon.exe a
+// current copy of the bun this checkout runs on, so the tray's next start and this daemon's next
+// relaunch run under it and a chat's `taskkill /IM bun.exe` passes it by. Off the main thread (the
+// copy is ~100 MB, made once per bun version); a release runs through its launcher and keeps bun.
+if (
+  process.platform === 'win32' &&
+  !IS_RELEASE &&
+  IS_PRIMARY_INSTALL &&
+  process.env.NODE_ENV !== 'test'
+) {
+  void refreshCopy(realRuntime(process.execPath), ownDaemonExePath()).then((r) => {
+    if (r.action === 'failed')
+      console.warn(`[agenthydra] own name: ${r.path} not made (${r.detail}); bun.exe it stays`)
+    else if (r.action === 'copied')
+      console.log(`[agenthydra] own name: ${r.path} is ready for the next start`)
+  })
+}
 
 // The people add-on (server/src/people-host.ts) starts its own timers, the Manager Hydra analytics among them.
 registerPeopleVerdicts((worker) =>

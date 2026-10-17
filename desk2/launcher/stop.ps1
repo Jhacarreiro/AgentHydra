@@ -56,7 +56,8 @@ function Get-ChatHosts {
     if ($f.Name -like '*.spec.json') { continue }
     try { $h = Get-Content -Raw -Path $f.FullName | ConvertFrom-Json } catch { continue }
     $p = Get-Process -Id ([int]$h.pid) -ErrorAction SilentlyContinue
-    if (-not $p -or $p.ProcessName -notlike 'bun*') { continue }
+    # A host runs on the server's executable: bun, or its own-name copy AgentHydra-desk.exe (start.ps1).
+    if (-not $p -or ($p.ProcessName -notlike 'bun*' -and $p.ProcessName -ne 'AgentHydra-desk')) { continue }
     $hostStarted = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$h.startedAt).UtcDateTime
     if ($p.StartTime.ToUniversalTime() -gt $hostStarted.AddSeconds(1)) { continue }
     $out += [pscustomobject]@{ Chat = [string]$h.chatId; Process = $p }

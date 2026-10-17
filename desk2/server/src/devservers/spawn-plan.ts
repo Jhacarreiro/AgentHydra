@@ -7,7 +7,7 @@
 // quotes) whose first token resolves to an `.exe`/`.com` on PATH (an executable file on POSIX). Everything else keeps
 // the shell. Pure and platform-injectable; the PATH probe is the only impurity and any doubt falls back to the shell.
 
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 export type SpawnPlan = { shell: true; command: string } | { shell: false; file: string; args: string[] }
@@ -118,9 +118,25 @@ function envPath(env: NodeJS.ProcessEnv): string {
   return ''
 }
 
-/** The running binary's own folder first (so `bun` always resolves: the service is bun), then PATH. */
+/** The bun the service runs on. Desk's server and its services run on a copy of bun named AgentHydra-desk.exe
+ *  (desk2/launcher/start.ps1), whose `<exe>.source.json` names the bun it was copied from: that folder holds bun.exe,
+ *  the copy's does not. Read once. */
+let runningBun: string | undefined
+function realBun(): string {
+  if (runningBun === undefined) {
+    runningBun = process.execPath
+    try {
+      const raw = readFileSync(`${process.execPath}.source.json`, 'utf8').replace(/^﻿/, '')
+      const source = (JSON.parse(raw) as { source?: unknown }).source
+      if (typeof source === 'string' && isFile(source)) runningBun = source
+    } catch {}
+  }
+  return runningBun
+}
+
+/** The running bun's own folder first (so `bun` always resolves: the service is bun), then PATH. */
 function searchDirs(env: NodeJS.ProcessEnv, delimiter: string): string[] {
-  return [path.dirname(process.execPath), ...envPath(env).split(delimiter)].filter(Boolean)
+  return [path.dirname(realBun()), ...envPath(env).split(delimiter)].filter(Boolean)
 }
 
 const hasDirectExt = (file: string): boolean => WIN_DIRECT_EXTS.some((e) => file.toLowerCase().endsWith(e))

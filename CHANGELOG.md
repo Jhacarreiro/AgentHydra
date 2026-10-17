@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Killing every bun process no longer takes AgentHydra down.** On Windows, AgentHydra's window server and its running chats now run as `AgentHydra-desk.exe`, and a source checkout's service as `AgentHydra-daemon.exe`: copies of bun under their own names, kept up to date when bun changes. A chat that cleans up its dev servers with `taskkill /IM bun.exe` stops only those.
+
 - **Restarting AgentHydra no longer waits for a chat move.** A move between accounts keeps running through a restart or an update, and the restarted AgentHydra reports its result under the same operation. Restart is no longer refused while chats are being moved.
 
 - **Project dashboards come from a built-in template.** A project names its sections (stat tiles, waiting lists, grouped errors, breakdowns) and the MCP tool or HTTP endpoint that fills them in `.agenthydra/dashboard.json`, and AgentHydra draws them in its own look, reads the source itself and keeps the last numbers when it is down. No agent-built page or localhost address is needed; projects without a spec keep their page.
