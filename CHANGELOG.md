@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Hidden Free chat views release their history reader.** Leaving a cached CliMayte view no longer downloads changed chat history for an invisible list. Returning catches up once and shares any read already in progress.
+
 ## [2.0.5] - 2026-10-16
 
 **TL;DR**
