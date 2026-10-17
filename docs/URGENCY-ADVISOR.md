@@ -17,9 +17,11 @@ claude.ai account. Default ON. A look runs each minute and measures every chat's
 - **Text:** every message is `[Urgency Advisor · <Name>] Sent on the owner's behalf.`, a blank line, then the words.
 - **Model route:** Desk 2's `POST /api/advisor/compose` (`desk2/server/src/engine/advisor-compose.ts`): the same route
   as Desk's chat titles, Haiku 5.5 on the chat's own login, no tools. Never HSwarm or another provider for chat text.
-- **Delivery:** Desk 2's `POST /api/sessions/:sessionId/ping`. An SDK chat takes it into its open input stream at the CLI's
-  next tool boundary. Not `/messages` (its `now` stops a CliMayte worker's turn to deliver) and not send-now/interrupt.
-  A seat that is a CliMayte worker holds the message until its task ends; nothing is stopped.
+- **Delivery:** Desk 2's `POST /api/chats/:id/messages`, the way the owner's own message goes (`manager.send` with
+  `now: true`). A plain Desk chat takes it on its open input stream at the CLI's next tool boundary; a worker-backed
+  chat has its turn stopped cleanly and the session continues with the message first. Not the ping route (it holds a
+  worker's message until the task ends), send-now or interrupt. Only chats that already have a title are visited in
+  practice, so the send does not rename one. Desk shows it as the advisor bubble even behind the Send now / urgent preface.
 - **Setting:** `GET /api/urgency-advisor` and `POST /api/urgency-advisor {enabled?, intervalMinutes?}` (db settings
   `urgency_advisor_enabled`, `urgency_advisor_minutes`; interval 5-720).
 - **Log:** one line per message in the server log: `[urgency-advisor] chat=<id> minutes=<n> push|reply=<k> sent=ok|failed`.

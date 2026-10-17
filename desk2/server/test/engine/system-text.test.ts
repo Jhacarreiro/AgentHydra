@@ -406,6 +406,15 @@ describe('notes and picture lines', () => {
     expect(noteOf(PING)).not.toHaveProperty('advisor')
   })
 
+  test('the advisor note is still recognised after the Send now / urgent preface', () => {
+    const body = "[Urgency Advisor · Ada] Sent on the owner's behalf.\n\nWhy is this not done?"
+    const sentNow = `[Sent now: the user stopped your previous turn mid-step to send this message. Act on it first.]\n\n${body}`
+    const urgent = `AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator. Go on.\n\n${body}`
+    for (const text of [sentNow, urgent]) {
+      expect(userTurn(user(text), null)).toEqual({ kind: 'note', id: 'u1', ts: 5, from: 'Ada', text: 'Why is this not done?', advisor: true })
+    }
+  })
+
   test('a note keeps its id, time and sub-agent and is never a user item', () => {
     const note = userTurn(user(PING, { parentToolUseId: null, queued: true }), null)
     expect(note).toEqual({ kind: 'note', id: 'u1', ts: 5, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: noteOf(PING)!.text })

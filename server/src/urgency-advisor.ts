@@ -4,8 +4,9 @@
 // people/manager/duke-urgency-advisor/; the repo holds only a neutral fallback. One short model call per message, on
 // Desk 2's private route for chat text (desk2 POST /api/advisor/compose); a failed call falls back to a `lines` template.
 //
-// DELIVERY: POST /api/sessions/:sessionId/ping on Desk 2 (never /messages, whose `now` stops a worker's turn, and never
-// send-now or interrupt). An SDK chat pushes it into the open input stream: the CLI takes it at its next tool boundary.
+// DELIVERY: POST /api/chats/:id/messages on Desk 2, exactly how the owner's own message goes (manager.send with now: true;
+// never the ping route, send-now or interrupt). A plain Desk chat takes it on the open input stream at the CLI's next tool
+// boundary; a worker-backed chat has its turn stopped cleanly and the session continues with the message first.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
@@ -274,8 +275,7 @@ function realDeps(): AdvisorDeps {
     settings: getAdvisorSettings,
     chats: async () => (await deskChats()) as AdvisorChat[],
     send: async (chat, text) => {
-      if (!chat.sessionId) throw new Error('the chat has no session id yet')
-      await deskPost(`/api/sessions/${encodeURIComponent(chat.sessionId)}/ping`, { text })
+      await deskPost(`/api/chats/${encodeURIComponent(chat.id)}/messages`, { text })
     },
     persona: readPersona,
     brief: readBrief,
