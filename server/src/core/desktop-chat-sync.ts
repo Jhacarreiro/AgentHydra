@@ -41,7 +41,9 @@
 // carried the old position on, leaving records that count chunks their session never got (measured that
 // day: 6 of 114 rows). A PC that finds a record's chunks missing writes nothing past them, marks the row
 // (meta.rs, which the PC the chat started on reads as written elsewhere and answers by starting over),
-// and waits without downloading it again until that PC has.
+// and waits without downloading it again until that PC has. A broken row of a chat its PC no longer
+// lists can never be answered, so that PC removes it; the reader drops it from its list, and takes it
+// from byte 0 if it comes back.
 //
 // The state file keeps, per chat, what the last pass agreed with the store, so the next pass can tell
 // who changed what. Failures are the chat sync's own: the caller keeps them apart from the logins'.
@@ -118,7 +120,8 @@ interface ChatState {
   /** When its first chunk was last refused as already stored (a record with no store row whose
    *  session another record already shares): it is not offered again for STOPPED_RETRY_MS. */
   stoppedAt?: number
-  /** Left the store (archived three days): never sent again, not listed. */
+  /** Left the store (archived three days, or started over): not listed. This PC's own is never sent
+   *  again; another PC's comes back when its row does. */
   gone?: boolean
   /** This PC's chat whose shared stream broke and started over: it goes up again in full even archived
    *  or held back, since the other PCs had it before. */
@@ -395,6 +398,48 @@ async function sendAll(
   }
 }
 
+/** This PC's own row whose stream cannot be read whole (a PC reading it asked for it again, or it names
+ *  a session this PC's note does not, as a build before 2026-10-16 wrote one) for a chat this PC no
+ *  longer lists: nothing here can send it again, so it leaves the store, and its transcript with it,
+ *  rather than keep the other PCs waiting on it. Its note starts over, so a chat listed here again goes
+ *  up again in full. A chat the two-way sync left diverged stays as it is. */
+async function dropUnanswerable(
+  io: ChatIo,
+  state: StateFile,
+  rows: Map<string, StoreRow>,
+  local: LocalChat[],
+  fail: (err: unknown) => void,
+): Promise<void> {
+  const listed = new Set(local.map((c) => c.id))
+  for (const row of [...rows.values()]) {
+    const st = state.chats[row.id]
+    if (listed.has(row.id) || !st || st.origin.pc !== io.pc || st.state === 'diverged') continue
+    const elsewhere = row.meta?.s !== undefined && row.meta.s !== st.sessionId
+    if (row.meta?.rs === undefined && !elsewhere) continue
+    try {
+      const r = await io.call('DELETE', `/v1/chats/${row.id}?version=${row.version}`)
+      if (r.status === 409) continue
+      if (r.status !== 200) throw chatFailure('Removing a chat’s broken shared copy', r)
+      rows.delete(row.id)
+      Object.assign(st, {
+        sessionId: row.meta?.s ?? st.sessionId,
+        version: 0,
+        bytes: 0,
+        chunks: 0,
+        stored: 0,
+        up: null,
+        sent: null,
+        state: 'synced',
+        note: null,
+        retry: false,
+        again: true,
+      })
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
 async function takeAll(
   io: ChatIo,
   state: StateFile,
@@ -410,7 +455,7 @@ async function takeAll(
     // In step, unless the row moved to another session: a chat that started over can come back at the
     // version this PC last took.
     const sameSession = row.meta?.s === undefined || st?.sessionId === row.meta.s
-    if (st && st.version === row.version && sameSession && !st.retry) continue
+    if (st && st.version === row.version && sameSession && !st.retry && !st.gone) continue
     if (st?.asked && row.meta?.rs !== undefined) continue
     try {
       await takeChat(io, state, row, opened.get(row.id), now)
@@ -469,6 +514,7 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> 
 
   try {
     await sendAll(io, state, rows, local, sharer, now, fail)
+    await dropUnanswerable(io, state, rows, local, fail)
     await retireLanded(io, state, fail)
     await takeAll(io, state, rows, opened, now, fail)
 
@@ -775,6 +821,12 @@ async function takeChat(
     at: null,
   }
   state.chats[row.id] = st
+  // Back in the store after it left (the PC it started on started it over, and its fresh copy came on a
+  // later pass): a new stream, read from its first chunk, and listed again.
+  if (st.gone) {
+    delete st.gone
+    Object.assign(st, { bytes: 0, chunks: 0 })
+  }
   st.title = titleOf(rec.record)
   st.archived = rec.archived
   st.stored = rec.stream.bytes

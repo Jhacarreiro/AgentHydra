@@ -7,9 +7,10 @@
 // of another PC's chat never goes up, however it grows; a chat another PC wrote into goes up again from
 // the transcript of the PC it started on; a chat whose record moves to another session goes up again
 // from that session's first byte; a record counting chunks the store lacks waits, without downloading
-// again, until the PC it started on sends it again; a chat an earlier version took into ~/.claude is
-// taken back out once; an unfinished last line waits for its newline; a PC with another key writes
-// nothing. The store is the real Worker on bun:sqlite (login-sync-store.ts); each PC is a fake
+// again, until the PC it started on sends it again, and leaves the store when that PC no longer lists
+// it; a chat that left the store and came back is taken from its first byte; a chat an earlier
+// version took into ~/.claude is taken back out once; an unfinished last line waits for its newline;
+// a PC with another key writes nothing. The store is the real Worker on bun:sqlite (login-sync-store.ts); each PC is a fake
 // ChatLocal over a temp folder with its own state file.
 
 import { afterAll, expect, test } from 'bun:test'
@@ -159,6 +160,32 @@ const pastHold = () => Date.now() + CHAT_PUSH_EVERY_MS
 
 const rowFor = async (id: string) =>
   (await store('GET', '/v1/chats')).json.chats.find((r: { id: string }) => r.id === id)
+
+/** What a build before 2026-10-16 left of a chat A shared one 8-byte line of: it carried a stream
+ *  position over from another session, so its record counts three chunks of which the store holds the
+ *  first, and A's state agrees with what it wrote. The transcript grows to the 24 bytes it claims. */
+async function breakStream(a: Pc, chat: LocalChat): Promise<void> {
+  a.extend(chat, '{"n":2}\n{"n":3}\n')
+  const row = (await store('GET', `/v1/chats/${chat.id}`)).json
+  const sealed = {
+    record: chat.archived ? { ...chat.record, isArchived: true } : chat.record,
+    sessionId: chat.sessionId,
+    project: chat.project,
+    account: chat.account,
+    org: chat.org,
+    archived: chat.archived,
+    origin: { pc: a.io.pc, name: 'PC-A' },
+    stream: { bytes: 24, chunks: 3 },
+  }
+  const put = await store('PUT', `/v1/chats/${chat.id}`, {
+    version: row.version,
+    blob: sealRecord(key, chat.id, sealed),
+    meta: { ...row.meta, b: 24, a: chat.archived ? 1 : 0 },
+  })
+  const s = JSON.parse(readFileSync(a.io.statePath, 'utf8'))
+  Object.assign(s.chats[chat.id], { version: put.json.version, bytes: 24, chunks: 3, stored: 24 })
+  writeFileSync(a.io.statePath, JSON.stringify(s))
+}
 
 test('a chat A started reaches B’s viewer with its transcript and origin, and never B’s chat list', async () => {
   const a = pc('PC-A')
@@ -340,29 +367,8 @@ test('a record counting chunks the store lacks waits without downloading again, 
   await syncChats(a.io)
   await syncChats(b.io)
 
-  // A build before 2026-10-16 archived it with a record counting three chunks of which the store holds
-  // one (it carried a stream position over from another session), and its state agrees with what it wrote.
   chat.archived = true
-  a.extend(chat, '{"n":2}\n{"n":3}\n')
-  const row = (await store('GET', `/v1/chats/${chat.id}`)).json
-  const sealed = {
-    record: { title: 'A chat', isArchived: true },
-    sessionId: chat.sessionId,
-    project: chat.project,
-    account: chat.account,
-    org: chat.org,
-    archived: true,
-    origin: { pc: a.io.pc, name: 'PC-A' },
-    stream: { bytes: 24, chunks: 3 },
-  }
-  const put = await store('PUT', `/v1/chats/${chat.id}`, {
-    version: row.version,
-    blob: sealRecord(key, chat.id, sealed),
-    meta: { ...row.meta, b: 24, a: 1 },
-  })
-  const s = JSON.parse(readFileSync(a.io.statePath, 'utf8'))
-  Object.assign(s.chats[chat.id], { version: put.json.version, bytes: 24, chunks: 3, stored: 24 })
-  writeFileSync(a.io.statePath, JSON.stringify(s))
+  await breakStream(a, chat)
 
   const fetched: string[] = []
   b.io.call = (method, path, body) => {
@@ -386,6 +392,36 @@ test('a record counting chunks the store lacks waits without downloading again, 
     bytes: 24,
   })
   expect(chatsFromElsewhere(b.io.statePath).get(chat.sessionId)?.archived).toBe(true)
+})
+
+test('a broken record of a chat A no longer lists leaves the store and B’s list, and comes whole if A lists it again', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const chat = a.add({}, '{"n":1}\n')
+  await syncChats(a.io)
+  await syncChats(b.io)
+  await breakStream(a, chat)
+  a.chats.splice(a.chats.indexOf(chat), 1)
+  await syncChats(b.io)
+  expect((await rowFor(chat.id))?.meta.rs).toBe(1)
+
+  // Nothing on A can send it again, so the row goes, with its chunks, and B stops waiting on it.
+  await syncChats(a.io)
+  expect(await rowFor(chat.id)).toBeUndefined()
+  expect((await store('GET', `/v1/chats/${chat.sessionId}/chunks`)).json.chunks).toEqual([])
+  await syncChats(b.io)
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)).toBeUndefined()
+
+  // A list that missed it, or a chat whose fresh upload came a pass after its row went (a full store):
+  // back in the store, it reaches B whole and B lists it again.
+  a.chats.push(chat)
+  await syncChats(a.io)
+  await syncChats(b.io)
+  expect(b.view(chat)).toBe('{"n":1}\n{"n":2}\n{"n":3}\n')
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)).toMatchObject({
+    state: 'synced',
+    bytes: 24,
+  })
 })
 
 test('chats an earlier version took into B’s ~/.claude are taken out once, and the viewer holds them', async () => {

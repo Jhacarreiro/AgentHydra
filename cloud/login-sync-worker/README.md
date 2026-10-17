@@ -47,8 +47,9 @@ token, never the token.
    before updating AgentHydra on the PCs. If you ever reset or replace the D1 database, delete and
    recreate the Durable Object with it (it holds the old head).
 6. Add a Cron Trigger (Worker settings > Triggers, for example `17 3 * * *`, once a day). It prunes
-   tombstones older than 30 days (`scheduled()`); a request never does. Without it the Worker still
-   works and tombstones only pile up. The schema is checked with one `PRAGMA user_version` per cold
+   tombstones older than 30 days and frees chat chunks that no row names once their newest is a day
+   old (`scheduled()`); a request never does. Without it the Worker still works and tombstones and
+   such chunks only pile up. The schema is checked with one `PRAGMA user_version` per cold
    isolate and migrated only when the database is behind.
 
 `GET /v1/health` answers `{"ok":true}` without a token, to check the address.

@@ -1,7 +1,7 @@
 // server/tests/login-sync-chats-store.test.ts — the chat and chunk routes of the real login sync Worker.
 
 import { expect, test } from 'bun:test'
-import { base, env, store } from './login-sync-store'
+import { base, cron, env, store, storeDb } from './login-sync-store'
 
 const newId = () => crypto.randomUUID()
 const chunk = (id: string, seq: number, blob: string, by = 'pc-a') =>
@@ -112,4 +112,36 @@ test('a chunk that would take chats past their room is refused with 507, and a d
   } finally {
     delete env.CHAT_STORE_MB
   }
+})
+
+test('the daily cron frees a day-old session’s chunks that no row names and gives their room back', async () => {
+  // A sender that moved a chat to another session left the old one's chunks under no row.
+  const orphan = newId()
+  const young = newId()
+  const named = newId()
+  await store('PUT', `/v1/chats/${newId()}`, { version: 0, blob: 'r', meta: { s: named } })
+  await chunk(orphan, 0, 'o'.repeat(60))
+  await chunk(orphan, 1, 'o'.repeat(40))
+  await chunk(young, 0, 'y')
+  await chunk(named, 0, 'n')
+  const dayAgo = Date.now() - 25 * 3600_000
+  for (const s of [orphan, named])
+    await storeDb
+      .prepare('UPDATE chat_chunks SET created_at = ? WHERE chat = ?')
+      .bind(dayAgo, s)
+      .run()
+  try {
+    env.CHAT_STORE_MB = '0.000001'
+    const used = (await chunk(newId(), 0, 'a')).json.used
+    // Room for 50 more characters than every chunk stored: full for the next 100.
+    env.CHAT_STORE_MB = String((used + 50.5) / 1048576)
+    expect((await chunk(newId(), 0, 'z'.repeat(100))).status).toBe(507)
+    await cron()
+    expect((await chunk(newId(), 0, 'z'.repeat(100))).status).toBe(200)
+  } finally {
+    delete env.CHAT_STORE_MB
+  }
+  expect((await store('GET', `/v1/chats/${orphan}/chunks`)).json.chunks).toEqual([])
+  expect((await store('GET', `/v1/chats/${young}/chunks`)).json.chunks).toHaveLength(1)
+  expect((await store('GET', `/v1/chats/${named}/chunks`)).json.chunks).toHaveLength(1)
 })

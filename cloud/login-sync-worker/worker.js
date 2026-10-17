@@ -193,6 +193,41 @@ async function pruneTombstones(env, db) {
   })
 }
 
+// Cron (daily): free the chunks no row reads. A session's chunks go with the last row naming it
+// (deleteChat), but a sender that moved a chat to a new session before 2026-10-16 left the old session's
+// chunks under no row, and a first share given up before its record leaves its own: 2026-10-16 measured
+// 69 such sessions, 130 MB of the 400 MB room, with the room full and every new share refused (507). A
+// group goes once no row names its session and its newest chunk is ORPHAN_KEEP_MS old (a share writes its
+// chunks before its record, minutes apart). Its delete and the usage it gives back are one batch, and
+// both look again, so a row or chunk written since the list keeps the group.
+const ORPHAN_KEEP_MS = 24 * 60 * 60 * 1000
+const ORPHAN_SQL =
+  "chat = ? AND NOT EXISTS (SELECT 1 FROM chats WHERE json_extract(meta, '$.s') = ?) AND NOT EXISTS (SELECT 1 FROM chat_chunks AS young WHERE young.chat = ? AND young.created_at >= ?)"
+async function sweepOrphanChunks(env, db) {
+  const cutoff = Date.now() - ORPHAN_KEEP_MS
+  const named = await db.prepare("SELECT DISTINCT json_extract(meta, '$.s') AS s FROM chats").all()
+  const keep = new Set((named.results ?? []).map((r) => r.s))
+  const groups = await db
+    .prepare('SELECT chat, MAX(created_at) AS last FROM chat_chunks GROUP BY chat')
+    .all()
+  let left
+  for (const g of groups.results ?? []) {
+    if (keep.has(g.chat) || g.last >= cutoff) continue
+    const at = [g.chat, g.chat, g.chat, cutoff]
+    const [usage] = await db.batch([
+      db
+        .prepare(
+          `UPDATE chat_usage SET chars = MAX(0, chars - (SELECT COALESCE(SUM(length(blob)), 0) FROM chat_chunks WHERE ${ORPHAN_SQL})) WHERE id = 1 RETURNING chars`,
+        )
+        .bind(...at),
+      db.prepare(`DELETE FROM chat_chunks WHERE ${ORPHAN_SQL}`).bind(...at),
+    ])
+    left = usage?.results?.[0]?.chars ?? left
+    takenKept.delete(g.chat)
+  }
+  await usageNow(env, left)
+}
+
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -936,6 +971,7 @@ export default {
     if (!env.DB || !env.HEAD) return
     await ensureSchema(env.DB)
     await pruneTombstones(env, env.DB)
+    await sweepOrphanChunks(env, env.DB)
   },
   // For tests: what a fresh isolate starts without (the kept lists and rows).
   forgetIsolate() {

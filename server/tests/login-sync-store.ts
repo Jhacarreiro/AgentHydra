@@ -125,6 +125,7 @@ const workerModule = await import(
 )
 const worker = workerModule.default as {
   fetch: (r: Request, env: unknown) => Promise<Response>
+  scheduled: (event: unknown, env: unknown) => Promise<void>
   forgetIsolate: () => void
 }
 /** The Worker's StoreHead Durable Object class, for a test that builds its own HEAD binding. */
@@ -146,6 +147,8 @@ const server = Bun.serve({ port: 0, fetch: (req) => worker.fetch(req, env) })
 server.unref()
 /** What a fresh isolate starts without: the Worker's kept lists and rows. */
 export const freshIsolate = () => worker.forgetIsolate()
+/** The Worker's daily Cron Trigger, run now. */
+export const cron = () => worker.scheduled({}, env)
 export const base = `http://127.0.0.1:${server.port}`
 
 /** A request to the store with the access token. */

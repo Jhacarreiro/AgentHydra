@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Stuck shared chats finish, and a full chat store clears itself.** A shared chat whose transcript moved to a new session no longer sits at "receiving" on your other PC: it is sent again from the start, and a PC that finds pieces of a chat missing asks for it again. Once a day the sync store also frees transcript pieces no chat uses anymore, which had filled its room and stopped new chats from being shared.
 - **Unchanged Free chat lists keep their history cache.** Background account checks no longer make the app download and process the whole chat history when nothing changed. Real chat updates, titles and errors still refresh it.
 - **Background helpers discard output their callers do not need.** CliMayte process checks still drain error pipes, but no longer decode and retain their text when error output was explicitly disabled. Requested output and timeout cleanup keep their existing behavior.
 - **Timed-out helpers release unfinished pipe readers.** A pipe held open after the capture deadline no longer keeps decoding or retaining output in the background. Partial output and the existing process cleanup remain available.
