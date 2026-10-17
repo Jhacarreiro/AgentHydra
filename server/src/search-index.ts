@@ -62,8 +62,29 @@ const SCHEMA_VERSION = 4
  * this codebase, so this index uses it too rather than inventing a second key format. Bumping
  * SCHEMA_VERSION above forces every row to be rebuilt under the new key rather than mixing old and
  * new formats silently.
+ *
+ * Plus the ACCOUNT, for a store split per account (2026-10-17). A CLI account keeps its chats in its
+ * own folder (cli-transcripts.ts) and a moved or relaunched chat keeps its session id, so one id sat in
+ * two or more accounts' folders 1,305 times on the owner's PC; under dedupeKey alone those copies were
+ * one row, re-indexed from whichever file was seen last on every pass. A row with no account keeps the
+ * key it always had, so the main folder's rows are not rebuilt.
  */
-const docKey = (f: IndexableFile) => dedupeKey(f)
+export function searchIndexKey(f: IndexableFile): string {
+  const key = dedupeKey(f)
+  return f.instance ? `${key}\0${f.instance.ref}` : key
+}
+const docKey = searchIndexKey
+
+/**
+ * Whether the index can read this file's conversation: a Claude transcript or a Codex rollout. Every
+ * other store (an HSwarm job, a DeepSeek Harness file, a foreign adapter's database) has to be decoded
+ * first, which only the scan does; indexing one recorded an EMPTY row that then counted as covered,
+ * which is how 1,197 HSwarm jobs (56% of the files in scope on the owner's PC, 2026-10-17) sat in the
+ * index as sessions it could never match. The search scans those files itself.
+ */
+export function searchIndexReads(f: { source: SessionSource }): boolean {
+  return f.source === 'claude' || f.source === 'codex'
+}
 
 /**
  * One FTS insert of a huge body holds the daemon's loop (bun:sqlite is synchronous), so a body is
@@ -122,6 +143,9 @@ function open(): Database | null {
     // locked", and the cooldown below then answers nothing for 30 s. Wait for the lock instead.
     db.exec('pragma busy_timeout = 2000')
     // One file, always: a WAL sidecar would make "just delete search-index.db" a corruption bug.
+    // (`truncate` was measured 2026-10-17: half the commit time of a first build on Windows, but its
+    // connection keeps the journal open, so another process writing in `delete` mode then fails its
+    // commit with SQLITE_IOERR_DELETE. Fewer, larger commits (COMMIT_EVERY_MS) are used instead.)
     db.exec('pragma journal_mode = delete')
     db.exec('pragma synchronous = normal')
     db.exec('create table if not exists meta (k text primary key, v text not null)')
@@ -197,11 +221,16 @@ function open(): Database | null {
 export const searchIndexIsOpen = (): boolean => db !== null
 
 /**
- * Open the index outside any search: the daemon does it once it is listening. The open is synchronous
- * and waits out busy_timeout statement by statement for a held file, which a search must never pay.
+ * Open the index outside any search, and start keeping it current: the daemon does this once it is
+ * listening. The open is synchronous and waits out busy_timeout statement by statement for a held file,
+ * which a search must never pay. The keeper (session-search.ts startSearchIndexKeeper) refreshes it
+ * off every request, a pass a minute; it reopens the index itself if this open failed. It is imported
+ * here, when called, because session-search imports this file.
  */
 export function openSearchIndex(): boolean {
-  return open() !== null
+  const ok = open() !== null
+  void import('./session-search').then((m) => m.startSearchIndexKeeper()).catch(() => {})
+  return ok
 }
 
 /** Close and forget the handle, so the file can be replaced or deleted underneath us. */
@@ -212,6 +241,21 @@ function close() {
     /* already gone */
   }
   db = null
+  docCache = null
+}
+
+/** What the index holds per session, as of the last write: read once per write, not once per search. */
+let docCache: Map<string, KnownDoc> | null = null
+
+function knownDocs(conn: Database): Map<string, KnownDoc> {
+  if (docCache) return docCache
+  const rows = new Map<string, KnownDoc>()
+  for (const row of conn
+    .query('select rowid, key, source, mtime_ms, size_bytes, done_bytes, nseg from doc')
+    .all() as Array<KnownDoc & { key: string }>)
+    rows.set(row.key, row)
+  docCache = rows
+  return rows
 }
 
 /** A Codex rollout's `response_item` payload: a message, or some other record we do not read. */
@@ -371,11 +415,14 @@ export interface IndexableFile {
   /** Product identity, forwarded to dedupeKey() so two products sharing `source` + session id
    *  (e.g. Kilo and MiMo Code, both `source: 'opencode'`) never collapse to one indexed row. */
   tool?: string
+  /** The account whose own store holds the file (a CLI account, a Codex instance): part of the key,
+   *  see searchIndexKey. */
+  instance?: { ref: string }
 }
 
 let refreshing = false
 
-/** True while a background refresh is running, so callers do not queue a second one. */
+/** True while a refresh is running or queued, so a background caller does not queue another. */
 export const isRefreshing = () => refreshing
 
 /**
@@ -480,6 +527,7 @@ async function prefixIntact(path: string, offset: number): Promise<boolean> {
 
 type KnownDoc = {
   rowid: number
+  source: string
   mtime_ms: number
   size_bytes: number
   done_bytes: number
@@ -498,7 +546,7 @@ async function indexOneStaleFile(
 ): Promise<void> {
   const key = docKey(f)
   const existing = known.get(key)
-  let inTx = false
+  let inSavepoint = false
   try {
     const append =
       existing !== undefined &&
@@ -511,12 +559,12 @@ async function indexOneStaleFile(
     const { text, end } = await conversationTextFrom(f.path, from)
     const rowid = existing?.rowid ?? stmts.nextRowId()
     let first = 0
-    // One transaction per file: every autocommit statement is its own journal fsync, and on Windows
-    // those commits (not the FTS work) were the statements that stalled the loop past 100 ms.
-    // IMMEDIATE, as in open(): a rebuild reads its old segments before deleting them, and a deferred
-    // transaction that has read is refused at once, not made to wait, when another process writes.
-    stmts.exec('begin immediate')
-    inTx = true
+    // A savepoint inside the pass's transaction (refreshSearchIndex opens it IMMEDIATE and commits it
+    // every COMMIT_EVERY_MS): every commit is a journal fsync, and on Windows those commits (not the
+    // FTS work) were the statements that stalled the loop past 100 ms, one per file. The savepoint
+    // keeps a file that fails half-way from leaving half its rows.
+    stmts.exec('savepoint one_file')
+    inSavepoint = true
     if (append) {
       first = existing.nseg
     } else if (existing) {
@@ -532,13 +580,14 @@ async function indexOneStaleFile(
     }
     stmts.markDone.run(f.mtime_ms, f.size_bytes, end, first + segments.length, rowid)
     if (append) result.replaced++
-    stmts.exec('commit')
-    inTx = false
+    stmts.exec('release one_file')
+    inSavepoint = false
     result.indexed++
   } catch {
-    if (inTx) {
+    if (inSavepoint) {
       try {
-        stmts.exec('rollback')
+        stmts.exec('rollback to one_file')
+        stmts.exec('release one_file')
       } catch {
         /* nothing open */
       }
@@ -552,6 +601,14 @@ async function indexOneStaleFile(
 export const OPTIMIZE_SEGMENTS = 8
 /** Free-list share of the file past which VACUUM runs (checked after optimize frees its pages). */
 export const VACUUM_FREE_RATIO = 0.25
+/**
+ * Past this file size neither `optimize` nor VACUUM runs. Both rewrite the whole index in one
+ * synchronous statement on the daemon's only thread: on the 45 MB index of 2026-10-13/14 an optimize
+ * held it 3.6 s and 4.4 s (daemon.log STALL lines, innermost frame upkeepSearchIndex), and the tray
+ * watchdog kills a daemon that misses three health probes 5 s apart. A big index is left to FTS5's own
+ * automerge, which merges a little inside each insert, and freed pages are reused by the next inserts.
+ */
+export const UPKEEP_MAX_BYTES = 32 * 1024 * 1024
 const UPKEEP_DELAY_MS = 1000
 
 export interface UpkeepResult {
@@ -563,8 +620,8 @@ export interface UpkeepResult {
 
 /**
  * Compact the index: FTS `optimize` when segments exceed OPTIMIZE_SEGMENTS, then VACUUM when the
- * free list exceeds VACUUM_FREE_RATIO. Does nothing (returns null) while a refresh is writing or
- * when the index cannot be opened; never throws.
+ * free list exceeds VACUUM_FREE_RATIO, on a file of at most UPKEEP_MAX_BYTES. Does nothing (returns
+ * null) while a refresh is writing or when the index cannot be opened; never throws.
  */
 export function upkeepSearchIndex(): UpkeepResult | null {
   if (refreshing) return null
@@ -577,15 +634,16 @@ export function upkeepSearchIndex(): UpkeepResult | null {
         (conn.query('select count(distinct segid) as n from conv_idx').get() as { n: number }).n,
       )
     out.segments = count()
-    if (out.segments > OPTIMIZE_SEGMENTS) {
+    const pages = (p: string) =>
+      Number((conn.query(`pragma ${p}`).get() as Record<string, number>)[p])
+    const small = pages('page_count') * pages('page_size') <= UPKEEP_MAX_BYTES
+    if (small && out.segments > OPTIMIZE_SEGMENTS) {
       conn.exec("insert into conv(conv) values ('optimize')")
       out.optimized = true
     }
-    const pages = (p: string) =>
-      Number((conn.query(`pragma ${p}`).get() as Record<string, number>)[p])
     const total = pages('page_count')
     out.freeRatio = total > 0 ? pages('freelist_count') / total : 0
-    if (out.freeRatio > VACUUM_FREE_RATIO) {
+    if (small && out.freeRatio > VACUUM_FREE_RATIO) {
       conn.exec('vacuum')
       out.vacuumed = true
     }
@@ -608,9 +666,44 @@ function scheduleUpkeep() {
   upkeepTimer.unref?.()
 }
 
-export async function refreshSearchIndex(
+/** How long the pass's write transaction stays open before it commits and starts another. One commit
+ *  per file was ~21,800 journal creations, fsyncs and deletions for the CLI accounts' first build alone,
+ *  and on this PC under load a commit measured 165 ms on average (510 ms the worst), on the daemon's
+ *  thread. A pass is cut by its budget, so this is a few commits a pass. */
+const COMMIT_EVERY_MS = 2000
+/** Readable sessions a pass may drop at once without question. Past this, a pass whose file list lost
+ *  more than half of what the index holds keeps them: that is a store that could not be read this time
+ *  (a CLI account registry refused as corrupt lists no accounts at all), not 20,000 deleted chats, and
+ *  dropping them would cost a re-read of every one when it comes back. A row with no file is never
+ *  searched (the search asks only about files it lists), so keeping it costs nothing but its bytes. */
+const MASS_DROP_MIN = 200
+
+let queue: Promise<unknown> = Promise.resolve()
+let queued = 0
+
+/**
+ * Bring the index in line with `files` (every file the search reads: a session missing from it is
+ * dropped), incrementally. Passes run one at a time: a call made during a pass waits for it.
+ */
+export function refreshSearchIndex(
   files: IndexableFile[],
   opts: { budgetMs?: number } = {},
+): Promise<IndexRefreshResult> {
+  queued++
+  refreshing = true
+  // The flag is cleared before the caller's await resumes, so a caller can run upkeep right after.
+  const run = queue
+    .then(() => refreshPass(files, opts))
+    .finally(() => {
+      if (--queued === 0) refreshing = false
+    })
+  queue = run.catch(() => {})
+  return run
+}
+
+async function refreshPass(
+  files: IndexableFile[],
+  opts: { budgetMs?: number },
 ): Promise<IndexRefreshResult> {
   const started = performance.now()
   const deadline = opts.budgetMs ? started + opts.budgetMs : Number.POSITIVE_INFINITY
@@ -618,17 +711,28 @@ export async function refreshSearchIndex(
   const conn = open()
   if (!conn) return result
 
-  refreshing = true
+  // One write transaction at a time, committed every COMMIT_EVERY_MS. IMMEDIATE, as in open(): a
+  // rebuild reads its old segments before deleting them, and a deferred transaction that has read is
+  // refused at once, not made to wait, when another process writes.
+  let txAt = -1
+  const begin = () => {
+    if (txAt >= 0) return
+    conn.exec('begin immediate')
+    txAt = performance.now()
+  }
+  const commit = (force: boolean) => {
+    if (txAt < 0 || (!force && performance.now() - txAt < COMMIT_EVERY_MS)) return
+    conn.exec('commit')
+    txAt = -1
+    docCache = null
+  }
   try {
-    const known = new Map<string, KnownDoc>()
-    for (const row of conn
-      .query('select rowid, key, mtime_ms, size_bytes, done_bytes, nseg from doc')
-      .all() as Array<KnownDoc & { key: string }>)
-      known.set(row.key, row)
+    const known = new Map(knownDocs(conn))
 
     const wanted = new Set<string>()
     const stale: IndexableFile[] = []
     for (const f of files) {
+      if (!searchIndexReads(f)) continue
       const key = docKey(f)
       wanted.add(key)
       const have = known.get(key)
@@ -660,13 +764,21 @@ export async function refreshSearchIndex(
       nextRowId,
     }
 
-    // Sessions the index holds that are no longer on disk.
+    // Sessions the index holds that are no longer on disk. A row of a store the index cannot read
+    // (an empty one an older build recorded, see searchIndexReads) always goes.
+    const gone = [...known].filter(([key]) => !wanted.has(key))
+    const readableGone = gone.filter(([, row]) =>
+      searchIndexReads(row as { source: SessionSource }),
+    )
+    const keepReadable = readableGone.length > MASS_DROP_MIN && readableGone.length * 2 > known.size
     let dropSlice = performance.now()
-    for (const [key, row] of known) {
-      if (wanted.has(key)) continue
+    for (const [, row] of gone) {
+      if (keepReadable && searchIndexReads(row as { source: SessionSource })) continue
+      begin()
       dropRow.run(row.rowid)
       await dropSegments(stmts, row.rowid)
       result.removed++
+      commit(false)
       if (performance.now() - dropSlice > 15) {
         await new Promise<void>((r) => setImmediate(r))
         dropSlice = performance.now()
@@ -681,16 +793,27 @@ export async function refreshSearchIndex(
         result.remaining = stale.length - i
         break
       }
+      begin()
       await indexOneStaleFile(f, known, stmts, result)
+      commit(false)
     }
 
+    begin()
     conn
       .query('insert or replace into meta (k, v) values (?, ?)')
       .run('built_at', String(Date.now()))
+    commit(true)
   } catch {
-    // Any failure leaves whatever was already indexed in place; the scan covers the rest.
+    // Any failure leaves whatever was already committed in place; the scan covers the rest.
+    if (txAt >= 0) {
+      try {
+        conn.exec('rollback')
+      } catch {
+        /* closed under us (dropSearchIndex) */
+      }
+    }
   } finally {
-    refreshing = false
+    docCache = null
     result.ms = performance.now() - started
   }
   // A re-indexed session deletes its old FTS rows too, so `indexed` counts when rows existed.
@@ -834,22 +957,41 @@ export function searchIndexCandidates(
 export function searchIndexCoverage(files: IndexableFile[]): { covered: number; stale: number } {
   const conn = open()
   if (!conn) return { covered: 0, stale: files.length }
+  const held = searchIndexHolds(files)
+  const covered = held ? held.filter((bytes) => bytes === Number.POSITIVE_INFINITY).length : 0
+  return { covered, stale: files.length - covered }
+}
+
+/**
+ * How much of each file, as it is on disk now, the index holds: `Infinity` for all of it (its row is at
+ * the file's current mtime and size), the byte offset where the unindexed part starts for a file that
+ * only grew since it was indexed (a running chat), and 0 for none (never indexed, rewritten, or a store
+ * the index cannot read). Null when the index is not open; this never opens it (a search must not, see
+ * session-search.ts).
+ *
+ * This is what lets a search use the index whatever share of the store is current: before 2026-10-17
+ * the index answered only when 98% of the files in scope were exactly current, and every chat that had
+ * appended a line since the last refresh, or HSwarm job written, counted against that, so after a few
+ * quiet hours it stood aside entirely and a 7 s scan read 54 of 2,119 files.
+ */
+export function searchIndexHolds(files: IndexableFile[]): number[] | null {
+  const conn = db
+  if (!conn) return null
   try {
-    const known = new Map<string, { mtime_ms: number; size_bytes: number }>()
-    for (const row of conn.query('select key, mtime_ms, size_bytes from doc').all() as Array<{
-      key: string
-      mtime_ms: number
-      size_bytes: number
-    }>)
-      known.set(row.key, row)
-    let covered = 0
-    for (const f of files) {
+    const known = knownDocs(conn)
+    return files.map((f) => {
+      if (!searchIndexReads(f)) return 0
       const have = known.get(docKey(f))
-      if (have && have.mtime_ms === f.mtime_ms && have.size_bytes === f.size_bytes) covered++
-    }
-    return { covered, stale: files.length - covered }
+      if (!have) return 0
+      if (have.mtime_ms === f.mtime_ms && have.size_bytes === f.size_bytes)
+        return Number.POSITIVE_INFINITY
+      // Transcripts are appended to: one that grew still starts with what was indexed. A file of the
+      // same size or smaller was rewritten, and the index's copy of it says nothing.
+      if (f.size_bytes > have.size_bytes && have.done_bytes > 0) return have.done_bytes
+      return 0
+    })
   } catch {
-    return { covered: 0, stale: files.length }
+    return null
   }
 }
 
@@ -885,6 +1027,8 @@ export function dropSearchIndex(): boolean {
   close()
   try {
     rmSync(indexPath, { force: true })
+    // A journal left by a write cut off mid-way would otherwise be replayed into the NEW file.
+    rmSync(`${indexPath}-journal`, { force: true })
     openBlockedUntil = 0
     return true
   } catch {

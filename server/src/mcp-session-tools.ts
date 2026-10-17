@@ -178,7 +178,7 @@ export const SESSION_TOOLS: HydraTool[] = [
     name: 'search_sessions',
     listed: true,
     description:
-      "Searches the content of local transcripts (Claude, Codex, OpenCode) for text, or for a regular expression when regex is true. Use it to find a session by something said inside it; use list_sessions when you already know the session. Results come newest-active first, with a match count and snippets. Check the searched field on the result. 'index' is instant and complete for what was said (human and assistant turns, matched by whole words and phrases), but it skips tool output and does not match inside a word, so re-run with everything true when a miss would matter. 'scan' streams the transcripts under a wall-clock budget: when budgetExhausted is true the search gave up early, so an empty result proves nothing. limitReached means the hit list was capped, not that time ran out. Read-only.",
+      "Searches the content of local transcripts (Claude, including every CLI account's own chats, Codex, OpenCode) for text, or for a regular expression when regex is true. Use it to find a session by something said inside it; use list_sessions when you already know the session. Results come newest-active first, with a match count, snippets, the store that holds the transcript (store: claude, cli, remote, codex, ...) and its account when known. Check the searched field on the result. 'index' is instant and complete for what was said (human and assistant turns, matched by whole words and phrases), but it skips tool output and does not match inside a word, so re-run with everything true when a miss would matter. 'scan' streams the transcripts under a wall-clock budget: when budgetExhausted is true the search gave up early, so an empty result proves nothing. limitReached means the hit list was capped, not that time ran out. Read-only.",
     inputSchema: S(
       {
         query: { type: 'string', description: 'Text to find, or a regex pattern if regex=true.' },
@@ -198,7 +198,7 @@ export const SESSION_TOOLS: HydraTool[] = [
         instance: {
           type: 'string',
           description:
-            "Scope to one Claude Desktop instance by its DIRECTORY NAME (list_instances -> name), or 'default' for the non-isolated install, or 'other' for plain CLI sessions. This one does NOT take an instance number.",
+            "Scope to one Claude Desktop instance by its DIRECTORY NAME (list_instances -> name), or 'default' for the non-isolated install, or 'other' for plain CLI sessions in ~/.claude; or to one CLI account or Codex instance by its name, its #number or its ref (cli:<id>, codex:<id>). A Desktop instance does NOT take a number.",
         },
         limit: { type: 'number', description: 'Max sessions to return (default 50, max 200).' },
         everything: {

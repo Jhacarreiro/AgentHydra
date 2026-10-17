@@ -749,6 +749,15 @@ export interface TailResult {
 }
 
 /** One session's hits from an advanced BODY search (server/src/session-search.ts). */
+/** A search hit's account: a CLI account or Codex instance whose own store holds the transcript (`ref`
+ *  `cli:<id>` / `codex:<id>`, `num` its permanent #), or the Claude Desktop instance a main-folder chat
+ *  belongs to (`ref` null, `name` its folder label or 'default'). */
+export interface SessionSearchAccount {
+  ref: string | null
+  num: number | null
+  name: string
+}
+
 export interface SessionSearchResult {
   session_id: string
   source: SessionSource
@@ -758,6 +767,12 @@ export interface SessionSearchResult {
   /** True when match_count hit the per-file cap; there may be more matches not shown. */
   truncated: boolean
   snippets: string[]
+  /** Which local store holds the transcript: 'claude' (~/.claude/projects, Claude Code's main folder),
+   *  'cli' (a CLI account's own folder, CliMayte's workers included), 'remote' (another PC's chat the
+   *  chat sync keeps here), or the product (`codex`, `opencode`, `zswarm`, ...). */
+  store?: string
+  /** The account the transcript belongs to, when known; null when the store does not say. */
+  account?: SessionSearchAccount | null
   /** The row's shape inputs, present on a scoped (`view=1`) search so the sidebar can apply its
    *  browser-side shape filter to the hits. */
   shape_of?: {
