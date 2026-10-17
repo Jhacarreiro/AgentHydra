@@ -254,8 +254,10 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
   answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
   the MCP tool) and approve; a proposal that arrives already carrying an `approval` is refused.
 - **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
-  pinned here and runs as a local routine does. When none is, any runner carrying the labels may run it (schedule routines
-  only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
+  pinned here and runs as a local routine does. A document with `"eachRunner": true` (signed like every other key) runs on
+  every runner carrying its labels, each its own copy as a local routine, never claimed and of any kind, status included:
+  work each computer does over its own data, such as learning from that computer's chats. When neither, any runner carrying
+  the labels may run it (schedule routines only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
   of twice its timeout, renewed while the run lives (`routines/manager-board.ts`, `routines/runs.ts`). Anything else is state
   `elsewhere`, listed and never run, read or paused here. A schedule keeps its own `timeZone` on every runner.
 - **Runs.** Every central run is reported to the run log as CloudEvents (`routine.claimed`, `routine.started`,
