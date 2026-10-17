@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { db, getSetting, setSetting } from '../server/src/db'
 import {
+  closedLandingEligible,
   getMonitorSettings,
   listMonitorAccounts,
   type MonitorDeps,
@@ -521,5 +522,95 @@ describe('landing instance pick', () => {
       pickLandingInstance(null, [inst('desktop:x', 1, false)], [use('desktop:x', 85, true)]),
     ).toBe(null)
     expect(pickLandingInstance(null, [], [])).toBe(null)
+  })
+
+  test('closedLandingEligible: a closed app may boot only when every open account is provably at the line', () => {
+    // Contract (owner law, 2026-08-30): every RUNNING signed-in account has a FRESH reading at
+    // or past 85% on either window, or nothing is open. Regression: `return true`, or treating
+    // a stale reading as proof, lets landing throw closed accounts open (the 2026-08-29 incident).
+    const open = (ref: string) => ({ ref })
+    expect(closedLandingEligible([open('desktop:a')], [use('desktop:a', 85)])).toBe(true)
+    expect(
+      closedLandingEligible(
+        [open('desktop:a')],
+        [{ ref: 'desktop:a', weeklyPct: 10, sessionPct: 85, stale: false }],
+      ),
+    ).toBe(true)
+    expect(closedLandingEligible([open('desktop:a')], [use('desktop:a', 84)])).toBe(false)
+    expect(
+      closedLandingEligible(
+        [open('desktop:a')],
+        [{ ref: 'desktop:a', weeklyPct: 84, sessionPct: 84, stale: false }],
+      ),
+    ).toBe(false)
+    expect(closedLandingEligible([open('desktop:a')], [use('desktop:a', 99, true)])).toBe(false)
+    expect(closedLandingEligible([open('desktop:a')], [])).toBe(false)
+    expect(closedLandingEligible([], [])).toBe(true)
+    // Every OPEN account must be saturated, not just one: a saturated account next to one with
+    // room keeps the closed app shut. A `some` in place of `every` passes single-account cases.
+    expect(
+      closedLandingEligible(
+        [open('desktop:a'), open('desktop:b')],
+        [use('desktop:a', 99), use('desktop:b', 84)],
+      ),
+    ).toBe(false)
+    expect(
+      closedLandingEligible(
+        [open('desktop:a'), open('desktop:b')],
+        [use('desktop:a', 99), use('desktop:b', 99, true)],
+      ),
+    ).toBe(false)
+    expect(
+      closedLandingEligible([open('desktop:a'), open('desktop:b')], [use('desktop:a', 99)]),
+    ).toBe(false)
+    expect(
+      closedLandingEligible(
+        [open('desktop:a'), open('desktop:b')],
+        [
+          { ref: 'desktop:a', weeklyPct: 85, stale: false },
+          { ref: 'desktop:b', weeklyPct: 10, sessionPct: 97, stale: false },
+        ],
+      ),
+    ).toBe(true)
+    // Slash style must not hide a reading: backslashes on the running ref, slashes in usage.
+    const BS = String.fromCharCode(92)
+    expect(
+      closedLandingEligible([open(`desktop:C:${BS}i${BS}a`)], [use('desktop:C:/i/a', 90)]),
+    ).toBe(true)
+  })
+
+  test('pickLandingInstance: with every open account at the line, a closed account under it is offered with mustOpen', () => {
+    // Contract: the closed candidate is offered only when the open fleet is saturated; at 84
+    // the open account keeps the chat. Regression: dropping closedLandingEligible from the
+    // picker would hand the chat to a closed app even while an open account has room.
+    const closedUnder = { ref: 'desktop:c', weeklyPct: 40, stale: true, ageMins: 999 }
+    expect(
+      pickLandingInstance(
+        null,
+        [inst('desktop:a', 1), inst('desktop:c', 2, false)],
+        [use('desktop:a', 85), closedUnder],
+      ),
+    ).toEqual({ ref: 'desktop:c', num: 2, mustOpen: true })
+    expect(
+      pickLandingInstance(
+        null,
+        [inst('desktop:a', 1), inst('desktop:c', 2, false)],
+        [use('desktop:a', 84), closedUnder],
+      ),
+    ).toEqual({ ref: 'desktop:a', num: 1, mustOpen: false })
+  })
+
+  test('pickLandingInstance: one saturated open account does not offer a closed one while another open account has room', () => {
+    // Regression: a `some` in closedLandingEligible would call the fleet saturated because
+    // desktop:a is at 90, and offer the closed desktop:c (40) with mustOpen. The open desktop:b
+    // at 84 has room, so it must keep the chat.
+    const closedUnder = { ref: 'desktop:c', weeklyPct: 40, stale: true, ageMins: 999 }
+    expect(
+      pickLandingInstance(
+        null,
+        [inst('desktop:a', 1), inst('desktop:b', 2), inst('desktop:c', 3, false)],
+        [use('desktop:a', 90), use('desktop:b', 84), closedUnder],
+      ),
+    ).toEqual({ ref: 'desktop:b', num: 2, mustOpen: false })
   })
 })

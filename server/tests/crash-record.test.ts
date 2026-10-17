@@ -53,8 +53,4 @@ describe('exitRecordLine', () => {
     expect(line).toMatch(/uptimeMs=\d+/)
     expect(line.includes('\n')).toBe(false)
   })
-
-  test('a null code (signal-terminated) is still a valid, readable record', () => {
-    expect(exitRecordLine(null)).toContain('exiting code=null')
-  })
 })

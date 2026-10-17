@@ -84,6 +84,10 @@
       transcript_path: transcriptPath(source, p, i),
       queue_status: null,
       instance: source === 'claude' ? instance : null,
+      // Desk's instance-ref and model/effort fields are required on every row (SessionSummary);
+      // none are shown in these captures, so they are null rather than invented.
+      instance_ref: null,
+      instance_num: null,
       archived: false,
       done: i === 7,
       // Two rows carry the "queued here" marker so the shape chip in the screenshot shows both the
@@ -103,6 +107,8 @@
       copy_index: 1,
       copy_count: 1, // ordinary case: one transcript file per conversation, no interrupt/resume split.
       ended_because: null, // Claude-only marker for a superseded copy; none of these are superseded.
+      model: null,
+      effort: null,
     }
   })
   /** The queue only ever holds `claude` runs, so its rows may only point at Claude sessions. */

@@ -6,6 +6,8 @@
 // dedicated POST /api/queue/:id/cancel path), runner-owned bookkeeping fields are refused outright,
 // and identity fields lock once a row's status is 'running' (isActive() OR the boot-recovery window
 // before reattachRuns() repopulates the in-memory `active` map — both read the same DB column).
+// It also covers the POST /api/queue NO-HEADLESS refusal (routes/queue.ts): a new_chat or resume
+// body gets 409 with the no-headless reason and no queue row is written.
 //
 // Routes are exercised through the real registrations (routes/queue.ts's side-effecting import,
 // no listening port) but dispatched on a PRIVATE Hono copied from the shared app, never on the
@@ -112,6 +114,36 @@ test('canceling via PATCH is refused once the item is no longer queued', async (
   expect(status).toBe(409)
   expect(String(json.error)).toContain('/api/queue/:id/cancel')
   expect(rowOf(id).status).toBe('running') // untouched
+})
+
+async function post(body: Record<string, unknown>) {
+  const res = await http.request('/api/queue', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'refused', cwd: '/tmp/repo', prompt: 'hello', ...body }),
+  })
+  return { status: res.status, json: (await res.json()) as Record<string, unknown> }
+}
+
+function queuedRowCount() {
+  return (db.query('select count(*) as n from queue_items').get() as { n: number }).n
+}
+
+// Contract: AgentHydra never queues work it cannot run (owner law 2026-08-27). Regression: if the
+// route's refusal at queue.ts (headlessRunsAllowed() check) were removed, POST would answer 200 with
+// an id that dispatch later fails, and a row would land in queue_items.
+test('POST /api/queue refuses a new chat with 409 no-headless and writes no row', async () => {
+  const { status, json } = await post({ new_chat: true })
+  expect(status).toBe(409)
+  expect(String(json.error).startsWith('no-headless:')).toBe(true)
+  expect(queuedRowCount()).toBe(0)
+})
+
+test('POST /api/queue refuses a resume with 409 no-headless and writes no row', async () => {
+  const { status, json } = await post({ new_chat: false, session_id: 'qpg-resume-session' })
+  expect(status).toBe(409)
+  expect(String(json.error).startsWith('no-headless:')).toBe(true)
+  expect(queuedRowCount()).toBe(0)
 })
 
 test('DELETE refuses a row that is still marked active', async () => {
