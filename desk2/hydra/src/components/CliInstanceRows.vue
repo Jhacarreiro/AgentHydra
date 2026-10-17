@@ -474,13 +474,13 @@ function openDeleteDialog(inst: CliInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDeleteConfirm(confirmName: string) {
+async function onDeleteConfirm(note: string) {
   const inst = deleteTarget.value
   if (!inst) return
   deleting.value = true
   deleteError.value = null
   try {
-    const result = await remove(inst.id, confirmName)
+    const result = await remove(inst.id, note)
     if (result?.ok) {
       toast.success(t('cliInstances.toastDeleted'))
       // Quick add must not sign in again into an instance that is gone.
@@ -905,7 +905,6 @@ defineExpose({
   <DeleteInstanceDialog
     namespace="cliInstances"
     v-model:open="deleteOpen"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDeleteConfirm"

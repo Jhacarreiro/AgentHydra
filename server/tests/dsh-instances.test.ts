@@ -114,7 +114,7 @@ describe('deleteDshInstance: the guards around somebody else’s chat history', 
     clearRegistry()
     const created = createDshInstance('keep-my-files')
     const home = created.dir as string
-    const result = deleteDshInstance(created.data?.id as string)
+    const result = deleteDshInstance(created.data?.id as string, { note: 'Moved to a new PC' })
     expect(result.ok).toBe(true)
     expect(existsSync(home)).toBe(true)
     expect(readRegistry().instances).toHaveLength(0)
@@ -122,25 +122,23 @@ describe('deleteDshInstance: the guards around somebody else’s chat history', 
     expect(result.message).toContain(home)
   })
 
-  test('deleting files requires the name typed back', () => {
+  test('a delete with no note, or a too-short one, is refused and deletes nothing', () => {
     clearRegistry()
     const created = createDshInstance('precious')
     const home = created.dir as string
-    const wrong = deleteDshInstance(created.data?.id as string, {
-      deleteFiles: true,
-      confirmName: 'Precious',
-    })
-    expect(wrong.ok).toBe(false)
-    expect(existsSync(home)).toBe(true)
-    const right = deleteDshInstance(created.data?.id as string, {
-      deleteFiles: true,
-      confirmName: 'precious',
-    })
+    const id = created.data?.id as string
+    for (const note of [undefined, '', '   ', 'ok']) {
+      const refused = deleteDshInstance(id, { deleteFiles: true, note })
+      expect(refused.ok).toBe(false)
+      expect(existsSync(home)).toBe(true)
+      expect(readRegistry().instances).toHaveLength(1)
+    }
+    const right = deleteDshInstance(id, { deleteFiles: true, note: 'Trial run, not needed' })
     expect(right.ok).toBe(true)
     expect(existsSync(home)).toBe(false)
   })
 
-  test('a home OUTSIDE the managed directory is never deleted, even with the name typed', () => {
+  test('a home OUTSIDE the managed directory is never deleted, even with a note', () => {
     clearRegistry()
     const created = createDshInstance('hand-edited')
     const id = created.data?.id as string
@@ -153,7 +151,7 @@ describe('deleteDshInstance: the guards around somebody else’s chat history', 
     ;(store.instances[0] as { home: string }).home = elsewhere
     writeFileSync(STORE_PATH, JSON.stringify(store))
 
-    const result = deleteDshInstance(id, { deleteFiles: true, confirmName: 'hand-edited' })
+    const result = deleteDshInstance(id, { deleteFiles: true, note: 'Hand-edited registry test' })
     expect(result.ok).toBe(false)
     expect(existsSync(join(elsewhere, 'keepme.txt'))).toBe(true)
     // And the record is still there: a refusal must not half-succeed by forgetting the instance.
@@ -162,7 +160,10 @@ describe('deleteDshInstance: the guards around somebody else’s chat history', 
 
   test('the DEFAULT home is not deletable from here at all', () => {
     clearRegistry()
-    const result = deleteDshInstance('default', { deleteFiles: true, confirmName: 'anything' })
+    const result = deleteDshInstance('default', {
+      deleteFiles: true,
+      note: 'Trying the default home',
+    })
     expect(result.ok).toBe(false)
     expect(result.message).toContain('not something AgentHydra created')
   })

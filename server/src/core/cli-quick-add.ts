@@ -102,7 +102,7 @@ function finish(id: string, state: 'signed-in' | 'failed' | 'cancelled', message
   // A NEW instance that never signed in is taken back; a re-sign of an existing one is left alone.
   if (state !== 'signed-in' && l?.created) {
     const rec = getCliInstance(flow.instanceId)
-    if (rec && !rec.loggedIn) deleteCliInstance(rec.id, rec.name)
+    if (rec && !rec.loggedIn) deleteCliInstance(rec.id, 'Quick add: its sign-in did not finish.')
   }
 }
 

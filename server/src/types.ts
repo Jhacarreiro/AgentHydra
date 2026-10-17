@@ -1598,7 +1598,15 @@ export interface CliLoginSyncStatus {
   events: Array<{
     at: number
     num: number | null
-    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut' | 'merged' | 'error'
+    action:
+      | 'pushed'
+      | 'pulled'
+      | 'created'
+      | 'skipped'
+      | 'signedOut'
+      | 'removed'
+      | 'merged'
+      | 'error'
     note: string
   }>
 }

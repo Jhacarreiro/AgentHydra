@@ -42,8 +42,6 @@ export default {
   deleteDialogTitle: 'Delete this instance?',
   deleteDialogDescription:
     'Deletes the home directory and every conversation in it. AgentHydra cannot get them back.',
-  deleteDialogPlaceholder: 'instance name',
-  deleteDialogMismatch: 'That does not match the instance name.',
   deleteDialogSubmit: 'Delete',
   deleteDialogDeleting: 'Deleting…',
 }

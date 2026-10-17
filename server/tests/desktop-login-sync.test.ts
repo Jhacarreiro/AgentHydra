@@ -6,7 +6,8 @@
 // with the sender's folder name and number, its tokens and claude.ai cookies encrypted under the new
 // profile's own key (the cookie plaintext led by SHA-256 of its host, as Chromium writes it); of two
 // copies in one family the later expiry wins; a login this PC signed in on its own is left alone
-// both ways; a login left out here is not replaced. A wrong write here signs a desktop app out, and
+// both ways; a desktop login is never left out; a profile deleted on one PC is deleted on the other,
+// which says who deleted it and why. A wrong write here signs a desktop app out, and
 // a wrong direction ties two working sign-ins to each other's refreshes. The store is the real
 // Worker on bun:sqlite; the other PC is played by writing to the store with this PC's key.
 // Windows only: the profile key is DPAPI's.
@@ -14,8 +15,9 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
+import { basename, join } from 'node:path'
 import {
   cliAccountIdentity,
   createCliInstance,
@@ -28,6 +30,7 @@ import {
   disconnectLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
+  removeLoginEverywhere,
   runLoginSync,
   sealLogin,
   setLoginSyncExcluded,
@@ -52,6 +55,7 @@ import {
   syncDesktopLogins,
   tokenExpiry,
 } from '../src/core/desktop-login-sync'
+import { removeInstance } from '../src/core/lifecycle'
 import { instancesRoot } from '../src/core/paths'
 import { grantDigest } from '../src/core/revoked-grants'
 import { base, store, token } from './login-sync-store'
@@ -272,11 +276,11 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect((await meta(UC)).version).toBe(before)
       expect((await loginSyncStatus()).logins.find((l) => l.id === UC)?.note).toBe('own')
 
-      // Left out on this PC: a newer copy in the store does not land.
+      // A desktop login is never left out (owner, 2026-10-16): asked to, it still takes the newer copy.
       setLoginSyncExcluded(UA, true)
       await otherPc(UA, 'acct-a', 1, 9999, 'sk-a9')
       await runLoginSync()
-      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a3' })
+      expect(await here(a)).toEqual({ expiry: 9999, session: 'sk-a9' })
     } finally {
       disconnectLoginSync()
       // Retried: on the Windows runner a handle the sync just closed can still hold the folder a moment
@@ -372,6 +376,88 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       const b = (await listDesktopProfiles()).find((p) => p.name === 'rev-b')!
       made.push(b.dir)
       expect(await v2Here(b.dir)).toBe(cache({ [LIVE]: { token: 't-5000', expiresAt: 5000 } }))
+    } finally {
+      disconnectLoginSync()
+      for (const dir of made)
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // Owner, 2026-10-16: "If one of us removes it ... It removes from the other ... let us know that the
+  // other person removed it ... leave a note". The other PC is played by writing its removal marker.
+  test('a profile deleted on one PC is deleted on the other, which says who and why; a sign-in after that syncs again', async () => {
+    const U = randomUUID()
+    const NOTE = 'Moved to the laptop'
+    const made: string[] = []
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const row = async () =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === U)
+      const gone = await profile(
+        `gone-${randomUUID().slice(0, 8)}`,
+        U,
+        Date.now() + 86_400_000,
+        'sk-1',
+      )
+      made.push(gone)
+      await runLoginSync()
+      const shared = await row()
+      expect(shared.meta.kind).toBe('desktop')
+
+      // The other PC's owner deleted their profile of this account, with a note.
+      const marker = { id: U, signedOut: true, removed: true, note: NOTE }
+      const put = await store('PUT', `/v1/logins/${U}`, {
+        version: shared.version,
+        blob: sealLogin(key, marker),
+        meta: {
+          ...shared.meta,
+          signedOut: true,
+          removed: true,
+          expiresAt: 0,
+          by: 'PC-B',
+          at: Date.now(),
+        },
+      })
+      expect(put.status).toBe(200)
+      const r = await runLoginSync()
+      expect(existsSync(gone)).toBe(false)
+      expect(r.removed).toEqual([
+        expect.objectContaining({ kind: 'desktop', by: 'PC-B', note: NOTE }),
+      ])
+      const event = (await loginSyncStatus()).events.find((e) => e.action === 'removed')
+      expect(event?.note).toContain(NOTE)
+
+      // Signed in here again after that: a new sign-in, so it goes up and syncs again.
+      const again = await profile(
+        `again-${randomUUID().slice(0, 8)}`,
+        U,
+        Date.now() + 86_400_000,
+        'sk-2',
+      )
+      made.push(again)
+      await runLoginSync()
+      expect(existsSync(again)).toBe(true)
+      expect((await row()).meta).not.toHaveProperty('removed')
+
+      // This PC's owner deletes it with a note (the delete route's two calls): the store tells the other PC.
+      expect((await removeInstance(again, { note: 'Not needed here' })).ok).toBe(true)
+      removeLoginEverywhere(U, {
+        kind: 'desktop',
+        num: null,
+        name: basename(again),
+        note: 'Not needed here',
+      })
+      await runLoginSync()
+      const sent = (await row()).meta
+      expect(sent).toMatchObject({ signedOut: true, removed: true, by: hostname() })
+      expect(JSON.stringify(sent)).not.toContain('Not needed here')
     } finally {
       disconnectLoginSync()
       for (const dir of made)
@@ -630,7 +716,6 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
           ],
         ]),
         state: {},
-        excluded: new Set<string>(),
         out: { pushed: 0, landed: 0, unchanged: 0, problems: [] },
         upload: async () => null,
         download: async (uuid: string) => (uuid === id ? login : null),

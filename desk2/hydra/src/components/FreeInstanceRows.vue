@@ -606,7 +606,6 @@ defineExpose({
   <DeleteInstanceDialog
     v-model:open="deleteOpen"
     namespace="freeInstances"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDeleteConfirm"

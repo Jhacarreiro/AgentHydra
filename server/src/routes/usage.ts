@@ -22,12 +22,14 @@ import {
 import { runCliLimitReset } from '../core/cli-limit-reset'
 import { exportCliLogins, importCliLogins } from '../core/cli-login-move'
 import {
+  cliSyncRowOf,
   configureLoginSync,
   disconnectLoginSync,
   joinLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
   noteLoggedOutHere,
+  removeLoginEverywhere,
   runLoginSync,
   setChatSharing,
   setLoginSyncEnabled,
@@ -816,8 +818,20 @@ app.post('/api/cli-instances/:id/associate', async (c) => {
 })
 app.delete('/api/cli-instances/:id', async (c) => {
   const body = await jsonBody(c)
-  const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  return c.json(deleteCliInstance(c.req.param('id'), confirmName))
+  const note = typeof body.note === 'string' ? body.note : undefined
+  const id = c.req.param('id')
+  // A synced login is deleted on the other PCs too, and they show this note (core/cli-login-sync.ts).
+  const row = cliSyncRowOf(id)
+  const inst = getCliInstance(id)
+  const result = deleteCliInstance(id, note)
+  if (result.ok && row && note)
+    removeLoginEverywhere(row, {
+      kind: 'cli',
+      num: inst?.num ?? null,
+      name: inst?.name ?? null,
+      note,
+    })
+  return c.json(result)
 })
 // Link this CLI instance to a DESKTOP instance (or clear it with desktopDir: null). Same account,
 // two logins — the link is what lets the UI group them and lets each back the other up for usage.
@@ -1044,6 +1058,6 @@ app.post('/api/codex-instances/:id/rename', async (c) => {
 })
 app.delete('/api/codex-instances/:id', async (c) => {
   const body = await jsonBody(c)
-  const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  return c.json(await deleteCodexInstance(c.req.param('id'), confirmName))
+  const note = typeof body.note === 'string' ? body.note : undefined
+  return c.json(await deleteCodexInstance(c.req.param('id'), note))
 })
