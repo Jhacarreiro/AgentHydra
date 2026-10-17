@@ -92,8 +92,9 @@ add only repos you trust.
 - Copying and the rules above: `server/src/core/command-packs.ts`, held by `server/tests/command-packs.test.ts`.
 - The daemon's side (the list, the accounts, the 10-minute pull): `server/src/command-packs.ts`.
 - The API: `GET /api/command-packs` (the list, the last run, `busy`), `PUT /api/command-packs` with
-  `{ packs }` (saves and starts a sync), `POST /api/command-packs/sync` (starts one). Both answer at once;
-  add `?wait=1` to answer when the sync is done.
+  `{ packs }` (saves and starts a sync), `POST /api/command-packs/sync` (starts one). Both answer at once,
+  already saying `busy: true`, so Settings polls until the sync it started is done; add `?wait=1` to answer
+  when the sync is done. Held by `server/tests/command-packs-route.test.ts`.
 - Settings: `desk2/web/src/components/panes/CommandPacksSettings.vue`.
 
 </details>
