@@ -14,5 +14,11 @@ import { Hono } from 'hono'
  * a wrapper would misattribute the summed complexity of a dozen unrelated handlers to itself. A
  * bare top-level `app.get(...)` statement (here or in a routes/*.ts module) has no such enclosing
  * function, so each handler is measured on its own, exactly as it was before this file existed.
+ *
+ * Route order is load order: Hono runs handlers in the order they were registered, so a route
+ * registered before index.ts mounts its /api/* guard answers a foreign Origin or Host unchecked.
+ * Only index.ts loads a routes/*.ts module (its `await import` block, after the guard). No other
+ * module may import one, not even for a helper: move the helper to a plain module instead, as
+ * hswarmAccountId moved to hswarm.ts. server/tests/api-guard-order.test.ts enforces this.
  */
 export const app = new Hono()
