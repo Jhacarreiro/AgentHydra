@@ -4,7 +4,7 @@
 // into its schedule in words (a central routine's in its own time zone), its Mode row (a routine with modes), its Describe
 // runs switch, its history on this computer with each run's description, and its actions: Run now, Open chat for a prompt
 // run's chat, Edit (its Edit form), and for a routine of this computer's own, Move to central when a central store is set
-// (its document then waits under Awaiting approval, and the file runs until the owner approves it).
+// (its document then waits under Awaiting approval, and the file runs until it is approved).
 import { computed, ref } from 'vue'
 import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, CloudUpload, Gauge, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'

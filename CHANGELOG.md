@@ -9,6 +9,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **A chat with a background task still running no longer looks idle in the sidebar.** A Claude Desktop or CLI chat whose reply has finished while its background command, watcher or workflow still runs now shows the orange running dot at full brightness, as AgentHydra's own chats do, instead of the dim idle ring.
 - **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
+- **Connectors is a compact table.** Settings → Connectors lists each connector on one line with its type, status, action and switch; details open under it. A connector that is not installed can no longer be switched on.
 - **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
 
 ## [2.0.5] - 2026-10-16

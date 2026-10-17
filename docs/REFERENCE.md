@@ -185,7 +185,7 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   makes the routine `ended` after that local day: it never runs but stays listed.
 
 States: `idle`, `due`, `running`, `paused` (the owner paused it), `off` (its status says off), `ended` (past `until`),
-`broken` (with its reason) and `waiting` (a proposal waiting for the owner's yes, listed under "Waiting for your yes").
+`broken` (with its reason) and `waiting` (a proposal waiting to be approved, by the owner or by an agent he told to, listed under "Awaiting approval").
 
 Schedule semantics: the memory keeps each schedule routine's last slot. The first time a routine is seen it starts from now,
 so a slot already past never runs. A look runs the newest slot at or before now, once, when it is later than the last slot

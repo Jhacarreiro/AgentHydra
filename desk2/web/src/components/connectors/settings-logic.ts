@@ -6,20 +6,21 @@ export const SLOW_POLL_MS = 15000
 
 export type Tone = 'ok' | 'busy' | 'bad' | 'idle'
 
+/** The Status column's word; why it failed and an install's progress are its tooltip and its details. */
 export function stateLabel(v: ConnectorView): string {
   switch (v.state) {
     case 'running':
       return 'Running'
     case 'installed':
-      return 'Installed, not running'
+      return 'Stopped'
     case 'absent':
       return 'Not installed'
     case 'installing':
-      return v.reason ? `Installing… ${v.reason}` : 'Installing…'
+      return 'Installing…'
     case 'starting':
       return 'Starting…'
     case 'failed':
-      return `Failed: ${v.reason ?? 'unknown'}`
+      return 'Failed'
   }
 }
 
@@ -41,7 +42,12 @@ export function rowButtons(v: ConnectorView): { install: boolean; start: boolean
   }
 }
 
-/** A second line under the blurb: why it is absent or not answering, when the label alone does not say. */
+/** A connector not on this PC gives chats nothing, so its switch is off and cannot be turned on until it is installed. */
+export const canTurnOn = (v: ConnectorView): boolean => v.state !== 'absent' && v.state !== 'installing'
+
+export const typeLabel = (v: ConnectorView): string => (v.builtIn ? 'Built in' : 'App')
+
+/** Why it is absent or not answering, when the label alone does not say. */
 export const note = (v: ConnectorView): string | null => ((v.state === 'absent' || v.state === 'installed') && v.reason ? v.reason : null)
 
 export const versionLabel = (v: ConnectorView): string | null => (v.version ? (v.version.startsWith('v') ? v.version : `v${v.version}`) : null)
