@@ -971,9 +971,9 @@ async function onSignInCli(inst: CMInstance) {
     const linked = await linkCliDesktop(id, inst.dir)
     if (!linked?.ok) {
       // The link failed, so this CLI instance was created but never linked — leaving it behind
-      // would orphan it in the CLI Instances table. Clean it up (confirmName mirrors the trim
-      // createCliInstance applies to the name server-side) so a failed chain leaves no residue.
-      await removeCli(id, cliName.trim())
+      // would orphan it in the CLI Instances table. Clean it up (the note says why, as the server
+      // requires one for every delete) so a failed chain leaves no residue.
+      await removeCli(id, 'Link failed right after it was created.')
       toast.error(linked?.message ?? t('instances.toastCliCreateFailed'))
       return
     }
@@ -1408,13 +1408,13 @@ function openDeleteDialog(inst: CMInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDeleteConfirm(confirmName: string) {
+async function onDeleteConfirm(note: string) {
   const inst = deleteTarget.value
   if (!inst) return
   deleting.value = true
   deleteError.value = null
   try {
-    const result = await remove(inst.dir, confirmName)
+    const result = await remove(inst.dir, note)
     if (result?.ok) {
       toast.success(t('instances.toastDeleted'))
       deleteOpen.value = false
@@ -2058,7 +2058,6 @@ onUnmounted(() => {
     </Dialog>
     <DeleteInstanceDialog
       v-model:open="deleteOpen"
-      :instance-name="deleteTarget?.name ?? null"
       :submitting="deleting"
       :error-message="deleteError"
       @confirm="onDeleteConfirm"

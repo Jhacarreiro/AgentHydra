@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Deleting a synced account deletes it on your other PC too, with your reason.** Delete now asks why instead of asking you to type the name. Your other PC deletes its copy once it is not in use and tells you who deleted it and why.
+- **Desktop accounts always sync.** Login sync no longer offers a switch to leave a desktop account out on one PC.
+- **Your agents approve the routines you ask for.** An agent can now approve a routine, or move one to the central store, when you tell it to, instead of handing the click back to you. Resuming, discarding and editing a routine stay yours.
 - **A CliMayte dispatch sent again answers with its workers' own group.** A dispatch retried with the same request ids and no group name returned the workers it had already started, but under a new group name that held none of them, so checking or cancelling that group found nothing. The retry now answers with the group they are in, and a task new in it joins that group.
 
 ## [2.0.5] - 2026-10-16

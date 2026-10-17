@@ -57,10 +57,8 @@ export default {
   deleteDialogTitle: 'Delete Codex instance',
   deleteDialogDescription:
     'This permanently removes the Codex instance, desktop profile, and local CODEX_HOME. This cannot be undone.',
-  deleteDialogPlaceholder: 'Instance name',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
-  deleteDialogMismatch: "Name doesn't match.",
   toastCreated: 'Codex instance created.',
   toastCreateFailed: 'Failed to create Codex instance.',
   toastRenamed: 'Codex instance renamed.',

@@ -1,5 +1,5 @@
 // Settings' Move to central (shared/routines.ts, "MOVING A ROUTINE"): the owner moves one of this computer's routine files
-// into the central store, one at a time, from the window only. The move writes the routine to the store as a document pinned
+// into the central store, one at a time, from the window or by an agent on the owner's say. The move writes the routine to the store as a document pinned
 // to this runner (routines/central.ts documentOf), so it would run here as it did, and marks it moving in
 // <desk home>/routines-moving.json; the file keeps running meanwhile, and the document waits under Awaiting approval. The
 // owner's approve signs the document into the store and retires the file (to routines/moved/) in the same step, so the

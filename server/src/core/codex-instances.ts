@@ -17,6 +17,7 @@ import {
   scanCodexDesktopProcesses,
 } from './codex-desktop'
 import { syncOwnerAgents } from './codex-owner-agents'
+import { deleteNoteProblem } from './delete-note'
 import { instanceNumbers, instanceRef } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -587,7 +588,7 @@ export interface DeleteCodexInstanceOptions {
  */
 export async function deleteCodexInstance(
   id: string,
-  confirmName?: string,
+  note?: string,
   options: DeleteCodexInstanceOptions = {},
 ): Promise<CMActionResult> {
   const instance = readStore().instances.find((candidate) => candidate.id === id)
@@ -599,12 +600,13 @@ export async function deleteCodexInstance(
       message: 'Codex instance not found.',
       data: { id },
     }
-  if (!confirmName || confirmName !== instance.name)
+  const noteProblem = deleteNoteProblem(note)
+  if (noteProblem)
     return {
       ok: false,
       action: 'codex-delete',
       dir: instance.codexHome,
-      message: `Refusing to delete: confirmName must exactly match '${instance.name}'.`,
+      message: `Refusing to delete: ${noteProblem}`,
       data: { id },
     }
 

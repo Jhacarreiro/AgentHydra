@@ -317,13 +317,11 @@ export default {
   deleteDialogTitle: 'Delete instance',
   deleteDialogDescription:
     'This permanently removes the instance profile and all its local data. This cannot be undone.',
-  deleteDialogPlaceholder: 'Instance name',
-  deleteDialogTypeName: 'Type this name to confirm. Click it to copy.',
-  copyName: 'Copy the name',
-  toastNameCopied: 'Copied "{name}"',
+  deleteDialogNoteLabel: 'Why are you deleting it?',
+  deleteDialogNoteHint:
+    'Required. A login that syncs is deleted on your other PC too, and this note tells them why.',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
-  deleteDialogMismatch: "Name doesn't match.",
   createDialogPlaceholder: 'e.g. work, personal, client-a',
   editDialogTitle: 'Edit instance',
   editDialogNameLabel: 'Display name',

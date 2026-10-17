@@ -384,9 +384,8 @@ describe('central routines through the plugin', () => {
     expect(routine(first, 'example-local')?.source).toBeUndefined()
     expect(first.store?.problems.map((p) => p.id)).toEqual(['example-local'])
 
-    // An agent cannot approve; the window can, and its key's signature goes to the store.
-    expect((await post(d, { approve: 'example-central' })).status).toBe(403)
-    expect((await post(d, { approve: 'example-central' }, OWNER)).status).toBe(200)
+    // An agent approves as the window would, and this computer's key's signature goes to the store.
+    expect((await post(d, { approve: 'example-central' })).status).toBe(200)
     expect(docOf(r, 'example-central').approval).toMatchObject({ by: 'Example Owner', key: r.ownKey.public })
     const approved = await get(d)
     expect(approved.proposals).toEqual([])
@@ -557,9 +556,8 @@ describe("the owner's Move to central", () => {
     const d = desk(r)
     expect(routine(await get(d, true), 'example-move')).toMatchObject({ state: 'idle' })
 
-    // Only the window moves a routine.
-    expect((await post(d, { move: 'example-move' })).status).toBe(403)
-    expect((await post(d, { move: 'example-move' }, OWNER)).status).toBe(200)
+    // An agent moves a routine as the window would.
+    expect((await post(d, { move: 'example-move' })).status).toBe(200)
     // Its document runs on this computer as the file did, in this computer's zone, its folder named by the repo that holds it.
     const doc = docOf(r, 'example-move')
     expect(doc).toMatchObject({ runsOn: ['example-pc'], approval: null, front: expect.objectContaining({ timeZone: ZONE, workdir: { repo: 'example/project', path: 'tools' } }) })

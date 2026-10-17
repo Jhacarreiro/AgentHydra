@@ -19,8 +19,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCliInstance, deleteCliInstance } from '../src/core/cli-instances'
 
-/** id + name, because deleteCliInstance REFUSES without a confirmName that matches exactly. Passing
- *  the id alone leaves the dir on disk, and a later file's reconcile then reports it as an orphan. */
+/** id + a note, because deleteCliInstance REFUSES without one. Passing the id alone leaves the dir on
+ *  disk, and a later file's reconcile then reports it as an orphan. */
 const created: Array<{ id: string; name: string }> = []
 let scratchHome: string
 let savedHome: string | undefined
@@ -41,8 +41,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  for (const { id, name } of created.splice(0)) {
-    expect(deleteCliInstance(id, name).ok).toBe(true)
+  for (const { id } of created.splice(0)) {
+    expect(deleteCliInstance(id, 'Test cleanup').ok).toBe(true)
   }
   if (savedHome === undefined) delete process.env.HOME
   else process.env.HOME = savedHome

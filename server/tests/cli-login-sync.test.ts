@@ -2,7 +2,8 @@
 //
 // The contract (core/cli-login-sync.ts with cloud/login-sync-worker/worker.js): of two copies of a
 // login the one whose access token expires later wins, whichever PC holds it; the store only ever
-// holds what opens with the PCs' key; a login left out on this PC is neither uploaded nor replaced.
+// holds what opens with the PCs' key; a login left out on this PC is neither uploaded nor replaced;
+// an instance deleted on one PC is deleted on the other, with the deleting owner's note.
 // A wrong direction here signs a PC out with a dead token (the #88 symptom), so the decision is what
 // this pins. The store is the real Worker, run here on bun:sqlite behind D1's prepare/bind API; the
 // other PC is played by writing to the store with the key from this PC's pairing code.
@@ -18,12 +19,13 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CONFIG_DIR } from '../src/config'
 import { createCliInstance, deleteCliInstance, getCliInstance } from '../src/core/cli-instances'
 import type { PortableLogin } from '../src/core/cli-login-move'
 import {
+  cliSyncRowOf,
   configureLoginSync,
   disconnectLoginSync,
   joinLoginSync,
@@ -31,6 +33,7 @@ import {
   loginSyncStatus,
   noteLoggedOutHere,
   openLogin,
+  removeLoginEverywhere,
   runLoginSync,
   sealLogin,
   setLoginSyncExcluded,
@@ -74,6 +77,40 @@ const creds = (expiresAt: number) =>
   JSON.stringify({
     claudeAiOauth: { accessToken: `at-${expiresAt}`, refreshToken: `rt-${expiresAt}`, expiresAt },
   })
+
+/** Two real PCs over the one store: each one's registry, sync config and instance dirs are parked on
+ *  disk while the other runs. `pass` runs one PC's sync pass and expects it to report no problem. */
+function twoPcs() {
+  const parked = mkdtempSync(join(tmpdir(), 'ah-two-pcs-'))
+  scratchDirs.push(parked)
+  const parts = ['cli-instances.json', 'login-sync.json', 'cli-instances']
+  let at = 'A'
+  const switchTo = (pc: string) => {
+    if (pc === at) return
+    for (const [from, to] of [
+      [at, null],
+      [pc, 'live'],
+    ] as const)
+      for (const part of parts) {
+        const live = join(CONFIG_DIR, part)
+        const kept = join(parked, from, part)
+        if (to === null) {
+          rmSync(kept, { recursive: true, force: true })
+          mkdirSync(join(parked, from), { recursive: true })
+          if (existsSync(live)) cpSync(live, kept, { recursive: true })
+          rmSync(live, { recursive: true, force: true })
+        } else if (existsSync(kept)) cpSync(kept, live, { recursive: true })
+      }
+    at = pc
+  }
+  const pass = async (pc: string) => {
+    switchTo(pc)
+    const r = await runLoginSync()
+    expect(r.problems).toEqual([])
+    return r
+  }
+  return { switchTo, pass }
+}
 
 describe('login sync between two PCs', () => {
   // Every test is two PCs and only their logins: another file's rows (sealed with its key) would be a
@@ -278,28 +315,7 @@ describe('login sync between two PCs', () => {
     process.env.AGENTHYDRA_CLAUDE_PATH = fake.path
     const FIRST = 'c8310000-0000-4000-8000-000000000069'
     const SECOND = 'f6620000-0000-4000-8000-000000000103'
-    const parked = mkdtempSync(join(tmpdir(), 'ah-two-pcs-'))
-    scratchDirs.push(parked)
-    const parts = ['cli-instances.json', 'login-sync.json', 'cli-instances']
-    let at = 'A'
-    const switchTo = (pc: string) => {
-      if (pc === at) return
-      for (const [from, to] of [
-        [at, null],
-        [pc, 'live'],
-      ] as const)
-        for (const part of parts) {
-          const live = join(CONFIG_DIR, part)
-          const kept = join(parked, from, part)
-          if (to === null) {
-            rmSync(kept, { recursive: true, force: true })
-            mkdirSync(join(parked, from), { recursive: true })
-            if (existsSync(live)) cpSync(live, kept, { recursive: true })
-            rmSync(live, { recursive: true, force: true })
-          } else if (existsSync(kept)) cpSync(kept, live, { recursive: true })
-        }
-      at = pc
-    }
+    const { switchTo, pass } = twoPcs()
     const email = JSON.stringify({ oauthAccount: { emailAddress: 'synced@example.com' } })
     const signIn = (id: string, expiresAt: number) => {
       const dir = getCliInstance(id)!.configDir
@@ -313,11 +329,6 @@ describe('login sync between two PCs', () => {
         .reduce((n, s) => n + s.calls, 0)
     const rows = async () =>
       ((await store('GET', '/v1/logins')).json.logins as any[]).map((r) => r.id as string)
-    const pass = async (pc: string) => {
-      switchTo(pc)
-      const r = await runLoginSync()
-      expect(r.problems).toEqual([])
-    }
     const works = (id: string) => {
       const c = JSON.parse(
         readFileSync(join(getCliInstance(id)!.configDir, '.credentials.json'), 'utf8'),
@@ -418,6 +429,84 @@ describe('login sync between two PCs', () => {
     } finally {
       switchTo('A')
       for (const id of [FIRST, SECOND]) deleteCliInstance(id, getCliInstance(id)?.name)
+      disconnectLoginSync()
+      process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
+      rmSync(fake.dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  // Owner, 2026-10-16: "If one of us removes it ... It removes from the other ... let us know that the
+  // other person removed it ... leave a note". Both PCs are real, as above.
+  test('an instance deleted on one PC with a note is deleted on the other, which says who deleted it and why', async () => {
+    const fake = refreshingClaude()
+    const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
+    process.env.AGENTHYDRA_CLAUDE_PATH = fake.path
+    const ID = 'a7d10000-0000-4000-8000-000000000211'
+    const AGAIN = 'a7d20000-0000-4000-8000-000000000212'
+    const NOTE = 'Not used any more'
+    const { switchTo, pass } = twoPcs()
+    try {
+      createCliInstance('shared (Pro)', { id: ID })
+      const { configDir: dir, num } = getCliInstance(ID)!
+      writeFileSync(join(dir, '.credentials.json'), creds(1000))
+      writeFileSync(
+        join(dir, '.claude.json'),
+        JSON.stringify({ oauthAccount: { emailAddress: 'shared@example.com' } }),
+      )
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await pass('A')
+      const code = loginSyncPairingCode()!
+      switchTo('B')
+      expect((await joinLoginSync(code)).ok).toBe(true)
+      await pass('B')
+      expect(getCliInstance(ID)?.num).toBe(num)
+
+      // A's owner deletes it with a note: the delete route's two calls.
+      switchTo('A')
+      const row = cliSyncRowOf(ID)!
+      expect(deleteCliInstance(ID, NOTE).ok).toBe(true)
+      expect(
+        removeLoginEverywhere(row, { kind: 'cli', num, name: 'shared (Pro)', note: NOTE }),
+      ).toBe(true)
+      await pass('A')
+      const marker = (await store('GET', `/v1/logins/${row}`)).json
+      expect(marker.meta).toMatchObject({ signedOut: true, removed: true })
+      // The note rides sealed: the store's meta never holds the owner's words.
+      expect(JSON.stringify(marker.meta)).not.toContain(NOTE)
+
+      // B deletes its copy too, and says who deleted it and why.
+      const r = await pass('B')
+      expect(getCliInstance(ID)).toBeNull()
+      expect(r.removed).toEqual([{ kind: 'cli', num, by: hostname(), note: NOTE }])
+      const event = (await loginSyncStatus()).events.find((e) => e.action === 'removed')
+      expect(event?.note).toContain(NOTE)
+
+      // Neither PC brings it back.
+      await pass('A')
+      await pass('B')
+      expect(getCliInstance(ID)).toBeNull()
+      switchTo('A')
+      expect(getCliInstance(ID)).toBeNull()
+      expect((await store('GET', `/v1/logins/${row}`)).json.meta.removed).toBe(true)
+
+      // Signed in again on B: the account comes back on A too.
+      switchTo('B')
+      createCliInstance('again (Pro)', { id: AGAIN })
+      const againDir = getCliInstance(AGAIN)!.configDir
+      writeFileSync(join(againDir, '.credentials.json'), creds(5000))
+      writeFileSync(
+        join(againDir, '.claude.json'),
+        JSON.stringify({ oauthAccount: { emailAddress: 'shared@example.com' } }),
+      )
+      await pass('B')
+      expect((await store('GET', `/v1/logins/${row}`)).json.meta.removed).toBeUndefined()
+      await pass('A')
+      expect(readFileSync(join(getCliInstance(row)!.configDir, '.credentials.json'), 'utf8')).toBe(
+        creds(5000),
+      )
+    } finally {
+      switchTo('A')
+      if (getCliInstance(ID)) deleteCliInstance(ID, 'test cleanup')
       disconnectLoginSync()
       process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
       rmSync(fake.dir, { recursive: true, force: true })

@@ -30,6 +30,9 @@
 // - A logout reaches every PC, as for the CLI (owner, 2026-10-02): an account this PC held and shared
 //   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
 //   their profile out of it once its app is closed, unless theirs was signed in after the logout.
+// - So does a delete (owner, 2026-10-16): the deleting PC turns the row into the removal marker with
+//   the owner's note, and the other PCs delete their profile of that account once its app is closed
+//   and say who deleted it and why. A desktop login is never left out of sync.
 // - Cookies are read only while the profile is closed (Chromium holds the database locked); a pass
 //   while it runs sends the new tokens with the cookies the store already has, and says so
 //   (`meta.open`).
@@ -57,7 +60,12 @@ import {
 import { copyFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { LoginArrival } from '../login-sync-arrivals'
+import {
+  type LoginArrival,
+  type LoginRemoval,
+  removalEvent,
+  removalReason,
+} from '../login-sync-arrivals'
 import { deleteAccountsCacheEntry } from './accounts'
 import {
   decryptSafeStorage,
@@ -255,6 +263,16 @@ const mtimeOf = (path: string): number => {
     return 0
   }
 }
+
+/** Whether a removal marker (another PC deleted the login, cli-login-sync.ts's header) reaches the
+ *  instance or profile here that holds its row (`st`: what this PC last agreed with the store on). Only
+ *  a login this PC shared: a desktop sign-in of its own was never tied to the other PC's. And not once
+ *  this PC has taken the removal (`st` agrees with the marker): whatever holds the row since is new,
+ *  and goes up as a sign-in. */
+export const removalReaches = (
+  st: { version: number } | undefined,
+  remote: { version: number },
+): boolean => st !== undefined && st.version !== remote.version
 
 function cookieVersion(d: Database): number {
   try {
@@ -604,7 +622,8 @@ export async function landDesktopLogin(
 /** One pass's view of the store and this PC's agreement with it, from core/cli-login-sync.ts. */
 export interface DesktopSyncContext {
   /** The store's rows (desktop and CLI alike; a desktop one has kind 'desktop'). `signedOut`: a PC
-   *  logged the account out and the others sign out too; `at`: when the row was written. */
+   *  logged the account out and the others sign out too; `removed` (with it): a PC deleted its
+   *  profile and the others delete theirs; `at`: when the row was written, `by`: by which PC. */
   store: Map<
     string,
     {
@@ -613,11 +632,12 @@ export interface DesktopSyncContext {
       kind: string
       name: string | null
       signedOut: boolean
+      removed: boolean
       at: number
+      by: string | null
     }
   >
   state: Record<string, { version: number; hash: string; cookies?: number }>
-  excluded: Set<string>
   /** Upload; the new version, or null when the store moved meanwhile (409). `open`: its app runs here
    *  and refreshes the grant itself, so the other PCs leave the renewal to it (claimDesktopRenewal). */
   upload(login: PortableDesktopLogin, expect: number, open?: boolean): Promise<number | null>
@@ -633,11 +653,15 @@ export interface DesktopSyncContext {
    *  AgentHydra's Log out). `clearGone` when it is there again. */
   confirmGone(uuid: string): boolean
   clearGone(uuid: string): void
+  /** The note the deleting PC's owner left on a removal marker, or null. */
+  removalNote(uuid: string): Promise<string | null>
+  /** Delete a profile here with the reason given (lifecycle.ts removeInstance and its guards). */
+  remove(dir: string, why: string): Promise<{ ok: boolean; message: string | null }>
   /** Drop a signed-out profile's cached usage, as a Log out does. */
   dropUsage(dir: string): void
   note(
     num: number | null,
-    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut',
+    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut' | 'removed',
     text: string,
   ): void
   out: {
@@ -646,6 +670,7 @@ export interface DesktopSyncContext {
     unchanged: number
     problems: string[]
     arrived: LoginArrival[]
+    removed: LoginRemoval[]
   }
 }
 
@@ -858,6 +883,31 @@ async function meetSignOut(
   ctx.note(look.p.num, 'signedOut', 'Logged out on another PC, so signed out here too.')
 }
 
+/** The store says another PC deleted this account's profile (removalReaches checked it reaches this
+ *  one): delete it here too once its app is closed, and tell the owner who deleted it and why. */
+async function meetRemoval(
+  pass: DesktopPass,
+  uuid: string,
+  p: DesktopProfile & { uuid: string },
+  remote: DesktopStoreRow,
+): Promise<void> {
+  const { ctx } = pass
+  if (!isClosedDir(await pass.running(), p.dir)) {
+    pass.waiting.add(uuid)
+    return
+  }
+  const note = await ctx.removalNote(uuid)
+  const r = await ctx.remove(p.dir, removalReason(remote.by, note))
+  if (!r.ok) {
+    ctx.out.problems.push(`#${p.num}: ${r.message}`)
+    return
+  }
+  ctx.dropUsage(p.dir)
+  ctx.state[uuid] = { version: remote.version, hash: '' }
+  ctx.note(p.num, 'removed', removalEvent(remote.by, note))
+  ctx.out.removed.push({ kind: 'desktop', num: p.num, by: remote.by, note })
+}
+
 /** A signed-in store copy: a sign-in cookie and a grant with time left. */
 const isSignedInLogin = (l: PortableDesktopLogin): boolean =>
   !!l.cookies?.some((c) => c.name.startsWith('sessionKey')) &&
@@ -888,10 +938,13 @@ async function syncProfile(
   p: DesktopProfile & { uuid: string },
 ): Promise<void> {
   const { ctx } = pass
-  if (ctx.excluded.has(uuid)) return
   ctx.clearGone(uuid)
   const remote = ctx.store.get(uuid)
   if (remote && remote.kind !== 'desktop') return
+  if (remote?.removed && removalReaches(ctx.state[uuid], remote)) {
+    await meetRemoval(pass, uuid, p, remote)
+    return
+  }
   const tokens = await readDesktopTokens(p.dir)
   if (!tokens) {
     ctx.out.problems.push(`#${p.num}: its desktop login does not open on this PC.`)
@@ -930,17 +983,17 @@ async function syncProfile(
   else await syncMovedProfile(pass, look, remote, look.st)
 }
 
-/** Accounts no profile here holds. Signed out everywhere: nothing to do. One this PC held and shared:
- *  logged out here (a profile deleted here is left out first), so its row turns into the signed-out
- *  marker. Otherwise the store's copy signs in a signed-out profile here of the same folder name,
- *  else a new one. */
+/** Accounts no profile here holds. Signed out or deleted everywhere: nothing to do. One this PC held
+ *  and shared: logged out here, so its row turns into the signed-out marker (a profile deleted here
+ *  turned it into the removal marker first, cli-login-sync.ts sendRemovals). Otherwise the store's
+ *  copy signs in a signed-out profile here of the same folder name, else a new one. */
 async function syncStoreOnlyAccounts(
   pass: DesktopPass,
   mine: Map<string, DesktopProfile & { uuid: string }>,
 ): Promise<void> {
   const { ctx } = pass
   for (const [uuid, remote] of ctx.store) {
-    if (remote.kind !== 'desktop' || mine.has(uuid) || ctx.excluded.has(uuid)) continue
+    if (remote.kind !== 'desktop' || mine.has(uuid)) continue
     if (remote.signedOut) {
       ctx.state[uuid] = { version: remote.version, hash: '' }
       ctx.clearGone(uuid)

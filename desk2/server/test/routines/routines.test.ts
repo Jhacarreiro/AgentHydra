@@ -601,11 +601,11 @@ describe('the plugin', () => {
     expect(ticks(d.count)).toBe(0)
   })
 
-  test('the owner only: an agent gets 403 for resume, approve, discard and the switch; the window gets them', async () => {
+  test('the owner only: an agent gets 403 for resume, discard, edit and the switch; the window gets them', async () => {
     const d = desk()
     d.routine('example-owned', { name: 'Example owned', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
     await get(d.app, true)
-    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
+    for (const body of [{ resume: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
       expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
@@ -634,9 +634,8 @@ describe('the plugin', () => {
     await get(d.app, true)
     expect(ticks(d.count)).toBe(0)
 
-    // An agent cannot approve it; the window can. The file keeps the contract and drops why.
-    expect((await post(d.app, { approve: 'example-proposed' })).status).toBe(403)
-    expect((await post(d.app, { approve: 'example-proposed' }, OWNER)).status).toBe(200)
+    // An agent approves it as the window would (the owner, 2026-10-16). The file keeps the contract and drops why.
+    expect((await post(d.app, { approve: 'example-proposed' })).status).toBe(200)
     const file = JSON.parse(readFileSync(join(d.home, 'routines', 'example-proposed.json'), 'utf8')) as Record<string, unknown>
     expect(file.why).toBeUndefined()
     expect(file.name).toBe('Example proposed')

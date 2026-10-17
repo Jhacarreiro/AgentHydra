@@ -2,7 +2,7 @@
 // <desk home>/routines), each one's state and why, its schedule, when it last ran and how, and when it runs next; plus the
 // proposals waiting for the owner's yes. Routines live in AgentHydra 2.0 (Desk, desk2/server/src/plugins/73-routines.ts), so
 // this file keeps no state: it reads Desk's /api/routines, which answers from its last look (no model asked), and turns its
-// times into ISO. An agent may run, pause and propose a routine here; only the owner resumes, approves, discards or edits one.
+// times into ISO. An agent may run, pause, propose, approve and move a routine here; only the owner resumes, discards or edits one.
 // A Desk whose routines-store.json names a central store lists that store's routines too; a proposal can go there.
 import { desk2Present, desk2Url } from './desk2'
 import { type HydraTool, S } from './mcp-client'
@@ -61,32 +61,36 @@ interface Status {
 const RUNS_SHOWN = 5
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString())
 
-async function routines(args: {
+interface RoutinesArgs {
   fresh?: boolean
   run?: string
   pause?: string
+  approve?: string
+  move?: string
   propose?: Record<string, unknown>
-}): Promise<unknown> {
+}
+
+/** The id actions the tool passes on to Desk, one per call. */
+const ID_ACTIONS = ['run', 'pause', 'approve', 'move'] as const
+
+async function routines(args: RoutinesArgs): Promise<unknown> {
   if (!desk2Present())
     throw new Error('Routines live in AgentHydra 2.0 (desk2/), which this install does not have.')
   const base = desk2Url()
-  const mutates =
-    typeof args.run === 'string' ||
-    typeof args.pause === 'string' ||
-    typeof args.propose === 'object'
+  const idAction = ID_ACTIONS.find((k) => typeof args[k] === 'string')
+  const body = idAction
+    ? { [idAction]: args[idAction] }
+    : typeof args.propose === 'object'
+      ? { propose: args.propose }
+      : null
+  const mutates = body !== null
   let res: Response
   try {
     res = mutates
       ? await fetch(`${base}/api/routines`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(
-            typeof args.run === 'string'
-              ? { run: args.run }
-              : typeof args.pause === 'string'
-                ? { pause: args.pause }
-                : { propose: args.propose },
-          ),
+          body: JSON.stringify(body),
           signal: AbortSignal.timeout(90_000),
         })
       : await fetch(`${base}/api/routines${args.fresh ? '?fresh=1' : ''}`, {
@@ -163,25 +167,28 @@ export const ROUTINES_TOOLS: HydraTool[] = [
     name: 'routines',
     description:
       "The owner's routines (AgentHydra's routine manager): standing jobs on a schedule, each a command, an AI prompt that runs as a chat, or a Windows scheduled task, with its state (idle, due, running, paused, off, ended, broken, or elsewhere for a central-store routine that runs on another computer, and why), its schedule, when it last ran and how (ok, busy, failed, timed-out or interrupted, with the last output line, and for a routine whose `describe` is on, an AI's description of what each run did), and when it runs next; plus the proposals waiting for the owner's yes. It looks every 5 minutes and asks no model itself. Answers from its last look in milliseconds; `fresh` looks first. " +
-      'The owner (2026-10-12): never schedule anything the owner did not ask for. To add a routine you must ask: `propose` it, and it runs only after the owner approves it in Settings > Managers > Routines. Prefer a temporary background task you run and manage yourself over adding a routine or sub-tasks on other things. Only a routine the owner asked for in their own words belongs here. ' +
-      "MUTATES: `run` (runs one routine now; refused when it is paused, off, ended, broken or running), `pause` (pauses one, so it never starts on its own) and `propose` (writes a proposal; it never runs until the owner approves it). Only one of them per call. Resume, approve and discard are the owner's alone, in Settings, and so is editing a routine (its Edit form and Describe runs switch).",
+      'The owner (2026-10-12): never schedule anything the owner did not ask for. To add a routine, `propose` it; it runs only once it is approved. Prefer a temporary background task you run and manage yourself over adding a routine or sub-tasks on other things. Only a routine the owner asked for in their own words belongs here. ' +
+      'The owner (2026-10-16): when he asks for a routine or tells you to approve or move one, do it yourself with `approve` or `move`; never hand the click in Settings > Managers > Routines back to him. Approve or move only what he asked for in his own words. ' +
+      "MUTATES: `run` (runs one routine now; refused when it is paused, off, ended, broken or running), `pause` (pauses one, so it never starts on its own), `propose` (writes a proposal; it never runs until it is approved), `approve` (approves a waiting proposal or move, signed with this computer's approver key when it is central) and `move` (moves one of this computer's routines to the central store, where it waits as a move until approved). Only one of them per call. Resume and discard are the owner's alone, in Settings, and so is editing a routine (its Edit form and Describe runs switch).",
     inputSchema: S({
       fresh: { type: 'boolean', description: 'Look now before answering.' },
       run: { type: 'string', description: 'MUTATES: the id of one routine to run now.' },
       pause: { type: 'string', description: 'MUTATES: the id of one routine to pause.' },
+      approve: {
+        type: 'string',
+        description:
+          'MUTATES: the id of one waiting proposal or move to approve; only one the owner asked for in his own words.',
+      },
+      move: {
+        type: 'string',
+        description:
+          "MUTATES: the id of one of this computer's routines to move to the central store; approve it after.",
+      },
       propose: {
         type: 'object',
         description: `MUTATES: a proposal, with id (lowercase letters, digits and -, up to 40), why (one or two sentences: what it does and why it should be a routine rather than a background task you run yourself) and the contract: ${CONTRACT}.`,
       },
     }),
-    run: (args) =>
-      routines(
-        args as {
-          fresh?: boolean
-          run?: string
-          pause?: string
-          propose?: Record<string, unknown>
-        },
-      ),
+    run: (args) => routines(args as RoutinesArgs),
   },
 ]

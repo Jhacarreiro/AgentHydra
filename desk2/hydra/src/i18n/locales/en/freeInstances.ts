@@ -12,7 +12,6 @@ export default {
   logoutDialogDescription: "This removes the saved login from this PC. The account's private chat list stays, and you can sign in again later.",
   delete: 'Delete', deleteDialogTitle: 'Delete Free account',
   deleteDialogDescription: 'This removes the account from this list and its saved login on this PC and your other PCs. Its chats stay at Claude or ChatGPT.',
-  deleteDialogPlaceholder: 'Account name', deleteDialogMismatch: "Name doesn't match.",
   deleteDialogSubmit: 'Delete account', deleteDialogDeleting: 'Deleting…',
   toastDeleted: 'Deleted {name}', deleteFailed: 'Could not delete. Try again.',
   // The Tokens column: neither site reports tokens, so Desk estimates them (server/src/free-instances/tokens.ts).

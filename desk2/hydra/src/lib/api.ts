@@ -490,10 +490,10 @@ export const createInstanceShortcut = (dir: string) =>
 /** Add the lightweight Instances chooser to the user's Desktop. */
 export const createInstanceModeShortcut = () =>
   j<CMActionResult>('/api/instance-mode/shortcut', { method: 'POST' })
-export const deleteInstance = (dir: string, confirmName: string) =>
+export const deleteInstance = (dir: string, note: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Update an instance's UI metadata: display label (a pure relabel — never touches the folder,
  *  so it works while the instance runs), icon glyph, and icon color. A field present in the
@@ -795,10 +795,10 @@ export const linkCliInstanceToDesktop = (
     method: 'POST',
     body: JSON.stringify({ desktopDir, desktopLabel }),
   })
-export const deleteCliInstance = (id: string, confirmName: string) =>
+export const deleteCliInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Copy CLI logins to another PC: one encrypted bundle in Downloads; `signOut` also signs this PC
  *  out of each (a move). See server/src/core/cli-login-move.ts. The passphrase is made here and
@@ -1360,10 +1360,10 @@ export const renameCodexInstance = (id: string, name: string | null) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   })
-export const deleteCodexInstance = (id: string, confirmName: string) =>
+export const deleteCodexInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 
 // --- auto-resume monitor (Feature E) -------------------------------------------
@@ -1484,7 +1484,7 @@ export const renameDshInstance = (id: string, name: string) =>
   })
 export const deleteDshInstance = (
   id: string,
-  opts: { deleteFiles?: boolean; confirmName?: string } = {},
+  opts: { deleteFiles?: boolean; note?: string } = {},
 ) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',

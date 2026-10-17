@@ -1601,8 +1601,20 @@ same logins signed in; a refresh on one reaches the other within a pass.
 - Each login is AES-256-GCM encrypted under the key with its instance id as associated data. The
   pairing code (`ahsync1:` + base64url of address, token, key) is the only way the key leaves a PC:
   the dialog's copy button, for the other PC's Join.
-- Left out on a PC (`excluded`): the dialog's per-login switch, a Log out there, a move away. Neither
-  uploaded nor landed there.
+- Left out on a PC (`excluded`): a CLI login's switch in the dialog, a Log out there, a move away.
+  Neither uploaded nor landed there. A desktop login is never left out (owner, 2026-10-16: "If the PC
+  desktop logins are set to stop syncing, I don't want that"): its row has no switch, and the desktop
+  half ignores `excluded`.
+- A delete reaches every PC (owner, 2026-10-16: "we should also cross-remove ... leave a note").
+  Every instance delete asks why (`server/src/core/delete-note.ts`: at least 3 characters, in place
+  of typing the name). The delete routes then call `removeLoginEverywhere(row, {note})`; the next
+  pass turns that row into the removal marker (`meta.signedOut` and `meta.removed`, the note sealed
+  in the blob, `config.removals` keeping it until the store takes it). A row an instance here still
+  uses (a follower on the same account, a second profile of it) gets no marker. Each other PC that
+  shared the row deletes its instance once nothing runs on it (a CLI session, an open desktop app),
+  notes `removed` with "Deleted on <PC> ... Their note: ..." and notifies once per pass
+  (`removalMessage`). An instance holding the row after that PC took the removal is a new sign-in
+  and goes up as one.
 - A pass that makes an instance this PC did not have (a CLI login or a desktop profile from the other
   PC) says so once, at the end of the pass, over the OS notification channel when notifications are on
   (`server/src/login-sync-arrivals.ts`; owner, 2026-10-09: "if his finds a new account, add a

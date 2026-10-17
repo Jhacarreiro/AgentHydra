@@ -18,6 +18,7 @@ import { readdir, rm, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { ensureClaudeNativeProfileConfig } from '../claude-native-settings'
 import { linkCliInstanceToDesktop, listCliInstances } from './cli-instances'
+import { deleteNoteProblem } from './delete-note'
 import { fsSlot } from './fs-slots'
 import { deleteInstanceLaunch } from './instance-launches'
 import { deleteInstanceMeta } from './instance-meta'
@@ -299,8 +300,8 @@ export async function createInstance(
 // ----------------------------------------------------------------------------
 
 export interface RemoveInstanceOptions {
-  /** Must equal the folder leaf name of `dir`, or the call is refused. */
-  confirmName?: string
+  /** Why the instance is deleted. Required: a short note of at least 3 characters, or the call is refused. */
+  note?: string
   /** Injected process scan (tests). Defaults to the real fresh {@link scanClaudeProcesses}. */
   scanProcesses?: (options: { fresh: true }) => Promise<ClaudeProcessScan>
 }
@@ -310,7 +311,7 @@ export interface RemoveInstanceOptions {
  *   - `dir` is empty or does not exist
  *   - `dir` resolves to the default Claude profile dir (never deletable)
  *   - `dir` is not under `instancesRoot()`
- *   - `confirmName` does not exactly match the folder leaf name
+ *   - `note` is missing or too short (see {@link deleteNoteProblem})
  *   - the instance is currently running
  * On success, recursively removes the directory and returns the best-effort
  * byte count freed.
@@ -410,14 +411,14 @@ export async function removeInstance(
     }
   }
 
-  // --- Guard 4: confirmName must equal the folder leaf name. ---
-  const leafName = basename(normDir)
-  if (!options.confirmName || options.confirmName !== leafName) {
+  // --- Guard 4: the delete needs a note saying why. ---
+  const noteProblem = deleteNoteProblem(options.note)
+  if (noteProblem) {
     return {
       ok: false,
       action: 'remove',
       dir: normDir,
-      message: `Refusing to delete '${normDir}': confirmName must exactly match the folder name '${leafName}'.`,
+      message: `Refusing to delete '${normDir}': ${noteProblem}`,
       data: {},
     }
   }
@@ -457,7 +458,7 @@ export async function removeInstance(
     ok: true,
     action: 'remove',
     dir: normDir,
-    message: `Instance '${leafName}' deleted.`,
+    message: `Instance '${basename(normDir)}' deleted.`,
     data: { freedBytes },
   }
 }

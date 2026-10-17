@@ -445,7 +445,7 @@ export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status
  */
 export function deskGlyphs(
   chats: Pick<ChatSummary, 'sessionId' | 'status' | 'unread'>[],
-  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source'>[]
+  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source' | 'backgroundActive'>[]
 ): Map<string, StatusGlyph> {
   const out = new Map<string, StatusGlyph>()
   for (const [id, g] of [
@@ -502,8 +502,13 @@ export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], extern
   return [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
-/** The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. */
-export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
+/**
+ * The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. A turn
+ * that ended while its background tasks run is orange, as a Desk chat's (settledGlyph), never idle (owner, 2026-10-16:
+ * a chat whose background task had run 18 minutes was "labeled as not running, and it's a lighter gray").
+ */
+export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread' | 'backgroundActive'>): StatusGlyph {
+  if ((s.status === 'idle' || s.status === 'stale') && (s.backgroundActive ?? 0) > 0) return THREADS_RUNNING
   switch (s.status) {
     case 'working':
       return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Running elsewhere' }
