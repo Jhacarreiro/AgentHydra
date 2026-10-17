@@ -5,6 +5,8 @@
 import type { SpawnOffOptions, SpawnStop, WorkerReply, WorkerRequest } from './spawn-off'
 
 type Subprocess = ReturnType<typeof Bun.spawn>
+type Reader = ReadableStreamDefaultReader<Uint8Array>
+const STOP_GRACE_MS = 2_000
 
 /** Stops a running process by call id, so an abort message can reach it. */
 const stops = new Map<number, (why: SpawnStop) => void>()
@@ -35,39 +37,63 @@ async function run(id: number, opts: SpawnOffOptions): Promise<void> {
     return
   }
   const state: { stopped?: SpawnStop } = {}
+  const stopped = Promise.withResolvers<void>()
   const stop = (why: SpawnStop) => {
     if (state.stopped) return
     state.stopped = why
-    kill(proc, opts.killTree === true)
+    try { kill(proc, opts.killTree === true) } catch { /* already gone, or its kill was refused */ }
+    stopped.resolve()
   }
   stops.set(id, stop)
   const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => stop('timedOut'), opts.timeoutMs)
+  let grace: ReturnType<typeof setTimeout> | undefined
+  const readers = new Set<Reader>()
+  const out: Stdout = { chunks: [], size: 0, capped: false }
+  const err = { text: '' }
   try {
-    const [out, stderr, code] = await Promise.all([
-      readStdout(proc.stdout as ReadableStream<Uint8Array>, opts.maxBytes ?? Number.POSITIVE_INFINITY, () => stop('capped')),
-      opts.stderr === 'ignore' ? Promise.resolve('') : new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+    const work = Promise.all([
+      readStdout(proc.stdout as ReadableStream<Uint8Array>, opts.maxBytes ?? Number.POSITIVE_INFINITY, () => stop('capped'), out, readers),
+      opts.stderr === 'ignore' ? Promise.resolve() : readStderr(proc.stderr as ReadableStream<Uint8Array>, err, readers),
       proc.exited,
-    ])
+    ]).then(([, , code]) => ({ code }))
+    // Killing the supervisor does not guarantee EOF: an inherited pipe can outlive it. Stop
+    // requests therefore bound the wait themselves, while allowing final output/exit to land.
+    let end = await Promise.race([work, stopped.promise.then(() => null)]).catch(error => {
+      if (state.stopped) return null
+      throw error
+    })
+    if (end === null) {
+      end = await Promise.race([
+        work.catch(() => null),
+        new Promise<null>(resolve => { grace = setTimeout(() => resolve(null), STOP_GRACE_MS) }),
+      ])
+    }
+    const bytes = stdoutBytes(out)
     post(
       {
         type: 'result',
         id,
         result: {
-          code,
-          stdout: out.bytes,
-          stderr: stderr.trim(),
+          code: end?.code ?? proc.exitCode ?? -1,
+          stdout: bytes,
+          stderr: err.text.trim(),
           capped: out.capped,
           timedOut: state.stopped === 'timedOut',
           aborted: state.stopped === 'aborted',
         },
       },
-      [out.bytes.buffer],
+      [bytes.buffer],
     )
   } catch (err) {
     post({ type: 'failed', id, detail: (err as Error).message })
   } finally {
     clearTimeout(timer)
+    clearTimeout(grace)
     stops.delete(id)
+    for (const reader of readers) {
+      // Cancellation closes the pending read even if its underlying cancel hook never settles.
+      try { void reader.cancel().catch(() => {}) } catch { /* already closed */ }
+    }
   }
 }
 
@@ -84,33 +110,59 @@ function kill(proc: Subprocess, tree: boolean): void {
   proc.kill()
 }
 
-/** Reads stdout into one fresh buffer; past `max` bytes it keeps draining the stream and calls onCap once. */
-async function readStdout(stream: ReadableStream<Uint8Array>, max: number, onCap: () => void): Promise<{ bytes: Uint8Array<ArrayBuffer>; capped: boolean }> {
-  const chunks: Uint8Array[] = []
-  let size = 0
-  let capped = false
+interface Stdout { chunks: Uint8Array[]; size: number; capped: boolean }
+
+/** Keeps stdout up to `max`; past it the reader still drains until the stop's grace ends. */
+async function readStdout(stream: ReadableStream<Uint8Array>, max: number, onCap: () => void, out: Stdout, readers: Set<Reader>): Promise<void> {
   const reader = stream.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (capped) continue
-    if (size + value.length > max) {
-      chunks.push(value.subarray(0, max - size))
-      size = max
-      capped = true
-      onCap()
-      continue
+  readers.add(reader)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (out.capped) continue
+      if (out.size + value.length > max) {
+        out.chunks.push(value.subarray(0, max - out.size))
+        out.size = max
+        out.capped = true
+        onCap()
+        continue
+      }
+      out.chunks.push(value)
+      out.size += value.length
     }
-    chunks.push(value)
-    size += value.length
+  } finally {
+    readers.delete(reader)
+    try { reader.releaseLock() } catch { /* already released */ }
   }
-  const bytes = new Uint8Array(size)
+}
+
+function stdoutBytes(out: Stdout): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(out.size)
   let at = 0
-  for (const chunk of chunks) {
+  for (const chunk of out.chunks) {
     bytes.set(chunk, at)
     at += chunk.length
   }
-  return { bytes, capped }
+  return bytes
+}
+
+/** Streaming decoding retains diagnostics when an inherited stderr pipe never closes. */
+async function readStderr(stream: ReadableStream<Uint8Array>, err: { text: string }, readers: Set<Reader>): Promise<void> {
+  const reader = stream.getReader()
+  readers.add(reader)
+  const decoder = new TextDecoder()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      err.text += decoder.decode(value, { stream: true })
+    }
+    err.text += decoder.decode()
+  } finally {
+    readers.delete(reader)
+    try { reader.releaseLock() } catch { /* already released */ }
+  }
 }
 
 function definedEnv(env?: Record<string, string | undefined>): Record<string, string> | undefined {
