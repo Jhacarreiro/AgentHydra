@@ -203,7 +203,7 @@ task line).
 | `instance` | `desktop:<dir>`, `cli:<id>`, `codex:<id>` or `default` (`~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) |
 | `session` | CLI/desktop session id; for HSwarm, the caller session |
 | `agent` | `main` or `subagent` (+ subagent type when known) |
-| `source` | `cli`, `desktop`, `climayte`, `hswarm`, `codex`, `opencode`, `dsh`, `hermes`. `climayte` is a CLI call inside a CliMayte attempt. `hswarm` is a worker call. |
+| `source` | `cli`, `desktop`, `climayte`, `hswarm`, `codex`, `opencode`, `dsh`, `hermes`, `vscode-copilot`. `climayte` is a CLI call inside a CliMayte attempt. `hswarm` is a worker call. |
 | `model`, `provider` | Canonical model id (`pricing.ts` canonicalisation) and provider name |
 | `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`, `reasoning` | Tokens by kind (HSwarm maps `in_miss`→input, `in_hit`→cache_read, `in_write`→cache_write_5m) |
 | `list_usd` | Value at list price from the shared table (§4.5); `NULL` when unpriced |

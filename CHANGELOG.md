@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **VS Code Copilot Chat counts in Stats and Analytics.** Copilot chats in VS Code are now their own source, one call per request, and Cost by project places them by the folder the VS Code window had open. Copilot bills requests rather than tokens and most requests record no token count, so its row is there so every tool you use is counted, not for its volume.
+
 - **Chat search finds what was said in every account's chats, and answers from its index.** Searching chat contents now covers the chats of every CLI account, CliMayte's workers included, and each hit says which store and account it is in. It answers from the conversation index even while chats are running, instead of falling back to a slow scan that gave up after a few dozen files. The index now keeps itself up to date in the background.
 
 - **Killing every bun process no longer takes AgentHydra down.** On Windows, AgentHydra's window server and its running chats now run as `AgentHydra-desk.exe`, and a source checkout's service as `AgentHydra-daemon.exe`: copies of bun under their own names, kept up to date when bun changes. A chat that cleans up its dev servers with `taskkill /IM bun.exe` stops only those.
