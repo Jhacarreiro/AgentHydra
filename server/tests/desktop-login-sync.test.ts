@@ -41,6 +41,7 @@ import {
 } from '../src/core/crypto'
 import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
 import { feedCliFromDesktop, feedLinkedCliLogins } from '../src/core/desktop-cli-feed'
+import { renewDesktopGrant } from '../src/core/desktop-cli-renew'
 import {
   type DesktopSyncContext,
   desktopNotes,
@@ -375,6 +376,94 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       disconnectLoginSync()
       for (const dir of made)
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // Found 2026-10-16: both PCs renewed a shared desktop login's Claude Code grant within a minute of
+  // each other with the same refresh token. A refresh rotates it, so the second PC was refused and
+  // walled its linked CLI login as "open its desktop app once". Only the PC whose claim the store
+  // takes refreshes now; the others get the renewed copy from the store.
+  test('of two PCs holding one desktop login, only the one whose claim the store takes refreshes its grant', async () => {
+    const U = randomUUID()
+    const HOUR = 3_600_000
+    let dir = ''
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const row = async () =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === U)
+      /** The other PC rewrites the row with the same login and `meta` of its own. */
+      const otherPcWrites = async (meta: Record<string, unknown>) => {
+        const r = await row()
+        const blob = (await store('GET', `/v1/logins/${U}`)).json.blob
+        expect(
+          (
+            await store('PUT', `/v1/logins/${U}`, {
+              version: r.version,
+              blob,
+              meta: { ...r.meta, by: 'other-pc', ...meta },
+            })
+          ).status,
+        ).toBe(200)
+      }
+      const grantKey = `acct:${U}:${U}:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code`
+      const due = Date.now() + HOUR
+      dir = await profile(`renew-shared-${randomUUID()}`, U, 0, 'sk-r')
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          locale: 'en-US',
+          lastKnownAccountUuid: U,
+          'oauth:tokenCacheV2': await encryptSafeStorage(
+            JSON.stringify({
+              [grantKey]: { token: 'old-access', refreshToken: 'old-refresh', expiresAt: due },
+            }),
+            dir,
+          ),
+        }),
+      )
+      await runLoginSync() // up it goes; this PC and the store agree on it
+      /** The token endpoint; each call records whose claim the store's row carried at that moment. */
+      const claims: unknown[] = []
+      const fetchFn = (async () => {
+        claims.push((await row()).meta.renewBy)
+        return Response.json({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 28800,
+        })
+      }) as unknown as typeof fetch
+      const renew = (now: number) =>
+        renewDesktopGrant(dir, { now, fetchFn, running: async () => new Set() })
+
+      // The other PC's copy moved on: this PC waits for it to land instead of refreshing its own.
+      await otherPcWrites({})
+      expect((await renew(Date.now())).state).toBe('skipped')
+      // The other PC claimed the renewal: this PC leaves the grant alone while the claim holds.
+      await runLoginSync()
+      await otherPcWrites({ renewBy: 'other-pc-id', renewUntil: Date.now() + 5 * 60_000 })
+      await runLoginSync()
+      expect((await renew(Date.now())).state).toBe('skipped')
+      // The other PC sent it from a running app, which refreshes its own grant: left to it until it
+      // runs out.
+      await otherPcWrites({ open: true, renewBy: undefined, renewUntil: undefined })
+      await runLoginSync()
+      expect((await renew(Date.now())).state).toBe('skipped')
+      expect(claims).toHaveLength(0)
+
+      // Run out with nobody renewing it: this PC claims first, and only then refreshes.
+      const out = await renew(due + 1)
+      expect(out.state).toBe('renewed')
+      expect(claims).toHaveLength(1)
+      expect(typeof claims[0]).toBe('string')
+      // The next pass sends the renewed grant up and its claim ends with it.
+      await runLoginSync()
+      const sent = await row()
+      expect(sent.meta.renewBy).toBeUndefined()
+      expect(sent.meta.expiresAt).toBe((out as { expiresAt: number }).expiresAt)
+    } finally {
+      disconnectLoginSync()
+      if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   }, 120_000)
 

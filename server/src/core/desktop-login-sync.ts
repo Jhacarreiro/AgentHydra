@@ -31,7 +31,11 @@
 //   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
 //   their profile out of it once its app is closed, unless theirs was signed in after the logout.
 // - Cookies are read only while the profile is closed (Chromium holds the database locked); a pass
-//   while it runs sends the new tokens with the cookies the store already has.
+//   while it runs sends the new tokens with the cookies the store already has, and says so
+//   (`meta.open`).
+// - One PC refreshes a shared login's Claude Code grant, the one whose claim the store takes
+//   (cli-login-sync.ts claimDesktopRenewal); the others get the renewed copy from the store. Two PCs
+//   refreshing one refresh token leave all but the first refused (2026-10-16).
 // - Windows only: elsewhere the profile key lives in the Keychain or a keyring, which nothing here
 //   writes.
 //
@@ -614,8 +618,9 @@ export interface DesktopSyncContext {
   >
   state: Record<string, { version: number; hash: string; cookies?: number }>
   excluded: Set<string>
-  /** Upload; the new version, or null when the store moved meanwhile (409). */
-  upload(login: PortableDesktopLogin, expect: number): Promise<number | null>
+  /** Upload; the new version, or null when the store moved meanwhile (409). `open`: its app runs here
+   *  and refreshes the grant itself, so the other PCs leave the renewal to it (claimDesktopRenewal). */
+  upload(login: PortableDesktopLogin, expect: number, open?: boolean): Promise<number | null>
   download(id: string): Promise<PortableDesktopLogin | null>
   /** Turn the account's row into the signed-out marker; the new version, or null (409). */
   markSignedOut(
@@ -746,7 +751,11 @@ async function sendProfile(
 ): Promise<void> {
   const { ctx } = pass
   const cookies = await cookiesToSend(pass, look, theirs)
-  const v = await ctx.upload(await portableDesktopLogin(look.p, look.tokens, cookies), expect)
+  const v = await ctx.upload(
+    await portableDesktopLogin(look.p, look.tokens, cookies),
+    expect,
+    !look.isClosed,
+  )
   if (v !== null)
     ctx.state[look.uuid] = {
       version: v,

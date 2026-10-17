@@ -1815,6 +1815,16 @@ desktop? ... to save me from having to do both individually."
 - A Log out of a fed CLI instance cuts the link (`logoutCliInstance`), so it stays out.
 - A fed login never goes to the login sync store (it has no refresh token); the desktop login
   syncs, and each PC feeds its own CLI instance. The sync dialog says so on that row.
+- A closed desktop profile's grant is renewed in place before it runs out (`core/desktop-cli-renew.ts`).
+  A desktop login the sync shares is renewed by ONE PC (owner, 2026-10-16: "my Max/desktop accounts
+  always need to sync"): before the 2026-10-16 fix every PC holding it refreshed the same refresh token
+  within a minute of the others, the token rotated, and the PC that went second walled its fed login
+  as "open its desktop app once". Now a PC refreshes only once the store has taken its claim on the
+  row (`claimDesktopRenewal`: the row rewritten unchanged with `renewBy` / `renewUntil`, compare-and-swap
+  on the version; a claim lapses after 10 minutes). A PC behind the store, or facing another PC's live
+  claim, waits and gets the renewed copy with the next pass. A row sent from a running app
+  (`meta.open`) is left to that app, which refreshes its own grant, until the grant has run out.
+  `GET /api/cli-instances/renewals` lists each linked profile's last outcome and why it waits.
 - CliMayte sees a fed instance as any signed-in CLI account.
 
 ## Tasks that arrive from HSwarm (owner, 2026-10-05)

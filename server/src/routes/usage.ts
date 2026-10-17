@@ -52,6 +52,7 @@ import {
 import { logoutCodexInstance } from '../core/codex-logout'
 import { feedCliFromDesktop } from '../core/desktop-cli-feed'
 import { type PairingResult, pairingPlan, runPairing } from '../core/desktop-cli-pairing'
+import { renewalOutcomes } from '../core/desktop-cli-renew'
 import { allInstanceNumbers, parseInstanceRef } from '../core/instance-numbers'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
@@ -719,6 +720,9 @@ app.post('/api/cli-instances/move-out', async (c) => {
 // Answers carry statuses only; the pairing route is the one that returns a secret, for the Login
 // sync dialog's copy button. No MCP tool on purpose, as for the move.
 app.get('/api/cli-instances/sync', async (c) => c.json(await loginSyncStatus()))
+// Each linked desktop profile's last Claude Code renewal: renewed, refused, or why it waits (another PC
+// renewing it, its app open there). States and reasons only, never a token.
+app.get('/api/cli-instances/renewals', (c) => c.json({ renewals: renewalOutcomes() }))
 app.post('/api/cli-instances/sync/setup', async (c) => {
   const body = await jsonBody(c)
   return c.json(

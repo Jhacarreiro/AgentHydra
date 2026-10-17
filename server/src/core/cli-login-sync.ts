@@ -585,10 +585,105 @@ export function nudgeLoginSync(): void {
 export function runLoginSync(opts: { background?: boolean } = {}): Promise<LoginSyncPassResult> {
   if (!opts.background) asked = true
   if (!running)
-    running = pass().finally(() => {
+    running = serially(pass).finally(() => {
       running = null
     })
   return running
+}
+
+/** Passes and renewal claims run one at a time: each reads the config, talks to the store and writes
+ *  the config back, so one inside the other would write over what the other agreed with the store. */
+let tail: Promise<unknown> = Promise.resolve()
+function serially<T>(fn: () => Promise<T>): Promise<T> {
+  const p = tail.then(fn, fn)
+  tail = p.catch(() => undefined)
+  return p
+}
+
+/** How long a PC's claim to refresh a shared desktop login holds the other PCs off. The refresh and the
+ *  upload of what it gave take seconds; a PC that claims and then stops is taken over after this. */
+export const RENEW_CLAIM_MS = 10 * 60_000
+const STORE_DOWN = 'the login store cannot be reached; trying again'
+
+/** Whether this PC may refresh desktop login `uuid`'s Claude Code grant now (null), or why it waits.
+ *
+ *  WHY (owner, 2026-10-16: "my Max/desktop accounts always need to sync"): every PC holding a synced
+ *  desktop login ran its own renewal (core/desktop-cli-renew.ts) when the shared grant came within two
+ *  hours of its end, all within a minute of each other, with the same refresh token. A refresh rotates
+ *  that token, so every PC but the first was refused and walled its linked CLI login as "open its
+ *  desktop app once", on the PC where nobody opens that app.
+ *
+ *  So the store decides, compare-and-swap on the row's version: this PC refreshes only after its claim
+ *  (the row rewritten unchanged, with `renewBy` and `renewUntil` in its meta) is the write the store
+ *  took. A PC whose copy is behind the store's, or that finds another PC's claim still running, waits,
+ *  and the renewed copy reaches it with the next pass. While a PC that sent the row has the app open
+ *  (`meta.open`), that app refreshes its own grant, so the others leave it until it has run out. A
+ *  login the store does not hold, or with sync off, is this PC's alone. */
+export function claimDesktopRenewal(
+  uuid: string,
+  grantExpiresAt: number,
+  now = Date.now(),
+): Promise<string | null> {
+  return serially(() => claimNow(uuid, grantExpiresAt, now))
+}
+
+async function claimNow(uuid: string, grantExpiresAt: number, now: number): Promise<string | null> {
+  const c = readConfig()
+  if (!c?.enabled || c.excluded.includes(uuid)) return null
+  const l = live(c)
+  if (!l) return null
+  // A grant that has already run out is renewed even when the store cannot say who should: nobody
+  // else's turn can be lost by then, and the linked CLI login is down until someone does.
+  const expired = grantExpiresAt <= now
+  const m = mirrorFor(l)
+  try {
+    await m.refresh({ tables: ['logins'] })
+  } catch {
+    return expired ? null : STORE_DOWN
+  }
+  const list = m.view('logins')
+  if (!list.ok) return expired ? null : STORE_DOWN
+  const row = (list.rows as Array<{ id: string; version: number; meta?: any }>).find(
+    (r) => r.id === uuid,
+  )
+  // This PC never agreed on that row: its profile holds a sign-in of its own (desktop-login-sync.ts's
+  // "left alone both ways"), whose refresh token no other PC has.
+  const st = c.state[uuid]
+  if (!row || !st) return null
+  const meta = row.meta ?? {}
+  const by = hostname()
+  const other = typeof meta.by === 'string' && meta.by !== by ? meta.by : 'another PC'
+  if (meta.signedOut === true) return 'signed out in the store'
+  if (!c.pcId) {
+    c.pcId = randomUUID()
+    writeConfig(c)
+  }
+  if (typeof meta.renewBy === 'string' && meta.renewBy !== c.pcId && Number(meta.renewUntil) > now)
+    return `${other} is renewing it`
+  if (meta.open === true && meta.by !== by && !expired)
+    return `its app is open on ${other}, which renews it`
+  if (st.version !== row.version) {
+    pace.nudge()
+    return 'a newer copy is in the store; it lands first'
+  }
+  const item = await m.getItem('logins', uuid)
+  if (item.status !== 200 || typeof item.json?.blob !== 'string') return expired ? null : STORE_DOWN
+  const { open: _open, renewBy: _by, renewUntil: _until, ...kept } = meta
+  const r = await call(l, 'PUT', `/v1/logins/${uuid}`, {
+    version: row.version,
+    blob: item.json.blob,
+    meta: { ...kept, by, renewBy: c.pcId, renewUntil: now + RENEW_CLAIM_MS },
+  })
+  if (r.status === 200 && typeof r.json?.version === 'number') {
+    c.state[uuid] = { ...st, version: r.json.version }
+    writeConfig(c)
+    return null
+  }
+  if (r.status === 409) {
+    pace.nudge()
+    return `${other} moved it first`
+  }
+  return expired ? null : STORE_DOWN
 }
 
 async function uploadLogin(
@@ -1033,7 +1128,7 @@ async function syncDesktopLoginsPass(
       excluded,
       out,
       note: (num, action, text) => note(c, num, action, text),
-      upload: async (login: PortableDesktopLogin, expect: number) => {
+      upload: async (login: PortableDesktopLogin, expect: number, open?: boolean) => {
         const r = await call(l, 'PUT', `/v1/logins/${login.id}`, {
           version: expect,
           blob: sealLogin(l.key, login),
@@ -1044,6 +1139,7 @@ async function syncDesktopLoginsPass(
             expiresAt: login.expiresAt,
             by,
             at: Date.now(),
+            ...(open ? { open: true } : {}),
           },
         })
         if (r.status === 200 && typeof r.json?.version === 'number') {
