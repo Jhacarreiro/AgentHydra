@@ -67,14 +67,14 @@ async function capture(cmd, opts) {
   const held = { stdout: '', stderr: '' }
   const drain = async (stream, into) => {
     const reader = stream.getReader()
-    const decoder = new TextDecoder('utf-8')
+    const decoder = into === 'stdout' || opts.wantStderr ? new TextDecoder('utf-8') : null
     try {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        held[into] += decoder.decode(value, { stream: true })
+        if (decoder) held[into] += decoder.decode(value, { stream: true })
       }
-      held[into] += decoder.decode()
+      if (decoder) held[into] += decoder.decode()
     } catch {}
   }
   let timer

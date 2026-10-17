@@ -493,14 +493,15 @@ export async function capturePipedProc(
   const held = { stdout: '', stderr: '' }
   const drain = async (stream: ReadableStream<Uint8Array>, into: 'stdout' | 'stderr') => {
     const reader = stream.getReader()
-    const decoder = new TextDecoder('utf-8')
+    // An unwanted stream still has to drain, but its text need never occupy memory.
+    const decoder = into === 'stdout' || wantStderr ? new TextDecoder('utf-8') : null
     try {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        held[into] += decoder.decode(value, { stream: true })
+        if (decoder) held[into] += decoder.decode(value, { stream: true })
       }
-      held[into] += decoder.decode()
+      if (decoder) held[into] += decoder.decode()
     } catch {
       // Killed mid-write, or the pipe closed under us: what arrived is still the honest answer.
     } finally {
