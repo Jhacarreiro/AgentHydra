@@ -342,20 +342,23 @@ describe('Free jobs and routes', () => {
     release.forEach(done => done(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })))
   })
 
-  test('only metadata is persisted; restarting does not replay a send', async () => {
+  test('the account file keeps only metadata, and a restart answers a finished send without replaying it', async () => {
     let calls = 0
     const { service, home, op, runtime } = fixture(async () => { calls++; return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' }) })
     const job = service.start(op({ command: 'chat', prompt: 'synthetic prompt' }))
     await tick()
     await service.settled()
+    expect(job.state).toBe('done')
     const stored = readFileSync(join(home, 'free', 'accounts.json'), 'utf8')
     expect(stored).not.toContain('synthetic prompt')
     expect(stored).not.toContain('Synthetic reply')
+    // The operation's own record keeps its reply for its caller across a restart (jobs.ts), and its message no longer.
+    expect(readFileSync(join(home, 'free', 'jobs', `${job.id}.job.json`), 'utf8')).not.toContain('synthetic prompt')
     const restarted = new FreeInstances(home, undefined, runtime)
     services.push(restarted)
     expect(restarted.status().ready).toBe(true)
     expect(restarted.threads()[0]?.chatId).toBe(CHAT)
-    expect(() => restarted.get(job.id)).toThrow('read the chat')
+    expect(restarted.get(job.id)).toMatchObject({ state: 'done', result: { ok: true, response: 'Synthetic reply' } })
     expect(calls).toBe(1)
   })
 

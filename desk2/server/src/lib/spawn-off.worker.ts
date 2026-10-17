@@ -28,7 +28,7 @@ async function run(id: number, opts: SpawnOffOptions): Promise<void> {
       cwd: opts.cwd,
       env: definedEnv(opts.env),
       stdin: opts.stdin === undefined ? 'ignore' : new Blob([typeof opts.stdin === 'string' ? opts.stdin : new Uint8Array(opts.stdin)]),
-      stdout: 'pipe',
+      stdout: opts.stdout === 'ignore' ? 'ignore' : 'pipe',
       stderr: opts.stderr === 'ignore' ? 'ignore' : 'pipe',
       windowsHide: true,
     })
@@ -52,7 +52,7 @@ async function run(id: number, opts: SpawnOffOptions): Promise<void> {
   const err = { text: '' }
   try {
     const work = Promise.all([
-      readStdout(proc.stdout as ReadableStream<Uint8Array>, opts.maxBytes ?? Number.POSITIVE_INFINITY, () => stop('capped'), out, readers),
+      opts.stdout === 'ignore' ? Promise.resolve() : readStdout(proc.stdout as ReadableStream<Uint8Array>, opts.maxBytes ?? Number.POSITIVE_INFINITY, () => stop('capped'), out, readers),
       opts.stderr === 'ignore' ? Promise.resolve() : readStderr(proc.stderr as ReadableStream<Uint8Array>, err, readers),
       proc.exited,
     ]).then(([, , code]) => ({ code }))

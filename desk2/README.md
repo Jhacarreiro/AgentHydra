@@ -1107,11 +1107,19 @@ cancels its owned process, including a login window. Requests from another brows
 Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.
 
 Only one operation per instance runs at a time. Repeated POSTs with the same request UUID and payload
-share the existing job while it remains cached; no operation is automatically resent. Job results live
-in memory for at most 15 minutes, bounded to 16 jobs, and disappear on a server restart. A lost job or
-interrupted send means refresh the tracked chats and read the relevant UUID before deciding to send
-again. The harness's chat handles survive restarts; provider retention still limits their lifetime.
-Desk does not write Free transcripts to its normal SDK chat store.
+share the existing job while it remains cached; no operation is automatically resent. Job results are
+kept for 15 minutes after they finish, 16 running and 200 kept at most.
+
+An operation a person or a chat asked for outlives a server restart (2026-10-17). Its harness runs under
+a runner of its own, started outside the server's process tree (`server/src/free-instances/jobs.ts`,
+`job-runner.ts`), and its record is in `~/.hydra-desk-2/free/jobs/<requestId>.job.json`: the next server
+answers `GET /api/free/jobs` for it, running or finished, watches a running one to its end, and starts
+one the last server had taken but not yet started. A repeated request UUID returns that operation. The
+record holds the message only until the operation ends, and goes 15 minutes after. A sign-in and Desk's
+own background reads still end with the server. A lost job or interrupted send means refresh the
+tracked chats and read the relevant UUID before deciding to send again. The harness's chat handles
+survive restarts; provider retention still limits their lifetime. Desk does not write Free transcripts
+to its normal SDK chat store.
 
 A chat reaches the Free accounts through AgentHydra's MCP (owner, 2026-10-06): `free_chat` sends tasks
 as new threads on idle accounts with room, the one used longest ago first, or continues a thread by its `chat_id`;
