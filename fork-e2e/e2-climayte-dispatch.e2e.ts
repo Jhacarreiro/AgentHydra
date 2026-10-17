@@ -88,6 +88,7 @@ knownBug(
     issue: 'a repeated request to an unnamed CliMayte group answers with a new random group name',
     where:
       'server/src/climayte.ts:1326 names the reply group `named || g-<6 hex>` even when every task repeats',
+    fix: 'https://github.com/LunarWerxs/AgentHydra/pull/17',
   },
   'E2: a repeat answers in the group of the worker it repeats',
   () => {

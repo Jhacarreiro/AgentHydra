@@ -92,6 +92,7 @@ knownBug(
       'db.ts recreates the session_stats_gone index on every boot after the v1 migration drops it',
     where:
       'server/src/db.ts:424 creates it unconditionally; db.ts:562 drops it only while user_version < 1',
+    fix: 'https://github.com/LunarWerxs/AgentHydra/pull/16',
   },
   'E1: no start after the first brings back the index the schema v1 step dropped',
   () => {

@@ -587,15 +587,15 @@ export function scenario(name: string) {
  *  (the lane stays green and the failure is printed); once upstream fixes it, bun fails the test
  *  with "marked as todo but passes", which is the cue to drop the marker. */
 export function knownBug(
-  bug: { issue: string; where: string },
+  bug: { issue: string; where: string; fix: string },
   name: string,
   fn: () => void | Promise<void>,
 ): void {
-  test.todo(`${name} [known bug, upstream issue to file: ${bug.issue}]`, async () => {
+  test.todo(`${name} [known bug, fix proposed in ${bug.fix}]`, async () => {
     try {
       await fn()
     } catch (e) {
-      const line = `known bug still present (${bug.where}): ${bug.issue}`
+      const line = `known bug still present (${bug.where}): ${bug.issue}; fix proposed in ${bug.fix}`
       console.warn(`\n  ${line}\n`)
       if (process.env.GITHUB_ACTIONS) console.log(`::warning title=fork-e2e known bug::${line}`)
       throw e
