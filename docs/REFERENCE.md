@@ -203,9 +203,10 @@ the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB);
 proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
-Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the
-owner's click, `X-Desk-Caller: window`) may resume, approve, discard, switch the manager (`enabled`), or edit a routine; an
-agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
+Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, and move one
+to the central store (the owner, 2026-10-16: an agent approves the routines he asks for, never handing the click back to him).
+Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard, switch the manager (`enabled`), edit a
+routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
 is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
 chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
@@ -216,12 +217,13 @@ into `routines/<id>.json` without `why`, discard deletes it.
 routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `headline`, `totals`, `settings`, last run,
 `nextRunAt`, the run going on (`kind` `command` or `prompt`, its runner's `pid` or its chat), and its last 30 runs, plus
 `proposals` and `error`. `POST /api/routines` takes one action per call:
-`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard }` (an id; `resume`, `approve` and
+`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard, move }` (an id; `resume` and
 `discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
 
-The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause` and `propose`,
-each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
-a routine rather than add one, and to prefer a temporary background task it manages itself.
+The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause`, `propose`,
+`approve` and `move`, each marked MUTATES. It cannot resume, discard, edit or switch the manager. Its description tells the
+agent to approve or move only a routine the owner asked for in his own words, to propose a routine rather than add one
+nobody asked for, and to prefer a temporary background task it manages itself.
 
 **Central routines** (the owner, 2026-10-15: one place for the routines, which other people can use too). When
 `<desk home>/routines-store.json` names a store, the manager also lists the routines kept there, which every computer reading
@@ -237,7 +239,7 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
   everything in it but `approval` and `description` (`routines/central.ts`). Any other change makes it a proposal again. Approve
   signs with this computer's key and writes the document back with the sha it read; an edit is signed again the same way, and
   answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
-  the MCP tool), never approve.
+  the MCP tool) and approve; a proposal that arrives already carrying an `approval` is refused.
 - **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
   pinned here and runs as a local routine does. When none is, any runner carrying the labels may run it (schedule routines
   only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
@@ -251,7 +253,7 @@ it, found through the file's `repos`, and `~/` is the running computer's home.
 - **Same id as a file here.** The file is listed and runs; the document is named under the store's `problems` in
   `GET /api/routines` `store` (Settings shows that line), never listed. A file being moved is the exception, below.
 - **Move to central** (ROUTINES.md 7.7: one routine at a time, on the owner's say). With a store named, each card of this
-  computer's own routines has Move to central (`POST /api/routines` `{ "move": "<id>" }`, the window only; 400 with no store).
+  computer's own routines has Move to central (`POST /api/routines` `{ "move": "<id>" }`, any caller; 400 with no store).
   It writes the routine to the store as a document pinned to this runner (`runsOn` its name), so it runs here as it did: a
   schedule keeps this computer's zone, `cwd` becomes the `workdir` of the deepest checkout `repos` names that holds it (else
   `~/` in this home; in neither the move is refused, naming `repos`), and a command argument in this home starts with `~/`

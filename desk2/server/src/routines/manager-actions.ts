@@ -17,7 +17,7 @@ import { approveMoving, discardMoving, movingIds, moveRoutine } from './manager-
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
 const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode', 'move'] as const
 type ActionName = (typeof ACTIONS)[number]
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit', 'mode', 'move']
+const OWNER_ACTIONS: readonly string[] = ['resume', 'discard', 'edit', 'mode']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
   'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "move"?: "<id>" (to the central store), "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
@@ -219,8 +219,8 @@ async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
   return c.json(status(m))
 }
 
-/** approve and discard: the window only (checked in postRoutine). Each acts on the move of that id, the central proposal,
- *  or the proposal file. */
+/** approve (any caller: the owner, 2026-10-16, has agents approve the routines he asks for) and discard (the window only,
+ *  checked in postRoutine). Each acts on the move of that id, the central proposal, or the proposal file. */
 async function decideProposal(m: Manager, c: Context, action: 'approve' | 'discard', id: string) {
   if (movingIds(m).has(id)) return centrally(m, c, action === 'approve' ? approveMoving(m, id) : discardMoving(m, id))
   const proposal = join(m.proposedDir, `${id}.json`)
