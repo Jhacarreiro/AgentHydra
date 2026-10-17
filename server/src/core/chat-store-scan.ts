@@ -47,6 +47,8 @@ export interface DossierChat {
    *  the answer is also the name in the file, so a hand-check cannot silently invert. */
   isArchived: boolean
   permissionMode: string | null
+  /** The model the app runs this chat on (`model` in the record, e.g. claude-opus-5-5), null when unset. */
+  model: string | null
   /** The effort the app runs this chat at (`effort` in the record: low..max), null when unset. */
   effort: string | null
   /** `sessionSettings.ultracode` - true on, false off, null when the record never set it. A move
@@ -141,6 +143,7 @@ function recordFields(path: string, rel: string, text: string, mtimeMs: number):
     archived: !!metaField(meta, 'isArchived'),
     isArchived: !!metaField(meta, 'isArchived'),
     permissionMode: anyText(metaField(meta, 'permissionMode')),
+    model: nonEmptyText(metaField(meta, 'model')),
     effort: nonEmptyText(metaField(meta, 'effort')),
     ultracode: ultracodeOf(meta),
     // Bun's glob yields native separators on Windows, so split on both.

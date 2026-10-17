@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare, Pin } from '@lucide/vue'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
-import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { hasSite } from '@/components/dashboard/logic'
+import { openDashboard, dashboardList, refreshDashboards, templateList } from '@/components/dashboard/store'
+import { hasDashboard as anyDashboard } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useFirstInterestSet } from '@/lib/first-interest'
@@ -15,7 +15,7 @@ import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
-import { gridProjects } from './project-grid'
+import { focusProjectFilter, gridProjects } from './project-grid'
 import { addProjectFolder, filterProjects, pickedFolder, type ProjectAction, type ProjectMenuApi, projectActions, runProjectAction, shownProjects, syncLabel } from './projects'
 import { showHiddenProjects, showProjectDetails } from './projectDetails'
 
@@ -70,7 +70,20 @@ function load(): void {
 onMounted(load)
 onMounted(refreshDashboards)
 watch(showHiddenProjects, load)
-const hasDashboard = (path: string) => hasSite(dashboardList.value, path)
+const hasDashboard = (path: string) => anyDashboard(dashboardList.value, templateList.value, path)
+
+// The composer's folder pill comes here when Project Hydra lists the projects (FolderPicker.vue).
+const filterBox = ref<HTMLInputElement | null>(null)
+async function focusFilter(): Promise<void> {
+  tab.value = 'projects'
+  await nextTick()
+  filterBox.value?.focus()
+  filterBox.value?.select()
+}
+onMounted(() => (focusProjectFilter.value = focusFilter))
+onBeforeUnmount(() => {
+  if (focusProjectFilter.value === focusFilter) focusProjectFilter.value = null
+})
 
 const hiddenCount = computed(() => choices.value.hidden.length)
 const listed = computed(() => filterProjects(shownProjects(answer.value?.projects ?? [], showHiddenProjects.value), query.value))
@@ -191,7 +204,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
     <!-- The projects tab leaves 16px more under the tiles (owner, 2026-10-08: the folder row below ran into them); the composer's row is not changed. -->
     <div class="m-auto flex w-full max-w-3xl flex-col items-center" :class="tab === 'projects' ? 'pt-6 pb-10' : 'py-6'">
       <h1 class="flex items-center justify-center gap-1.75 text-center text-[22px] font-normal leading-7 text-text">
-        <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (Jacob, 2026-10-06). -->
+        <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (the owner, 2026-10-06). -->
         <img src="/favicon.svg" alt="" class="relative top-px size-5.5 shrink-0" />
         <span>What’s up next{{ name ? `, ${name}` : '' }}?</span>
       </h1>
@@ -203,7 +216,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 
       <template v-if="tab === 'projects'">
         <div class="mt-3 flex w-full items-center gap-1.5">
-          <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-ui leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
+          <input ref="filterBox" v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-ui leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
           <Tip label="View options">
             <span class="inline-flex">
               <DropdownMenu>

@@ -60,6 +60,20 @@ describe('cron (routines/cron.ts)', () => {
     expect(nextSlot(parseCron('0 0 31 * *'), at(2026, 10, 31, 0, 0))).toBe(at(2026, 12, 31, 0, 0))
   })
 
+  test('in a zone with summer time, a wall time the clocks skip runs once just after the gap, and one they show twice runs once, the first', () => {
+    // America/New_York moved forward at 2026-03-08 02:00 EST (07:00 UTC) and back at 2026-11-01 02:00 EDT (06:00 UTC).
+    const ny = 'America/New_York'
+    // 02:30 is not on March 8's clocks: its slot is 03:30 EDT (07:30 UTC), and the next is March 9, 02:30 EDT.
+    const skipped = parseCron('30 2 * * *')
+    expect(nextSlot(skipped, Date.UTC(2026, 2, 8, 6, 0), ny)).toBe(Date.UTC(2026, 2, 8, 7, 30))
+    expect(nextSlot(skipped, Date.UTC(2026, 2, 8, 7, 30), ny)).toBe(Date.UTC(2026, 2, 9, 6, 30))
+    // 01:30 comes twice on November 1: the slot is the first (EDT, 05:30 UTC); the second (EST, 06:30 UTC) is none.
+    const twice = parseCron('30 1 * * *')
+    expect(nextSlot(twice, Date.UTC(2026, 10, 1, 4, 0), ny)).toBe(Date.UTC(2026, 10, 1, 5, 30))
+    expect(nextSlot(twice, Date.UTC(2026, 10, 1, 5, 30), ny)).toBe(Date.UTC(2026, 10, 2, 6, 30))
+    expect(previousSlot(twice, Date.UTC(2026, 10, 1, 7, 0), ny)).toBe(Date.UTC(2026, 10, 1, 5, 30))
+  })
+
   test('rejects what it does not take, with a reason', () => {
     expect(() => parseCron('0 9 * * MON')).toThrow()
     expect(() => parseCron('@daily')).toThrow()
@@ -128,13 +142,24 @@ describe('the definition (routines/manifest.ts)', () => {
     expect(() => checkDefinition('example-m', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], timeoutMinutes: 4 })).toThrow(/timeoutMinutes/)
     expect(() => checkDefinition('example-m', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], timeoutMinutes: 361 })).toThrow(/timeoutMinutes/)
   })
+
+  test('modes are 2 to 5 different names and a command, on a status routine only: its status says which is in force', () => {
+    const paced = { name: 'E', askedBy, status: ['node', 'status.js'], run: ['node', 'tick.js'] }
+    const set = ['node', 'mode.js']
+    expect(checkDefinition('example-o', { ...paced, modes: { options: ['idle', 'adaptive', 'aggressive'], set } }).modes).toEqual({ options: ['idle', 'adaptive', 'aggressive'], set })
+    expect(() => checkDefinition('example-o', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], modes: { options: ['a', 'b'], set } })).toThrow(/only a status routine/)
+    for (const options of [['idle'], ['a', 'b', 'c', 'd', 'e', 'f'], ['idle', 'idle'], ['Idle', 'busy'], ['idle', '']])
+      expect(() => checkDefinition('example-o', { ...paced, modes: { options, set } })).toThrow(/"modes" must be/)
+    expect(() => checkDefinition('example-o', { ...paced, modes: { options: ['a', 'b'], set: [] } })).toThrow(/"modes.set"/)
+    expect(() => checkDefinition('example-o', { ...paced, modes: { options: ['a', 'b'], set, default: 'a' } })).toThrow(/"modes" must be/)
+  })
 })
 
 // ---------- judging one look ----------
 
 const NOW = at(2026, 10, 12, 9, 30)
 const entryOf = (id: string, body: Record<string, unknown>): Entry => ({ id, def: checkDefinition(id, { name: 'Example', askedBy, ...body }), broken: null })
-const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, ...over })
+const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, mode: null, numbers: null, trends: null, ...over })
 const seenOf = (entry: Entry, over: Partial<Seen> = {}): Seen => ({ entry, reading: null, readError: null, task: null, ...over })
 const memWith = (over: Partial<Memory> = {}): Memory => ({ ...emptyMemory(), ...over })
 
@@ -281,10 +306,22 @@ afterEach(async () => {
 })
 
 // The fake command: `tick` counts a line in its file and exits 0, `wait` exits 0 once <file>.go exists (or a minute passes),
-// `busy` says so and exits 75.
+// `mode-status` prints a status whose mode is <file>.mode (adaptive while there is none), `set-mode <value>` writes it there
+// (and refuses idle with exit 3), `busy` says so and exits 75.
 const COMMAND = `const fs = require('node:fs')
-const [mode, file] = process.argv.slice(2)
-if (mode === 'tick') {
+const [mode, file, value] = process.argv.slice(2)
+if (mode === 'mode-status') {
+  const picked = fs.existsSync(file + '.mode') ? fs.readFileSync(file + '.mode', 'utf8') : 'adaptive'
+  console.log(JSON.stringify({ next_tick_at: '2099-01-01T00:00:00Z', headline: 'paced', mode: picked }))
+  process.exit(0)
+} else if (mode === 'set-mode') {
+  if (value === 'idle') {
+    console.error('idle refused: the example says no')
+    process.exit(3)
+  }
+  fs.writeFileSync(file + '.mode', value)
+  process.exit(0)
+} else if (mode === 'tick') {
   fs.appendFileSync(file, 'tick\\n')
   console.log('first line of the run')
   console.log('done: 3 items checked')
@@ -564,14 +601,14 @@ describe('the plugin', () => {
     expect(ticks(d.count)).toBe(0)
   })
 
-  test('the owner only: an agent gets 403 for resume, approve, discard and the switch; the window gets them', async () => {
+  test('the owner only: an agent gets 403 for resume, discard, edit and the switch; the window gets them', async () => {
     const d = desk()
     d.routine('example-owned', { name: 'Example owned', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
     await get(d.app, true)
-    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
+    for (const body of [{ resume: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
-      expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
+      expect(((await res.json()) as { error: string }).error).toBe("only the owner can do that, in AgentHydra's Tools tab")
     }
     expect(d.settings.routines).toBe(true)
 
@@ -597,9 +634,8 @@ describe('the plugin', () => {
     await get(d.app, true)
     expect(ticks(d.count)).toBe(0)
 
-    // An agent cannot approve it; the window can. The file keeps the contract and drops why.
-    expect((await post(d.app, { approve: 'example-proposed' })).status).toBe(403)
-    expect((await post(d.app, { approve: 'example-proposed' }, OWNER)).status).toBe(200)
+    // An agent approves it as the window would (the owner, 2026-10-16). The file keeps the contract and drops why.
+    expect((await post(d.app, { approve: 'example-proposed' })).status).toBe(200)
     const file = JSON.parse(readFileSync(join(d.home, 'routines', 'example-proposed.json'), 'utf8')) as Record<string, unknown>
     expect(file.why).toBeUndefined()
     expect(file.name).toBe('Example proposed')
@@ -723,6 +759,26 @@ describe('the plugin', () => {
     expect(readFileSync(file, 'utf8')).toBe(before)
   })
 
+  // Owner, 2026-10-15: "Maybe the Archangel should have three toggles".
+  test("a mode pick runs the routine's own set command with it and the card reads the mode its status then says; an agent cannot pick, an option it does not have is refused, and a refusal leaves the mode as it was", async () => {
+    const d = desk()
+    const modes = { options: ['idle', 'adaptive', 'aggressive'], set: d.argv('set-mode') }
+    d.routine('example-modes', { name: 'Example modes', askedBy, status: d.argv('mode-status'), run: d.argv('tick'), modes })
+    expect((await get(d.app, true)).routines[0]).toMatchObject({ state: 'idle', modes: modes.options, mode: 'adaptive' })
+
+    const res = await post(d.app, { mode: { id: 'example-modes', value: 'aggressive' } }, OWNER)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as RoutinesStatus).routines[0].mode).toBe('aggressive')
+    expect(readFileSync(`${d.count}.mode`, 'utf8')).toBe('aggressive')
+
+    expect((await post(d.app, { mode: { id: 'example-modes', value: 'adaptive' } })).status).toBe(403)
+    expect((await post(d.app, { mode: { id: 'example-modes', value: 'turbo' } }, OWNER)).status).toBe(400)
+    const refused = await post(d.app, { mode: { id: 'example-modes', value: 'idle' } }, OWNER)
+    expect(refused.status).toBe(500)
+    expect(((await refused.json()) as { error: string }).error).toContain('idle refused: the example says no')
+    expect((await get(d.app, true)).routines[0].mode).toBe('aggressive')
+  }, 30_000)
+
   // Regression (2026-10-13): a Desk that did not know a new key read Archangel's file as broken and listed it by its file
   // name, "michaiel".
   test('a routine whose file does not check out keeps the name the file gives it', async () => {
@@ -826,4 +882,60 @@ describe('settings (a stale key from the manager\'s old name)', () => {
     await get(d.app, true)
     expect(sent.map((c) => c[0])).toEqual(['record', 'record'])
   }, 60_000)
+})
+
+describe('GET /api/routines/:id/details', () => {
+  test('answers the whole history in pages with stats and the status extras, and 404s an unknown routine', async () => {
+    const d = desk()
+    d.routine('example-every-minute', { name: 'Example every minute', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
+    const runs = [3, 2, 1].map((n) => ({ startedAt: n * 1000, endedAt: n * 1000 + 500, outcome: 'ok', exitCode: 0, lastLine: `tick ${n}: landed ${n}`, workerId: null, sessionId: null }))
+    writeFileSync(join(d.home, 'routines.json'), JSON.stringify({ routines: { 'example-every-minute': { ...emptyMemory(null), runs } } }))
+    await d.stop()
+    const again = desk({}, d.home)
+    await get(again.app, true)
+    const res = await again.app.request('/api/routines/example-every-minute/details?limit=2')
+    const body = (await res.json()) as { runs: { startedAt: number }[]; nextBefore: number; stats: { total: number }; counters: Record<string, number> }
+    expect(body.runs.map((r) => r.startedAt)).toEqual([3000, 2000])
+    expect(body.nextBefore).toBe(2000)
+    expect(body.stats.total).toBe(3)
+    expect(body.counters).toEqual({ landed: 6 })
+    const rest = (await (await again.app.request(`/api/routines/example-every-minute/details?before=${body.nextBefore}`)).json()) as { runs: unknown[]; nextBefore: number | null }
+    expect(rest.runs).toHaveLength(1)
+    expect(rest.nextBefore).toBeNull()
+    expect((await again.app.request('/api/routines/nope/details')).status).toBe(404)
+  })
+})
+
+describe("a routine's group and campaigns (routines/manifest.ts, POST meta)", () => {
+  test('a local file with group and campaigns lists them on its Routine; a bad campaign id and a 41-character group are refused with the reason', async () => {
+    const d = desk()
+    d.routine('example-folder', { name: 'Example folder', askedBy, schedule: '* * * * *', run: d.argv('tick'), group: 'Example Company', campaigns: ['example-spring', 'example-summer'] })
+    d.routine('example-bad-campaign', { name: 'Example bad', askedBy, schedule: '* * * * *', run: d.argv('tick'), campaigns: ['Example Spring'] })
+    d.routine('example-long-group', { name: 'Example long', askedBy, schedule: '* * * * *', run: d.argv('tick'), group: 'x'.repeat(41) })
+    const s = await get(d.app, true)
+    expect(s.routines.find((x) => x.id === 'example-folder')).toMatchObject({ group: 'Example Company', campaigns: ['example-spring', 'example-summer'] })
+    expect(s.routines.find((x) => x.id === 'example-bad-campaign')).toMatchObject({ state: 'broken', group: null, campaigns: null })
+    expect(s.routines.find((x) => x.id === 'example-bad-campaign')?.reason).toContain('"campaigns" must be a list of 1 to 10 campaign ids')
+    expect(s.routines.find((x) => x.id === 'example-long-group')).toMatchObject({ state: 'broken', group: null })
+    expect(s.routines.find((x) => x.id === 'example-long-group')?.reason).toContain('"group" must be 1 to 40 characters')
+  })
+
+  test('an agent (no window header) may POST meta: the file keeps its other keys, null removes one key, a bad value is a 400 and an unknown routine a 404', async () => {
+    const d = desk()
+    d.routine('example-folder', { name: 'Example folder', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 7 })
+    const file = join(d.home, 'routines', 'example-folder.json')
+    expect((await post(d.app, { meta: { id: 'example-folder', group: 'Example Company', campaigns: ['example-spring'] } })).status).toBe(200)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ name: 'Example folder', timeoutMinutes: 7, group: 'Example Company', campaigns: ['example-spring'] })
+    expect((await get(d.app)).routines.find((x) => x.id === 'example-folder')).toMatchObject({ group: 'Example Company', campaigns: ['example-spring'] })
+
+    expect((await post(d.app, { meta: { id: 'example-folder', campaigns: null } })).status).toBe(200)
+    const cleared = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    expect(cleared).toMatchObject({ group: 'Example Company', timeoutMinutes: 7 })
+    expect(cleared).not.toHaveProperty('campaigns')
+
+    const bad = await post(d.app, { meta: { id: 'example-folder', campaigns: [] } })
+    expect(bad.status).toBe(400)
+    expect(((await bad.json()) as { error: string }).error).toContain('"campaigns" must be a list')
+    expect((await post(d.app, { meta: { id: 'nope', group: 'Example Company' } })).status).toBe(404)
+  })
 })

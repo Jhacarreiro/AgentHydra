@@ -3,7 +3,7 @@
 It exists for two things. A task that names no max_cost_usd gets a cap sized from finished tasks of its own shape
 (sized_cap), where the profile's flat default killed tasks that routinely needed more: over 7 days to 2026-10-02 the
 cap killed 1,216 tasks and the work they had paid for ($404). And the history is something to learn from (owner,
-Michael, 2026-10-02: "I'd like you to be able to learn from previous experience ... we have all this data"):
+2026-10-02: "I'd like you to be able to learn from previous experience ... we have all this data"):
 `hswarm history --tasks` answers what kind of task fails, times out or hits its cap, on which model, by SQL over
 this table instead of a script reading thousands of job archives.
 

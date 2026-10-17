@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""courier.py - ACT: deliver staged replies into their chats, through the app's own composer.
+"""courier.py - ACT: deliver staged replies into their chats, never by typing into a window.
 
 THE LAST MANUAL LANE, CLOSED. Everything else the toolbox does ends at a decision; this is
 what turns a decided reply into words in a chat. It sends only what `stage_reply.py` wrote
@@ -12,30 +12,18 @@ THE RAILS, in the order they are checked, because the order is the design:
   2. BREAKER?       'deliver' attempts are counted like every other act; a futile loop stops.
   3. RESOLVE        the chat must resolve to exactly one row (ambiguity is a deterministic
                     refusal, never a guess).
-  4. NEVER MID-TURN a chat whose turn is IN FLIGHT is never interrupted for the COMPOSER
-                    route. THE CHANNEL IS CHOSEN FIRST, AND THE GATE APPLIES TO THE CHANNEL
-                    (fixed 2026-09-10): a LIVE session goes over the peer channel, which
-                    enqueues natively and drains after the current turn - like any
-                    SendMessage - so it is never deferred for being busy. Only a delivery
-                    that would TYPE is held back, and that is carried as `peer_only` all the
-                    way to the send, so no fallback can quietly turn a peer delivery into a
-                    composer one mid-turn. An IDLE live chat is the normal target; a
-                    DORMANT/CRASHED chat is one too - the composer send boots its engine
-                    (delivery IS the revive).
-                    WHY (found 2026-09-07, reproduced 09-09 and 09-10): the gate ran BEFORE
-                    the channel was known, so every live chat - the exact population the peer
-                    channel serves - was refused with the composer's wording. A chat in a
-                    continuous work loop is never idle, so its reply was deferred forever.
-  5. DELIVER        the daemon's /message endpoint picks the channel: THE OFFICIAL PEER
-                    CHANNEL for a live session (native input queue, no UI), the composer for
-                    a dormant/crashed one (which it also boots). `peer_only` forbids that
-                    second half for a mid-turn chat: the endpoint refuses honestly instead.
-  6. VERIFY TEXT    the composer route refuses to type until it SEES a snippet of this chat's
-                    own last words in the pane it selected (the peer route needs none - the
-                    token authenticates and the session id addresses).
-  7. CONFIRM MOVED  a send is not a delivery. The chat must be observed to MOVE (a growing
-                    transcript) before this is called delivered. If it cannot be confirmed,
-                    say so - never claim.
+  4. NEVER TYPES    (owner, 2026-10-15) nothing here types into an app's window. The composer
+                    raised the window, clicked through its sidebar and typed; a move's resume
+                    did that on 2026-10-15 and the owner watched his window go full screen,
+                    minimize, and have its menus clicked. A busy chat is never interrupted
+                    either: the native send holds its message until the chat is idle, and the
+                    peer channel drains after the current turn, like any SendMessage.
+  5. DELIVER        the daemon's /message endpoint picks the channel: the app's own native send
+                    (which also starts a dormant or crashed chat's engine), then the peer channel
+                    for a live session. It types only for a caller that asks (a person's own
+                    send); the courier never asks, so what neither channel takes stays staged.
+  6. CONFIRM        a send is not a delivery. The endpoint says what the app or the transcript
+                    confirmed, and a send it could not confirm is reported as such - never claimed.
 
 Usage: python courier.py                      # plan only: what would be delivered, and why
        python courier.py --yes [--max N]      # deliver (default cap 5 per run)
@@ -60,7 +48,6 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -75,15 +62,10 @@ from lib import hydralib
 from lib import ledgerlib
 from lib import windowlib
 
-# THE COMPOSER ACTUATOR LIVES HERE NOW (owner, 2026-09-01: "relocate it into the orchestrator
-# - I own both codebases"). It was misc/Deliver-DesktopChat.ps1 in AgentHydra, a PUBLIC repo,
-# where the script that types into the owner's chats sat inside another lane's rewrite. The
-# daemon's own /message endpoint still runs its copy; this one is the orchestrator's.
-ACTUATOR = Path(__file__).resolve().parent / "actuator" / "deliver_desktop_chat.ps1"
 DEFAULT_MAX = configlib.get("courier.max_deliveries")
 # How long to watch for the chat to move after sending before giving up on confirming it.
-# A composer send into a DORMANT or CRASHED chat boots its engine first (that boot is the
-# revive), so the window covers an engine start, not just an append.
+# A send into a DORMANT or CRASHED chat boots its engine first (that boot is the revive), so the
+# window covers an engine start, not just an append.
 # A DORMANT chat must BOOT before its first byte lands; 60s reported healthy wakes as
 # unconfirmed on a busy machine (measured 2026-09-01). The daemon endpoint watches for
 # this long on our behalf.
@@ -91,12 +73,6 @@ CONFIRM_SECS = configlib.get("courier.confirm_secs")
 # A per-delivery CLAIM older than this belongs to a dead courier run and is reclaimable
 # (send pipeline worst case: actuator timeout 300s + confirm 25s + margin).
 CLAIM_STALE_SECS = deliverylib.CLAIM_STALE_SECS
-# How long the local composer actuator (the older-daemon fallback) gets before we give up on
-# it. A hang here must read as an ordinary actuator failure, not an uncaught exception that
-# skips straight past mark_failed and the results row every other refusal gets.
-ACTUATOR_TIMEOUT_SECS = 300
-# How _run_actuator's result opens when it killed the actuator: that send may already have typed.
-_ACTUATOR_TIMED_OUT = "actuator timed out after"
 
 # ⛔ ONE ROW MAY NOT EAT THE WHOLE RUN (2026-09-18). Every step below is individually bounded -
 # the daemon send at CONFIRM_SECS+120, the actuator at 300s, the confirm at CONFIRM_SECS - and
@@ -268,30 +244,8 @@ def _activity_of(session_id: str, transcript_path: str | None = None) -> tuple[s
 # the call really did was KILL the chat's process, archive its row, and reimport it DORMANT:
 # message lost, zombie twin left visible, "Claude has crashed" on the owner's screen. His
 # overlord chat measured the damage exactly: "zero of ten replies reached a chat". /migrate
-# is for MIGRATIONS; the composer actuator below is the one real delivery channel, and its
-# send is also what boots a dormant or crashed chat (the daemon's own 2026-08-26 measurement).
-
-
-def _run_actuator(title: str, instance: str, message: str, verify: str,
-                  deadline: float | None = None) -> tuple[int, str]:
-    if not ACTUATOR.exists():
-        return 1, f"the delivery actuator is missing at {ACTUATOR}"
-    args = [
-        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
-        "-Title", title, "-Message", message, "-VerifyText", verify,
-        "-IfBusyAbort",          # a chat that started working mid-flight aborts the send
-        "-SearchByContent",      # imported chats can render untitled; content is the identity
-    ]
-    if instance:
-        args += ["-Instance", instance]
-    limit = _budget(deadline, ACTUATOR_TIMEOUT_SECS)
-    try:
-        r = clilib.run_text(args, timeout=limit)
-    except subprocess.TimeoutExpired:
-        # A hung actuator is a delivery failure like any other (rows above return (1, why))
-        # - never an exception that escapes deliver_one and skips mark_failed/the results row.
-        return 1, f"{_ACTUATOR_TIMED_OUT} {limit:.0f}s"
-    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+# is for MIGRATIONS. Delivery is the daemon's /message endpoint (_send_via_daemon), whose native
+# send also starts a dormant or crashed chat's engine, without the window.
 
 
 def _is_transient(err: "hydralib.DaemonError") -> bool:
@@ -306,13 +260,20 @@ def _is_transient(err: "hydralib.DaemonError") -> bool:
     return any(s in blob for s in (
         "is not running",       # 409: the target app is closed - delivery types into the app
         "open it first",
-        "peer_only",            # 409: mid-turn with no pipe - open again the moment it is idle
+        "never types",          # 409: no native send and no pipe reached it - the courier never types
         "winerror 10054",       # the daemon dropped the socket mid-call
         "connection reset",
         "connection aborted",
         "connection refused",
         "timed out",
     ))
+
+
+def _dropped_mid_call(err: "hydralib.DaemonError") -> bool:
+    """Did the connection drop after the request may have reached the daemon? A refused connection
+    proves nothing was sent; a reset or an abort does not."""
+    blob = f"{err} {getattr(err, 'detail', '') or ''}".casefold()
+    return any(s in blob for s in ("winerror 10054", "winerror 10053", "connection reset", "connection aborted"))
 
 
 def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None,
@@ -442,28 +403,6 @@ def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None
     return True, "", {**match, "wakes": verdict["state"] != "running", "peer_only": mid_turn}
 
 
-def _still_mid_turn(sid: str, match: dict) -> bool:
-    """Is this chat STILL working, right now? `peer_only` is decided when the batch plans, and
-    the peer channel's dead-letter arrives minutes later - a batch's resume phase plans every
-    chat, then delivers them one at a time.
-
-    ⛔ THE STALE REFUSAL (found live 2026-09-17, operation b2576cf1): chat 44b8262a finished its
-    own turn at 17:05:41 and was still being deferred as "the turn is in flight" at 17:08:14,
-    because the flag had been true when the plan was built and nothing re-read it. Deferring a
-    chat that is now idle costs a whole cycle for a message the composer could have typed - and
-    a chat that keeps finishing and starting turns can lose every cycle that way. This repo's
-    own rail is the T-0 re-check, and this is it: re-gate at the moment of the refusal, and
-    defer ONLY while the turn is genuinely still in flight. A read that fails answers "still
-    mid-turn": unknown must never become a licence to type into a live chat."""
-    try:
-        verdict = gatelib.gate_match(match, hydralib.session_row)
-    except Exception:
-        return True
-    if verdict is None:
-        return True
-    return verdict["state"] == "running" and not verdict.get("idle")
-
-
 def _ensure_doctrine(sid: str, match: dict) -> str:
     """Stamp bypassPermissions + ultracode on a DORMANT chat, immediately before waking it.
 
@@ -546,20 +485,21 @@ def _capture_before_state(sid: str) -> _BeforeState:
 
 def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                      doctrine_note: str, attempt: str | None = None,
-                     deadline: float | None = None) -> dict | None:
+                     deadline: float | None = None) -> dict:
     """THE ROUTE: the daemon's message endpoint (POST /api/sessions/:id/message), which picks
-    the right channel by itself - and prefers THE OFFICIAL PEER CHANNEL (owner, 2026-09-01:
-    "why don't we use the old method"). For a LIVE session it injects into the chat's own
-    peer-messaging pipe exactly as one session's SendMessage reaches another: native input
-    queue, NO UI, no composer click. Only a dormant/crashed chat (no pipe) falls to the
-    composer, which can BOOT it and self-heals an unrendered row via claude://resume. An
-    older daemon (404) falls back to driving the local composer actuator (deliver_one's
-    caller does this: this function returns None to say so).
+    the channel by itself: the app's own native send (which also starts a dormant chat's engine),
+    then the chat's peer-messaging pipe for a live session, exactly as one session's SendMessage
+    reaches another. NO UI either way.
+
+    ⛔ NOTHING HERE TYPES (owner, 2026-10-15). The endpoint types into the window only for a caller
+    that sends `allow_typing` (a person's own send), and this never does. The composer raised the
+    window, clicked through its sidebar and typed: a move's resume did that on 2026-10-15 and the
+    owner watched his window go full screen, minimize, and have its menus clicked. So a delivery
+    the native send and the pipe cannot take is deferred or failed with its reason, never typed.
     ⛔ NEVER /migrate for delivery: it delivers no prompt - it kills and reimports the chat
     dormant (2026-09-01: message lost, zombie twin, "Claude has crashed").
 
-    Returns the final result dict when this attempt settles the delivery (success or an
-    honest failure); None when an older daemon (404) leaves the composer as the only path.
+    Returns the result dict of this attempt: delivered, deferred (still staged), or failed.
     """
     title = match.get("title") or entry.get("title") or ""
     try:
@@ -578,10 +518,8 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                                  # THE COPY THIS ROW WAS STAGED FOR (a moved chat keeps its session id on
                                  # both accounts; the endpoint must not pick the source copy's engine).
                                  "instance": str(entry.get("instance") or ""),
-                                 # RAIL 4, ENFORCED WHERE THE CHANNEL IS ACTUALLY PICKED: for a
-                                 # chat mid-turn the peer channel is the ONLY acceptable route,
-                                 # so the endpoint must refuse rather than fall through to the
-                                 # composer it normally uses for a chat with no pipe.
+                                 # Rail 4 is the endpoint's default: no `allow_typing`, so it
+                                 # refuses what the native send and the pipe cannot take.
                                  "peer_only": bool(match.get("peer_only"))},
                                 # Cut at the row's budget (2026-09-18); a cut send MAY HAVE LANDED,
                                 # which the DaemonError branch below records (2026-10-08).
@@ -590,9 +528,10 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
             deliverylib.mark_delivered(entry["id"])
             ledgerlib.clear("deliver", sid)
             via = str(got.get("route") or "daemon")
+            channel = {"native": "the app's native send", "peer": "native peer channel"}.get(via, via)
             return {"id": entry["id"], "ok": True,
-                    "outcome": f"delivered ({'native peer channel' if via == 'peer' else 'composer'}, "
-                               "via the daemon) and confirmed",
+                    "outcome": f"delivered ({channel}, via the daemon) "
+                               + ("and confirmed" if got.get("confirmed", True) else "- not yet confirmed"),
                     "detail": (str(got.get("detail") or f"'{title}' took the message")
                                + doctrine_note)[:250]}
         # typed-but-unconfirmed or endpoint refusal: honest failure, never a silent retry
@@ -627,33 +566,21 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
                 return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
                         "outcome": "peer did not confirm, but the chat moved - not risking a duplicate",
                         "detail": (err.detail or str(err))[:200]}
-            if match.get("peer_only") and _still_mid_turn(sid, match):
-                # MID-TURN: the composer is not an alternative, it is the thing rail 4 forbids.
-                # An unconfirmed peer write on a working chat stays staged and is re-judged
-                # next cycle, when the turn has ended and every route is open again.
-                #
-                # ⛔ AND THE ROW HAS TO SURVIVE TO THAT NEXT CYCLE (found live 2026-09-12).
-                # The refusal above is correct and the comment already said "stays staged" -
-                # but the call under it was mark_failed(), which BURNS the row on one attempt.
-                # So `courier --yes --only <id>` refused honestly, and the same command a
-                # minute later answered "nothing staged - the courier has nothing to deliver",
-                # which reads as "already delivered" and is the exact opposite of the truth;
-                # the message had to be re-staged under a new id by hand. This is the same
-                # NOT-YET class as the _is_transient branch below and now takes the same door:
-                # defer() keeps it staged, counts the deferral, and expires it at the ceiling
-                # so a chat that never leaves its turn still stops eventually.
-                deliverylib.defer(
-                    entry["id"],
-                    f"peer channel did not confirm on a chat mid-turn ({err.detail or err}) - "
-                    "not typing into a turn in flight")
-                ledgerlib.discount("deliver", sid, attempt)
-                return {"id": entry["id"], "ok": False, "deferred": True,
-                        "outcome": "peer did not confirm and the turn is in flight - not typing",
-                        "detail": (err.detail or str(err))[:200]}
-            ledgerlib.note("deliver", sid,
-                           note=f"peer route dead-lettered {entry['id']}; transcript unchanged "
-                                f"at {before.size} bytes - falling back to the composer")
-            return None
+            # Nothing landed, and the composer is not an alternative (the docstring). The row stays
+            # staged and is tried again next cycle, when the native send may reach the app.
+            #
+            # ⛔ AND THE ROW HAS TO SURVIVE TO THAT NEXT CYCLE (found live 2026-09-12). mark_failed()
+            # BURNS the row on one attempt: `courier --yes --only <id>` then answered "nothing
+            # staged - the courier has nothing to deliver", which reads as "already delivered" and
+            # is the opposite of the truth. defer() keeps it staged, counts the deferral, and
+            # expires it at the ceiling, so a chat nothing can reach still stops eventually.
+            deliverylib.defer(
+                entry["id"],
+                f"peer channel did not confirm ({err.detail or err}), and the courier never types")
+            ledgerlib.discount("deliver", sid, attempt)
+            return {"id": entry["id"], "ok": False, "deferred": True,
+                    "outcome": "peer did not confirm - not typing; staged for the next cycle",
+                    "detail": (err.detail or str(err))[:200]}
         # ⛔ A SEND CUT SHORT MAY HAVE LANDED (2026-10-08). No status and "timed out" is THIS
         # client giving up at its budget while the route may still type and confirm. Read as a
         # not-yet, the row stayed staged and the next cycle typed the same reply a second time.
@@ -665,10 +592,22 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
             return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
                     "outcome": "the send was cut short and may have landed - not sending it again",
                     "detail": (err.detail or str(err))[:200]}
-        # A COMPOSER REFUSAL IS NOT NOW, NOT NEVER: the wrong-chat guard refused before typing, so the
-        # row stays staged (with its retry command) rather than being burned as failed.
-        composer_refused = "does not show the expected text" in f"{err} {err.detail or ''}"
-        if err.status not in (404,) and (_is_transient(err) or composer_refused):
+        # ⛔ A SOCKET DROPPED MID-CALL MAY HAVE LANDED TOO (2026-10-16, the sibling of the timeout
+        # above). A reset or aborted connection after the POST went out does not say whether the
+        # route typed; the transcript does. It grew since T-0: the send may have taken, and it is
+        # not sent again. It did not: nothing landed, and the row stays staged as before.
+        if err.status is None and _dropped_mid_call(err):
+            _, size_now = _activity_of(sid, before.tpath)
+            if size_now > before.size:
+                deliverylib.mark_failed(
+                    entry["id"],
+                    f"daemon message endpoint: {err} - the connection dropped mid-call and the "
+                    "transcript grew, so the send may have landed; not sending it again "
+                    "(check the chat before re-staging)")
+                return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
+                        "outcome": "the connection dropped and the chat moved - not sending it again",
+                        "detail": (err.detail or str(err))[:200]}
+        if err.status != 404 and _is_transient(err):
             # NOT NOW IS NOT NO (2026-09-10). The row stays STAGED and is retried on the next
             # 5-minute cycle, which is what "the target app is closed" actually calls for; the
             # deferral is counted, so an unopenable chat still stops eventually (defer()).
@@ -679,70 +618,18 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
             return {"id": entry["id"], "ok": False, "deferred": True,
                     "outcome": "not now - staged, and retried next cycle",
                     "detail": (err.detail or str(err))[:200]}
-        if err.status not in (404,):
-            # RECORD THE REASON, NOT JUST THE NUMBER (2026-09-01). DaemonError.__str__ is
-            # "<path> -> HTTP 422" and nothing more, while the composer's actual refusal -
-            # "not rendered in any searched running instance", the actuator tail, the verify
-            # text it looked for - rides on .detail. Logging str(err) threw all of it away,
-            # so ten dead deliveries recorded ten identical "HTTP 422" lines and the ledger
-            # could not say why a single chat had gone idle. A failure record that cannot
-            # explain the failure is only bookkeeping.
-            deliverylib.mark_failed(
-                entry["id"],
-                f"daemon message endpoint: {err}"
-                + (f" | {err.detail}" if err.detail else ""))
-            return {"id": entry["id"], "ok": False, "outcome": "the daemon endpoint refused",
-                    "detail": (err.detail or str(err))[:200]}
-        return None  # 404 = older daemon without the endpoint: drive the actuator locally.
-
-
-def _wait_for_movement(sid: str, before: _BeforeState,
-                       deadline: float | None = None) -> bool:
-    """CONFIRM: the keystroke is not the delivery. Watch for the chat to actually move - a
-    growing transcript, a fresh lastActivityAt, or (a boot from dormant) a changed live-
-    registry entry, which shows there before the first transcript write."""
-    until = time.time() + _budget(deadline, CONFIRM_SECS)
-    while time.time() < until:
-        after_activity, after_size = _activity_of(sid, before.tpath)
-        if (after_activity and after_activity != before.activity) or after_size > before.size:
-            return True
-        try:
-            after_live = hydralib.live_for(sid)
-        except hydralib.DaemonError:
-            after_live = None
-        if after_live and after_live != before.live:
-            return True
-        time.sleep(2)
-    return False
-
-
-def _deliver_via_actuator(entry: dict, match: dict, sid: str, before: _BeforeState,
-                          doctrine_note: str, deadline: float | None = None) -> dict:
-    """The composer fallback (an older daemon, 404, with no /message endpoint): drive the
-    local actuator directly, then rail 7 - refuse to call it delivered until the chat moves."""
-    title = match.get("title") or entry.get("title") or ""
-    instance = match.get("instance") or entry.get("instance") or ""
-    code, out = _run_actuator(title, instance, entry["text"], entry["verifyText"], deadline)
-    if code != 0:
-        deliverylib.mark_failed(entry["id"], f"composer: {out or f'exit {code}'}")
-        # An actuator killed mid-send may already have typed (2026-10-08); a refusal has not.
-        cut = out.startswith(_ACTUATOR_TIMED_OUT)
-        return {"id": entry["id"], "ok": False, **({"mayHaveLanded": True} if cut else {}),
-                "outcome": "the composer was cut short" if cut else "the composer refused",
-                "detail": (out.splitlines()[-1] if out else f"exit {code}")[:160]}
-    if not _wait_for_movement(sid, before, deadline):
+        # RECORD THE REASON, NOT JUST THE NUMBER (2026-09-01). DaemonError.__str__ is
+        # "<path> -> HTTP 422" and nothing more, while the route's actual refusal rides on
+        # .detail. Logging str(err) threw it away, so ten dead deliveries recorded ten identical
+        # "HTTP 422" lines and the ledger could not say why a single chat had gone idle. A 404 is a
+        # daemon without the endpoint: the composer the courier once drove in its place types.
         deliverylib.mark_failed(
             entry["id"],
-            "the actuator reported it typed and sent, but the chat did not move within "
-            f"{CONFIRM_SECS}s - NOT claiming delivery")
-        return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
-                "outcome": "sent but NOT confirmed",
-                "detail": "the chat did not move; re-check it by hand before re-staging"}
-    deliverylib.mark_delivered(entry["id"])
-    ledgerlib.clear("deliver", sid)  # success clears - the brake is for futility
-    # doctrine_note rides on EVERY success path (its docstring: reported, never swallowed).
-    return {"id": entry["id"], "ok": True, "outcome": "delivered (daemon) and confirmed",
-            "detail": (f"'{title}' took the message and started moving" + doctrine_note)[:250]}
+            f"daemon message endpoint: {err}"
+            + (f" | {err.detail}" if err.detail else "")
+            + (" - this daemon has no message endpoint, and the courier never types" if err.status == 404 else ""))
+        return {"id": entry["id"], "ok": False, "outcome": "the daemon endpoint refused",
+                "detail": (err.detail or str(err))[:200]}
 
 
 def deliver_one(entry: dict, match: dict, budget_secs: float | None = None) -> dict:
@@ -775,25 +662,7 @@ def deliver_one(entry: dict, match: dict, budget_secs: float | None = None) -> d
     # begun with two seconds left is a half-typed message nobody can account for. Refuse instead.
     if _left(deadline) <= 5:
         return _out_of_budget(entry, sid, attempt, "the send could be started", float(budget))
-    settled = _send_via_daemon(entry, match, sid, before, doctrine_note, attempt, deadline)
-    if settled is not None:
-        return settled
-    if match.get("peer_only") and _still_mid_turn(sid, match):
-        # The 404 route below is the OLD-DAEMON composer fallback, and rail 4 forbids typing
-        # into a turn in flight whatever the reason the peer route was unavailable. Staged,
-        # not lost: the next cycle finds the chat idle and every route open. Re-gated at this
-        # moment, not at plan time - see _still_mid_turn.
-        deliverylib.mark_failed(
-            entry["id"],
-            "this daemon has no /message endpoint and the chat's turn is IN FLIGHT - the "
-            "composer is the only route left and it is never pointed at a live turn")
-        return {"id": entry["id"], "ok": False,
-                "outcome": "no peer route on this daemon and the turn is in flight - not typing",
-                "detail": "upgrade the daemon, or re-run once the chat is idle"}
-    if _left(deadline) <= 5:
-        return _out_of_budget(entry, sid, attempt,
-                              "the composer fallback could be started", float(budget))
-    return _deliver_via_actuator(entry, match, sid, before, doctrine_note, deadline)
+    return _send_via_daemon(entry, match, sid, before, doctrine_note, attempt, deadline)
 
 
 def _verify_of(report: dict, delivery_id: str) -> str:

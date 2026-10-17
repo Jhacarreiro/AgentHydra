@@ -1,9 +1,13 @@
+import { basename } from 'node:path'
+import { tryNativeNew } from '../claude-native-new'
 import { resolveAccount } from '../core/accounts'
-import { noteLoggedOutHere, setLoginSyncExcluded } from '../core/cli-login-sync'
+import { noteLoggedOutHere, removeLoginEverywhere } from '../core/cli-login-sync'
+import { invalidateCodexProcessCache } from '../core/codex-desktop'
 import { detectDesktopInstall } from '../core/desktop-install'
 import {
   createDshInstance,
   deleteDshInstance,
+  freeDshName,
   launchDshInstance,
   listDshInstances,
   quitDshInstance,
@@ -27,8 +31,9 @@ import {
   readLoginUuid,
   revealInstanceFolder,
 } from '../core/instances'
-import { createInstance, removeInstance } from '../core/lifecycle'
+import { createInstance, freeInstanceName, removeInstance } from '../core/lifecycle'
 import { readLoginHistory } from '../core/login-history'
+import { invalidateClaudeProcessCache, isPidAlive } from '../core/process'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
 import { app } from '../http-app'
@@ -61,6 +66,23 @@ app.get('/api/instances', async (c) => {
 // so a profile signed into another account shows that account at once (2026-10-14: a row kept the old account's
 // name and plan for two minutes, until the next list poll). Registered before the `:dir` routes.
 app.get('/api/instances/logins', (c) => c.json(listInstanceLogins()))
+// The Instances tab's exit watch (2026-10-16, owner: a closed Codex app read open until a manual Refresh): which of
+// the app pids its rows show as running still run. A signal-0 probe costs a few ms where a process scan costs a
+// PowerShell spawn, so the tab asks every few seconds while an app is open and re-lists only when one is gone; a gone
+// pid drops both scan caches first, so that re-list reads the processes fresh instead of the cached snapshot.
+const ALIVE_MAX_PIDS = 256
+app.get('/api/instances/alive', (c) => {
+  const pids = [...new Set((c.req.query('pids') ?? '').split(',').map(Number))]
+    .filter((p) => Number.isInteger(p) && p > 0)
+    .slice(0, ALIVE_MAX_PIDS)
+  const alive: Record<string, boolean> = {}
+  for (const pid of pids) alive[pid] = isPidAlive(pid)
+  if (pids.some((pid) => !alive[pid])) {
+    invalidateClaudeProcessCache()
+    invalidateCodexProcessCache()
+  }
+  return c.json({ alive })
+})
 
 // --- instance numbers -------------------------------------------------------
 // The whole fleet under ONE numbering, flattened across desktop / CLI / Codex. This is what makes
@@ -146,13 +168,28 @@ app.post('/api/instances/:dir/open', async (c) => {
     )
   return c.json(result)
 })
+// Start a new chat inside the RUNNING app with its own start call (claude-native-new.ts): no window,
+// no deeplink, the model and effort pinned. Body: {cwd, prompt, model, effort, bypass?}.
+app.post('/api/instances/:dir/native-new', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  const body = await jsonBody(c)
+  const result = await tryNativeNew(dir, {
+    cwd: String(body.cwd ?? ''),
+    prompt: String(body.prompt ?? ''),
+    model: String(body.model ?? ''),
+    effort: String(body.effort ?? ''),
+    ...(body.bypass !== undefined ? { bypass: body.bypass === true } : {}),
+  })
+  return c.json(result)
+})
 app.post('/api/instances/:dir/quit', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
   const body = await jsonBody(c)
   // Quitting the DEFAULT (non-isolated) Claude Desktop — the user's real chats — needs an explicit
   // opt-in from the caller (the UI shows a confirmation first); quitInstance refuses it otherwise.
-  // Mirrors the delete route's confirmName pattern one section below.
+  // Mirrors the delete route's note pattern one section below.
   return c.json(await quitInstance(dir, { confirmExternal: body.confirmExternal === true }))
 })
 // Remove the stored login from a profile. Confirmed in the UI first, and refused outright while
@@ -166,7 +203,7 @@ app.post('/api/instances/:dir/logout', async (c) => {
   const account = readLoginUuid(dir)
   const result = await logoutInstance(dir)
   if (result.ok && account) noteLoggedOutHere(account)
-  // OWNER RULE (Michael, 2026-09-07): signing out clears the usage numbers - session, weekly,
+  // OWNER RULE (2026-09-07): signing out clears the usage numbers - session, weekly,
   // five-hour. logoutInstance already drops our cached IDENTITY for the dir; the cached USAGE
   // outlived it, and since the usage routes serve the cache before checking anything, the row
   // went on showing the signed-out account's percentages. Dropped here so it clears the moment
@@ -264,12 +301,12 @@ app.delete('/api/instances/:dir', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
   const body = await jsonBody(c)
-  const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  // Deleting stays on this PC: login sync leaves its account out here, so the store neither makes
-  // the profile again nor signs the other PCs out of it.
+  const note = typeof body.note === 'string' ? body.note : undefined
+  // A synced login is deleted on the other PCs too, and they show this note (core/cli-login-sync.ts).
   const account = readLoginUuid(dir)
-  const result = await removeInstance(dir, { confirmName })
-  if (result.ok && account) setLoginSyncExcluded(account, true)
+  const result = await removeInstance(dir, { note })
+  if (result.ok && account && note)
+    removeLoginEverywhere(account, { kind: 'desktop', num: null, name: basename(dir), note })
   return c.json(result)
 })
 // Update an instance's UI metadata: display label (renaming is now a pure relabel — it never
@@ -300,12 +337,12 @@ app.post('/api/instances/:dir/meta', async (c) => {
   const meta = setInstanceMeta(dir, patch)
   return c.json({ ok: true, action: 'meta', dir, message: 'updated', data: meta })
 })
+// No name in the body: one is made up (core/shared.ts firstFreeName). A blank one is still refused.
 app.post('/api/instances', async (c) => {
-  const body = await c.req.json().catch(() => null)
-  if (!body || typeof body.name !== 'string' || !body.name.trim()) {
-    return c.json({ error: 'name is required' }, 400)
-  }
-  return c.json(await createInstance(body.name))
+  const body = await c.req.json().catch(() => ({}))
+  const name = body?.name === undefined ? freeInstanceName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(await createInstance(name))
 })
 
 // --- DeepSeek Harness instances (a home per account; see core/dsh-instances.ts) ------------------
@@ -317,9 +354,9 @@ app.post('/api/instances', async (c) => {
 app.get('/api/dsh-instances', async (c) => c.json(await listDshInstances()))
 app.post('/api/dsh-instances', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string' || !body.name.trim())
-    return c.json({ error: 'name is required' }, 400)
-  return c.json(createDshInstance(body.name))
+  const name = body.name === undefined ? freeDshName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(createDshInstance(name))
 })
 app.post('/api/dsh-instances/:id/launch', async (c) =>
   c.json(await launchDshInstance(c.req.param('id'))),
@@ -337,7 +374,7 @@ app.delete('/api/dsh-instances/:id', async (c) => {
   return c.json(
     deleteDshInstance(c.req.param('id'), {
       deleteFiles: body.deleteFiles === true,
-      confirmName: typeof body.confirmName === 'string' ? body.confirmName : undefined,
+      note: typeof body.note === 'string' ? body.note : undefined,
     }),
   )
 })

@@ -4,6 +4,8 @@
 // should have blue"), and without the red, green and gray a task line's mark uses for failed, done and queued. Fixed
 // values, the same in either theme, as AgentHydra's are. Pure, so the window and the tests share it.
 
+import { hash } from './hash'
+
 export const ACCOUNT_TONES = [
   'oklch(0.67 0.17 50)', // orange
   'oklch(0.72 0.15 80)', // amber
@@ -11,13 +13,6 @@ export const ACCOUNT_TONES = [
   'oklch(0.60 0.20 310)', // violet
   'oklch(0.65 0.21 350)' // pink
 ] as const
-
-/** A stable non-negative hash of a label (FNV-1a), for an account label that is not a number. */
-function hash(text: string): number {
-  let h = 2166136261
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619)
-  return h >>> 0
-}
 
 /**
  * An account's tone by its label ('#68'): by its number, so neighbouring accounts differ and one account keeps its

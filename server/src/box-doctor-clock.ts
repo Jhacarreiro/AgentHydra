@@ -79,7 +79,7 @@ export function readNtpSample(text: string, reference = NTP_REFERENCE): ClockRea
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-  const sample = [...lines].reverse().find((l) => l.includes(',') && SECONDS.test(l))
+  const sample = lines.findLast((l) => l.includes(',') && SECONDS.test(l))
   const m = sample ? SECONDS.exec(sample) : null
   if (!m?.[1] || /error/i.test(text))
     return { verdict: 'unknown', detail: `no sample from ${reference}` }

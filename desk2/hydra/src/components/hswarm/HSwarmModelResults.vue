@@ -316,7 +316,8 @@ const daily = computed<DailyDay[]>(() => {
   return [...byDay.values()]
 })
 const dayTotal = (d: DailyDay) => Object.values(d.models).reduce((a, b) => a + b, 0) + d.other
-const dayMax = computed(() => Math.max(1, ...daily.value.map(dayTotal)))
+const dayTotals = computed(() => new Map(daily.value.map((d) => [d.date, dayTotal(d)])))
+const dayMax = computed(() => Math.max(1, ...dayTotals.value.values()))
 const colorOf = (name: string) => seriesColor(name, dailyTop.value)
 const rangeLabel = (r: Range) => (r === 'all' ? t('hswarm.v.overview.results.all') : t('hswarm.v.overview.results.days', { n: r }))
 const expander = 'text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline'
@@ -359,7 +360,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.outcomes') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.outcomesCaption') }}</p>
           <p v-if="source !== 'hswarm' && !climayte" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.climayteMissing') }}</p>
           <p v-else-if="!outcomes.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noRows') }}</p>
@@ -371,7 +372,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
                   <span class="truncate text-muted-foreground" :title="rowName(r)">{{ rowName(r) }}</span>
                 </span>
                 <span class="shrink-0 tabular-nums font-medium">
-                  <ThumbsUp class="mr-0.5 inline size-3 text-success" :aria-label="t('hswarm.v.overview.results.up')" />{{ r.up }}
+                  <ThumbsUp class="me-0.5 inline size-3 text-success" :aria-label="t('hswarm.v.overview.results.up')" />{{ r.up }}
                   <template v-if="r.source === 'climayte'">
                     <Wrench class="mx-0.5 inline size-3 text-warning" :aria-label="t('hswarm.v.overview.results.fixed')" />{{ r.fixed }}
                   </template>
@@ -398,7 +399,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.tokensPerOk') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.tokensCaption') }}</p>
           <p v-if="source === 'climayte'" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.tokensHswarmOnly') }}</p>
           <p v-else-if="!tokenPoints.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noOk') }}</p>
@@ -424,7 +425,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.failedShare') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.failedCaption') }}</p>
           <p v-if="!failedPoints.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noRows') }}</p>
           <template v-else>
@@ -447,7 +448,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.survival') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.survivalCaption') }}</p>
           <p v-if="!survivalRows.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noSurvival') }}</p>
           <BarRows
@@ -465,16 +466,16 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.perDay') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.perDayCaption') }}</p>
           <div class="flex h-32 items-end gap-0.5">
             <div
               v-for="d in daily"
               :key="d.date"
               class="flex h-full min-w-0 flex-1 flex-col-reverse"
-              :title="`${d.date}: ${dayTotal(d)}`"
+              :title="`${d.date}: ${dayTotals.get(d.date) ?? 0}`"
             >
-              <div class="flex flex-col-reverse h-(--day-h)" :style="{ '--day-h': `${(dayTotal(d) / dayMax) * 100}%` }">
+              <div class="flex flex-col-reverse h-(--day-h)" :style="{ '--day-h': `${((dayTotals.get(d.date) ?? 0) / dayMax) * 100}%` }">
                 <div
                   v-for="name in dailyTop"
                   :key="name"

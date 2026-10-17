@@ -23,7 +23,7 @@ export function creaitorTool(): string | null {
 export function askCreaitor(tool: string, question: string, options: readonly string[], cwd: string, session: string | null): Promise<CreaitorAnswer | { error: string }> {
   // Each value as --flag=value and the question after --: a question or choice that starts with a dash ("--force")
   // otherwise reads as a flag, and the CreAitor refuses the whole ask.
-  const args = [tool, 'ask', `--repo=${basename(cwd.replace(/[\\/]+$/, ''))}`, `--timeout=${ASK_TIMEOUT_S}`, '--json']
+  const args = [tool, 'ask', `--repo=${basename(cwd.replace(/[\\/]+$/, ''))}`, `--folder=${cwd}`, `--timeout=${ASK_TIMEOUT_S}`, '--json']
   if (session) args.push(`--session=${session}`, '--via=orchestrator')
   for (const o of options) args.push(`--option=${o}`)
   args.push('--', question)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { FreeUsage } from '@desk/shared/free-instances'
-import { freeCheckVerdict, freeUsageSnapshot } from './free-instances'
+import { isPlanSetAside } from './instance-filter'
+import { freeCheckVerdict, freePlanLabel, freeUsageSnapshot } from './free-instances'
 
 const reading = (windows: FreeUsage['windows']): FreeUsage => ({
   available: true,
@@ -45,8 +46,34 @@ describe('a Free reading in the instance tables', () => {
     expect(snap?.capturedAt).toBe('2020-10-06T00:00:00Z')
   })
 
+  it("reads a Claude account's missing or since-reset window as 0% used, with no reset to count down", () => {
+    const before = new Date('2020-10-06T01:00:00Z')
+    const after = new Date('2020-10-06T06:00:00Z')
+    const idleFiveHour = freeUsageSnapshot(reading([win('seven_day', 40, 60)]), 'claude', before)
+    expect(idleFiveHour?.session).toEqual({ pct: 0, resets: '', resetsAt: null })
+    expect(idleFiveHour?.weekAll?.pct).toBe(40)
+    expect(freeUsageSnapshot(reading([win('five_hour', 30, null)]), 'claude', before)?.session?.pct).toBe(30)
+    expect(freeUsageSnapshot(reading([win('five_hour', 30, null)]), 'claude', after)?.session?.pct).toBe(0)
+    const neverUsed = freeUsageSnapshot(reading([win('five_hour', null, null)]), 'claude', before)
+    expect([neverUsed?.session?.pct, neverUsed?.weekAll?.pct]).toEqual([0, 0])
+  })
+
   it('offers a check instead of a number when no window has one', () => {
     expect(freeUsageSnapshot(null)).toBeNull()
     expect(freeUsageSnapshot(reading([win('five_hour', null, null)]))).toBeNull()
+  })
+})
+
+// The plan facet acts on Free rows too (owner, 2026-10-16: with only "Max 20×" picked, rows of other kinds still
+// showed). Before, a Free row carried no plan, so no plan selection could ever set it aside.
+describe('freePlanLabel', () => {
+  it('names the plan the filter reads, and leaves an unread plan unknown', () => {
+    expect(freePlanLabel({ plan: 'go', usage: null })).toBe('Go')
+    expect(freePlanLabel({ plan: 'free', usage: null })).toBe('Free')
+    expect(freePlanLabel({ plan: null, usage: null })).toBeNull()
+  })
+  it('sets a Free login aside when its plan is not picked', () => {
+    expect(isPlanSetAside(freePlanLabel({ plan: 'free', usage: null }), ['Max 20×'])).toBe(true)
+    expect(isPlanSetAside(freePlanLabel({ plan: 'free', usage: null }), ['Free'])).toBe(false)
   })
 })

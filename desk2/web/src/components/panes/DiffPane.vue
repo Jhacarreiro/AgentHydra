@@ -115,7 +115,8 @@ watch(
     const next = new Map(now.map((c) => [c.id, c.status] as [string, string]))
     const ended = finishedTurns(lastStatuses, next)
     lastStatuses = next
-    if (ended.some((id) => sameFolder(now.find((c) => c.id === id)?.cwd, props.cwd))) refresh()
+    const cwds = new Map(now.map((c) => [c.id, c.cwd]))
+    if (ended.some((id) => sameFolder(cwds.get(id), props.cwd))) refresh()
   },
   { immediate: true }
 )

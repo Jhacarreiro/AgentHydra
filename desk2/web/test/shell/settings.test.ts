@@ -1,20 +1,15 @@
 import { describe, it, expect } from 'bun:test'
 import type { DeskSettings } from '@shared/protocol'
-import { SETTINGS_SECTIONS, matchRows, sectionFor, settingsGroups, stepSection, switchPatch } from '@/components/panes/settings'
+import { SETTINGS_NAV, SETTINGS_SECTIONS, isNavLink, matchRows, sectionFor, settingsGroups, stepSection, switchPatch } from '@/components/panes/settings'
 import { pairingSummary } from '@/components/panes/instances'
 import { NavHistory, viewUnder, type View } from '@/components/shell/logic'
 
 describe('settings search', () => {
   it('shows one section under its group headings when the box is empty', () => {
     expect(settingsGroups('general', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
-      ['New chats', ['model', 'effort', 'permission']],
+      ['New chats', ['model', 'effort', 'permission', 'coreEngine']],
       ['Behaviour', ['notifications', 'idle', 'collapseMode']],
       ['AgentHydra pages', ['ahTooltips', 'ahPrivacy']]
-    ])
-    expect(settingsGroups('managers', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
-      ['Watching chats', ['babysitter', 'orchestrator', 'orchestratorModel']],
-      ['Chat engine', ['coreEngine']],
-      ['Routines', ['routines']]
     ])
     // The working animation is no longer a setting: the window picks a look itself (lib/working-mark.ts).
     expect(matchRows('working animation')).toEqual([])
@@ -45,6 +40,16 @@ describe('settings search', () => {
     expect(sectionFor('nope')).toBeNull()
   })
 
+  // Owner, 2026-10-17: Managers "just literally takes you to the tools tab now", with a small arrow; its page is gone.
+  it('has no Managers page: Managers is a nav link to the Tools tab, under General, and its switches left Settings', () => {
+    expect(sectionFor('managers')).toBeNull()
+    const nav = SETTINGS_NAV.map((s) => (isNavLink(s) ? `${s.id}->${s.opens}` : s.id))
+    expect(nav.slice(0, 3)).toEqual(['general', 'managers->tools', 'people'])
+    expect(matchRows('babysitter')).toEqual([])
+    expect(matchRows('orchestrator model')).toEqual([])
+    expect(matchRows('new core').map((r) => [r.id, r.section])).toEqual([['coreEngine', 'general']])
+  })
+
   it('matches nothing for a setting Hydra Desk does not have', () => {
     expect(settingsGroups('general', 'billing')).toEqual([])
     expect(matchRows('')).toEqual([])
@@ -54,10 +59,10 @@ describe('settings search', () => {
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'managers', 'alerts', 'hswarm', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+      'general', 'people', 'alerts', 'hswarm', 'connections', 'connectors', 'packs', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
     ])
-    expect(stepSection('general', 'ArrowDown')).toBe('managers')
-    expect(stepSection('managers', 'ArrowDown')).toBe('alerts')
+    expect(stepSection('general', 'ArrowDown')).toBe('people')
+    expect(stepSection('people', 'ArrowDown')).toBe('alerts')
     expect(stepSection('about', 'ArrowDown')).toBe('cli')
     expect(stepSection('general', 'ArrowUp')).toBe('free')
     expect(stepSection('free', 'ArrowRight')).toBe('general')

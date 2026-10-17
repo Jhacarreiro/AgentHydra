@@ -8,11 +8,10 @@ import {
   type GitStatus,
   type ModelChoice,
   OLDER_BEFORE_HEADER,
+  OLDER_END_HEADER,
+  type TranscriptIndex,
   type TranscriptItem
 } from '@shared/protocol'
-import type { BabysitterStatus } from '@shared/babysitter'
-import type { RoutinesRequest, RoutinesStatus } from '@shared/routines'
-import type { OrchestratorModelStatus } from '@shared/orchestrator'
 import type { FreeSettings } from '@shared/free-instances'
 
 export interface PaneApi {
@@ -21,14 +20,6 @@ export interface PaneApi {
   models(): Promise<ModelChoice[]>
   health(): Promise<{ ok: boolean; version: string }>
   bridgeStatus(): Promise<{ up: boolean; url: string }>
-  /** GET /api/babysitter: the chats a usage limit stopped and what the babysitter did (plugins/72-babysitter.ts). */
-  babysitter(): Promise<BabysitterStatus>
-  /** GET /api/routines: the routines the last look read, and the proposals waiting for the owner (plugins/73-routines.ts). */
-  routines(): Promise<RoutinesStatus>
-  /** POST /api/routines: one action (run, pause, resume, approve, discard, describe) or the switch; answers the whole status, or why not (409, 404, 403). */
-  routinesAct(body: RoutinesRequest): Promise<RoutinesStatus>
-  /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
-  orchestratorModel(): Promise<OrchestratorModelStatus>
   getSettings(): Promise<DeskSettings>
   putSettings(patch: Partial<DeskSettings>): Promise<DeskSettings>
   accounts(): Promise<AccountInfo[]>
@@ -37,6 +28,10 @@ export interface PaneApi {
   externalItems(sessionId: string, cwd?: string | null): Promise<{ items: TranscriptItem[]; olderBefore: number }>
   /** What an outside session's file holds before byte `before` (a long session's items are only its newest part). */
   externalOlder(sessionId: string, before: number, cwd?: string | null): Promise<TranscriptItem[]>
+  /** The newest `limit` items before byte `before`; `above` is how many remain above them (pass it as `end` for the next page). */
+  externalOlderPage?(sessionId: string, before: number, limit: number, end?: number, cwd?: string | null): Promise<{ items: TranscriptItem[]; above: number }>
+  /** An outside session's index (every message sent, the to-do list, tasks, the total). */
+  externalIndex?(sessionId: string, cwd?: string | null): Promise<TranscriptIndex>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
    *  POST of it (the orchestrator's Arm). */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
@@ -72,16 +67,6 @@ export const httpPaneApi: PaneApi = {
   models: () => json('/models'),
   health: () => json('/health'),
   bridgeStatus: () => json('/bridge/status'),
-  babysitter: () => json('/babysitter'),
-  routines: () => json('/routines'),
-  // The window's mark: resume, approve, discard and the switch are the owner's, and the server knows the window by it.
-  routinesAct: (body) =>
-    json('/routines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Desk-Caller': 'window' },
-      body: JSON.stringify(body)
-    }),
-  orchestratorModel: () => json('/orchestrator/model'),
   getSettings: () => json('/settings'),
   putSettings: (patch) =>
     json('/settings', {
@@ -104,6 +89,17 @@ export const httpPaneApi: PaneApi = {
   },
   externalOlder: (sessionId, before, cwd) =>
     json(`/external/sessions/${encodeURIComponent(sessionId)}/older?before=${before}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`),
+  externalOlderPage: async (sessionId, before, limit, end, cwd) => {
+    let above = 0
+    const items = await json<TranscriptItem[]>(
+      `/external/sessions/${encodeURIComponent(sessionId)}/older?before=${before}&limit=${limit}${end === undefined ? '' : `&end=${end}`}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`,
+      undefined,
+      '/api',
+      (res) => (above = Number(res.headers.get(OLDER_END_HEADER)) || 0)
+    )
+    return { items, above }
+  },
+  externalIndex: (sessionId, cwd) => json(`/external/sessions/${encodeURIComponent(sessionId)}/index${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))

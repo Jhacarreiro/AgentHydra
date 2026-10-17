@@ -72,6 +72,10 @@ export interface RunnerSpec {
   /** The most processes the worker's tree may have alive at once, the runner included (the Windows
    *  runner's job ceiling). Absent: no ceiling, as for a check's log. */
   maxProcesses?: number
+  /** A mid-turn delivery route (climayte-deliver.ts): the CLI reads stream-json from a pipe the runner
+   *  keeps open until the turn's result, and `portFile` names the loopback port `/deliver` answers on
+   *  once that pipe is open. Absent for a runner whose CLI takes its prompt as plain text. */
+  deliver?: { token: string; portFile: string; delivered: string }
 }
 
 /** Written by the runner the moment it has claimed the spec (`runner` only), then again once the CLI
@@ -193,6 +197,16 @@ export function noteHandoff(specPath: string, endedAt: number | null): void {
   if (endedAt === null) return
   for (const [path, at] of handoffs)
     if (at !== null && endedAt - at > HANDOFF_KEEP_MS) handoffs.delete(path)
+}
+
+/** Resolves, once no hand-off this daemon started is still under way or `maxWaitMs` has passed, with
+ *  how many still are. Bun ends a hand-off's powershell when the daemon exits, and a runner it had not
+ *  started yet then never starts, so a relaunch waits for them first (index.ts relaunchDaemon). */
+export async function runnerHandoffsSettled(maxWaitMs: number): Promise<number> {
+  const pending = () => [...handoffs.values()].filter((endedAt) => endedAt === null).length
+  const until = Date.now() + maxWaitMs
+  while (pending() > 0 && Date.now() < until) await Bun.sleep(100)
+  return pending()
 }
 
 /** How long `specPath` has been its runner's to claim, or null while this daemon's hand-off of it has

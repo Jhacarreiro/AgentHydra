@@ -1,4 +1,4 @@
-// ⛔ OWNER RULE (Michael, 2026-09-07): *"when I log out... when the account is not logged in, it
+// ⛔ OWNER RULE (2026-09-07): *"when I log out... when the account is not logged in, it
 // should reset and clear the usage data, session, weekly, five-hour."* AMENDED 2026-10-01: *"don't
 // clear the last usage stats when they go yellow."* So a sign-out still takes the reading out of the
 // cache every ranking reads (the drops below), and keeps it in a file of its own that only the
@@ -48,8 +48,9 @@ test('a 401 (an expired or REVOKED token) also drops the cached usage, not just 
 })
 
 test('a signed-out CLI instance drops its cached usage', () => {
+  // Signed out, or a definitive 401 (a revoked login, 2026-10-16), as on the desktop path.
   expect(usageService).toContain(
-    'if (!hasAnyCredential) dropCachedUsage(key, { keepLastKnown: true })',
+    'if (!hasAnyCredential || apiFail?.status === 401) dropCachedUsage(key, { keepLastKnown: true })',
   )
 })
 

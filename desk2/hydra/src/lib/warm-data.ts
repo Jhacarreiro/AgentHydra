@@ -66,6 +66,8 @@ const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
   analytics: ['analytics'],
   // CliMayte's page lists the Free logins' private chats beside its tasks.
   hswarm: ['hswarm', 'climayte', 'routing', 'free'],
+  // The Tools tab polls Desk's own routes while it is on screen (components/tools/ToolsView.vue).
+  tools: [],
 } satisfies Record<AppView, readonly WarmKind[]>
 
 let currentView = ''
@@ -113,11 +115,4 @@ export function startWarm(): void {
   }
   timer = window.setInterval(refreshDue, TICK_MS)
   document.addEventListener('visibilitychange', refreshDue)
-}
-
-export function stopWarm(): void {
-  if (timer !== null) window.clearInterval(timer)
-  timer = null
-  started = false
-  document.removeEventListener('visibilitychange', refreshDue)
 }

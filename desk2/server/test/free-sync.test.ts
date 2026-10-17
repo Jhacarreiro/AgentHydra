@@ -4,7 +4,7 @@
 
 import { afterEach, expect, jest, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FreeInstance, FreeJob } from '@shared/free-instances'
@@ -12,7 +12,7 @@ import { createServer, type DeskServer } from '../src/index'
 import type { FreeRunner, RunOutput } from '../src/free-instances/runner'
 import type { FreeRuntime } from '../src/free-instances/runtime'
 import { FreeInstances } from '../src/free-instances/service'
-import { FreeSync, readLogin, writeLogin } from '../src/free-instances/sync'
+import { FreeSync, newer, readLogin, writeLogin } from '../src/free-instances/sync'
 
 const dirs: string[] = []
 const services: FreeInstances[] = []
@@ -39,7 +39,7 @@ function fakeStore(token: string) {
 }
 
 /** One PC: its Free instances, with a harness whose log out deletes the session file, as the real one does. */
-function pc() {
+function pc(onAuth?: (stateDir: string) => void) {
   const home = mkdtempSync(join(tmpdir(), 'desk-free-sync-'))
   dirs.push(home)
   const runtime: FreeRuntime = {
@@ -50,6 +50,7 @@ function pc() {
   const ok = (value: unknown): RunOutput => ({ code: 0, stdout: JSON.stringify(value) })
   const runner: FreeRunner = async (config, request) => {
     if (request.command === 'forget') rmSync(join(config.stateDir, request.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi'), { force: true })
+    if (request.command === 'auth') onAuth?.(config.stateDir)
     return ok({ ok: true, authenticated: true })
   }
   const service = new FreeInstances(home, runner, runtime)
@@ -197,5 +198,144 @@ test('a Desk on a home that is not the real one never asks for the Login sync an
   } finally {
     await desk?.stop()
     daemon.stop(true)
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a ChatGPT login a browser sign-in made beats an older one whose sign-in cookie expires later', () => {
+  // 2026-10-15: chatgpt.com refused every send from a login without _uasid and _umsid; a later-expiring copy from
+  // another PC must not undo a fresh sign-in.
+  const dir = mkdtempSync(join(tmpdir(), 'free-sync-fresh-'))
+  try {
+    const jar = (value: string, expires: number, fresh: boolean) => [
+      { name: '__Secure-next-auth.session-token', value, domain: '.chatgpt.com', path: '/', expires },
+      ...(fresh ? [{ name: '_uasid', value: 'u', domain: '.chatgpt.com', path: '/', expires }, { name: '_umsid', value: 'm', domain: '.chatgpt.com', path: '/', expires }] : [])
+    ]
+    const freshFile = join(dir, 'fresh.dpapi')
+    const staleFile = join(dir, 'stale.dpapi')
+    expect(writeLogin(freshFile, 'chatgpt', jar('signed-in-now', 1_900_000_000, true))).toBe(true)
+    expect(writeLogin(staleFile, 'chatgpt', jar('refreshed-elsewhere', 1_900_900_000, false))).toBe(true)
+    const fresh = readLogin(freshFile, 'chatgpt')!
+    const stale = readLogin(staleFile, 'chatgpt')!
+    expect([fresh.fresh, stale.fresh]).toEqual([true, false])
+    expect(newer(fresh, stale)).toBe(true)
+    expect(newer(stale, fresh)).toBe(false)
+    // Two logins alike in that, and Claude's, still go by expiry.
+    expect(newer({ ...stale, exp: 2 }, { ...stale, auth: 'b', exp: 1 })).toBe(true)
+    expect(readLogin(freshFile, 'chatgpt')!.fresh).toBe(true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('expired, misplaced and incomplete browser markers are not fresh', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'free-sync-marker-expiry-'))
+  dirs.push(dir)
+  const now = Date.now() / 1000
+  const token = { name: '__Secure-next-auth.session-token', value: 'fixture', domain: '.chatgpt.com', expires: now + 86_400 }
+  const marker = (name: string, expires: number, domain = '.chatgpt.com') => ({ name, value: 'fixture-marker', domain, path: '/', expires })
+  const file = join(dir, 'login.dpapi')
+  for (const bad of [marker('_umsid', now - 1), marker('_umsid', now + 300, 'auth.openai.com'), marker('_umsid', now + 300, 'other.test')]) {
+    writeLogin(file, 'chatgpt', [token, marker('_uasid', now + 300), bad])
+    expect(readLogin(file, 'chatgpt')!.fresh).toBe(false)
+  }
+  writeLogin(file, 'chatgpt', [token, marker('_uasid', now + 300), marker('_umsid', now + 600)])
+  expect(readLogin(file, 'chatgpt')!.freshExp).toBe(now + 300)
+})
+
+test.skipIf(process.platform !== 'win32')('same-token marker refresh reaches both PCs and a stale re-save cannot undo it', async () => {
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc(), b = pc()
+    const syncA = new FreeSync(a.home, a.host, creds), syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'chatgpt', name: 'Example account' })
+    const fileA = a.host.sessionFile(account)
+    const now = Date.now() / 1000
+    const jar = (value: string, expiry: number) => [
+      { name: '__Secure-next-auth.session-token', value: 'same-session', domain: '.chatgpt.com', path: '/', expires: now + 86_400 },
+      ...['_uasid', '_umsid'].map(name => ({ name, value, domain: '.chatgpt.com', path: '/', expires: expiry }))
+    ]
+    writeLogin(fileA, 'chatgpt', jar('old-marker', now + 300))
+    await syncA.pass()
+    await syncB.pass()
+    await settled(b.service)
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    const previousAuth = readLogin(fileB, 'chatgpt')!.auth
+    writeLogin(fileB, 'chatgpt', jar('new-marker', now + 900))
+    expect(readLogin(fileB, 'chatgpt')!.auth).toBe(previousAuth)
+    await syncB.pass()
+    await syncA.pass()
+    await settled(a.service)
+    expect(readLogin(fileA, 'chatgpt')!.cookies.find(c => c.name === '_uasid')!.value).toBe('new-marker')
+    writeLogin(fileA, 'chatgpt', jar('old-marker', now + 300))
+    await syncA.pass()
+    await settled(a.service)
+    expect(readLogin(fileA, 'chatgpt')!.cookies.find(c => c.name === '_uasid')!.value).toBe('new-marker')
+    const version = store.rows.get(account.id)!.version
+    await syncA.pass()
+    await syncB.pass()
+    expect(store.rows.get(account.id)!.version).toBe(version)
+  } finally { store.stop() }
+})
+
+test.skipIf(process.platform !== 'win32')('a round with an unchanged store row writes no login again', async () => {
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc()
+    const b = pc()
+    const syncA = new FreeSync(a.home, a.host, creds)
+    const syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'claude', name: 'Example account' })
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('first', 1_900_000_000))
+    await syncA.pass()
+    await syncB.pass()
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('second', 1_900_500_000))
+    await syncA.pass()
+    await syncB.pass()
+    expect(signedInAs(fileB)).toBe('second')
+    const landed = readFileSync(fileB)
+    await syncB.pass()
+    expect(readFileSync(fileB).equals(landed)).toBe(true)
+  } finally {
+    store.stop()
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a login the harness re-saves after a landing is kept, not landed over again', async () => {
+  let checks = 0
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc()
+    const b = pc(stateDir => { checks++; writeLogin(join(stateDir, 'session.dpapi'), 'claude', sessionKey(`rotated-${checks}`, -1)) })
+    const syncA = new FreeSync(a.home, a.host, creds)
+    const syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'claude', name: 'Example account' })
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('first', 1_900_000_000))
+    await syncA.pass()
+    await syncB.pass()
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('second', 1_900_500_000))
+    await syncA.pass()
+    await syncB.pass()
+    await settled(b.service)
+    const checksAfterLanding = checks
+    const rewritten = readFileSync(fileB)
+    for (let round = 0; round < 3; round++) {
+      await syncB.pass()
+      await settled(b.service)
+    }
+    expect(readFileSync(fileB).equals(rewritten)).toBe(true)
+    expect(checks).toBe(checksAfterLanding)
+  } finally {
+    store.stop()
   }
 })

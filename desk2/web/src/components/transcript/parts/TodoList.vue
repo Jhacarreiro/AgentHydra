@@ -2,15 +2,16 @@
 import { Check, Circle, CircleDot } from '@lucide/vue'
 import type { TodoEntry } from '@shared/protocol'
 
-defineProps<{ todos: TodoEntry[] }>()
+// `dense`: the session rail's smaller type.
+defineProps<{ todos: TodoEntry[]; dense?: boolean }>()
 </script>
 
 <template>
-  <ul class="text-sm/5">
+  <ul :class="dense ? 'text-ui-sm leading-5' : 'text-sm/5'">
     <li v-for="(t, i) in todos" :key="i" class="flex items-start gap-2 py-0.5">
-      <Check v-if="t.status === 'completed'" class="mt-0.5 size-4 shrink-0 text-success-text" />
-      <CircleDot v-else-if="t.status === 'in_progress'" class="mt-0.5 size-4 shrink-0 text-accent-text" />
-      <Circle v-else class="mt-0.5 size-4 shrink-0 text-text-muted" />
+      <Check v-if="t.status === 'completed'" class="mt-0.5 shrink-0 text-success-text" :class="dense ? 'size-3.5' : 'size-4'" />
+      <CircleDot v-else-if="t.status === 'in_progress'" class="mt-0.5 shrink-0 text-accent-text" :class="dense ? 'size-3.5' : 'size-4'" />
+      <Circle v-else class="mt-0.5 shrink-0 text-text-muted" :class="dense ? 'size-3.5' : 'size-4'" />
       <span
         :class="
           t.status === 'completed'

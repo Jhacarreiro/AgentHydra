@@ -23,6 +23,7 @@ export type CliMayteJournalEvent =
   | 'handoff-written' // it wrote the handoff; the task goes on in a fresh session
   | 'handoff-resumed' // the fresh session started from the handoff
   | 'follow-up-queued' // climayte_send queued a message
+  | 'message-delivered' // climayte_send put a message into the running CLI's stdin mid-turn
   | 'cwd-changed' // climayte_send asked for another folder (`cwd`, `from`; `pending`), or the launch moved there (`copied`)
   | 'follow-up-delivered' // an attempt started with that message
   | 'follow-up-cancelled' // the human took back a held message before it was delivered (`pending`: messages still held)
@@ -41,6 +42,9 @@ export type CliMayteJournalEvent =
   | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
   | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
   | 'priority' // its priority was changed (climayteSetPriority)
+  | 'refused' // a drone asked to start workers, and was refused (`notice`: the refusal's first words)
+  | 'too_big' // its report said TOO BIG: the job needs splitting, by its summoner (`notice`: the line)
+  | 'visitors' // a drone started sealed visitors, which it may (`notice`: how many)
   | 'nudged' // an idle account was sent one cheap prompt to start its 5-hour window (session-keepalive.ts); id and group 'keepalive'
   | 'done'
   | 'failed'
@@ -75,6 +79,8 @@ export interface CliMayteJournalEntry {
   tookMin?: number // done / turn-done: the minutes it really worked on it (climayte-eta.ts)
   error?: string // failed / waiting: the first line
   said?: string // turn-end: the first line of the turn's closing text
+  role?: string // dispatched / launched: the worker's role (roleOf)
+  persona?: string // dispatched: a seat's persona
   model?: string | null // dispatched / launched / follow-ups: the model asked for (null: the CLI's default)
   effort?: string | null // the same, for the effort level
   cwd?: string // dispatched / cwd-changed: the folder
@@ -150,7 +156,7 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
   // 30, not 100: one wake reads what is new (`since`), and 100 lines was more than any wake used.
   const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 30)))
   const after = sinceMs(filter.since)
-  const pick = (file: string): CliMayteJournalEntry[] => {
+  const pick = (file: string, take: number): CliMayteJournalEntry[] => {
     let text = ''
     try {
       text = readFileSync(file, 'utf8')
@@ -158,7 +164,13 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
       return []
     }
     const out: CliMayteJournalEntry[] = []
-    for (const line of text.split('\n')) {
+    // Read toward the start until enough matching rows have been found. A newest-30 read of
+    // a full journal otherwise parsed thousands of rows it immediately discarded. `since`
+    // remains a filter, never a stopping point: file order need not be timestamp order.
+    for (let end = text.length; end > 0 && out.length < take; ) {
+      const start = text.lastIndexOf('\n', end - 1)
+      const line = text.slice(start + 1, end)
+      end = Math.max(0, start)
       // A cheap text check before the parse: a filtered read of a 5 MB file parses only its lines.
       if (!line || (filter.id && !line.includes(filter.id))) continue
       if (filter.group && !line.includes(filter.group)) continue
@@ -173,10 +185,12 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
       if (after !== null && !(Date.parse(e.ts) > after)) continue
       out.push(e)
     }
-    return out
+    return out.reverse()
   }
-  let entries = pick(path)
-  if (entries.length < limit) entries = [...pick(previousJournal(path)), ...entries]
+  // slice(-NaN) historically kept every current-file row and did not read the previous file.
+  let entries = pick(path, Number.isNaN(limit) ? Number.POSITIVE_INFINITY : limit)
+  if (entries.length < limit)
+    entries = [...pick(previousJournal(path), limit - entries.length), ...entries]
   const out = entries.slice(-limit)
   const named = new Set<string>()
   for (const e of out) {
@@ -328,6 +342,8 @@ const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
   'handoff-resumed': (_e, p) => `resumed from its handoff${p.on} ${p.pick}${p.runs}`,
   'follow-up-queued': (e, p) => describeFollowUpQueuedLine(e, p.runs),
   'follow-up-delivered': (_e, p) => `follow-up delivered${p.on} ${p.pick}${p.runs}`,
+  'message-delivered': (_e, p) =>
+    `message delivered into the running turn${p.on} ${p.pick}${p.runs}`,
   'follow-up-cancelled': (e, p) =>
     `held message taken back, not sent${p.on}${e.pending ? `; ${e.pending} still held` : ''}`,
   asked: (e, p) => `asked${p.on}${e.said ? `: ${e.said}` : ''}`,

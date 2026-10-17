@@ -37,6 +37,8 @@ describe('toolsForCaller', () => {
       'climayte_manage',
       'climayte_run',
       'climayte_status',
+      'core_use',
+      'fan_out',
       'history_read',
       'history_search',
       'hydra_run',

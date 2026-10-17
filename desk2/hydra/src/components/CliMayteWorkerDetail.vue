@@ -134,6 +134,7 @@ const finished = computed(
   () => props.worker?.status === 'done' || props.worker?.status === 'failed',
 )
 const verdicts = computed(() => props.worker?.verdicts ?? [])
+const verdictsNewestFirst = computed(() => [...verdicts.value].reverse())
 const latestVerdict = computed(() => verdicts.value[verdicts.value.length - 1] ?? null)
 /** The same mark the task list shows (lib/climayte-status.ts): a failed verdict on a task still
  *  working reads as another round, never as Failed beside Running. */
@@ -378,7 +379,7 @@ async function onStop() {
                 verdictMark.kind === 'pass'
                   ? 'success'
                   : verdictMark.kind === 'retry'
-                    ? 'warning'
+                    ? 'info'
                     : 'destructive'
               "
               :title="verdictMark.hint"
@@ -573,7 +574,7 @@ async function onStop() {
                 <div v-if="verdicts.length" class="mt-3 flex flex-col gap-1.5 border-t pt-2">
                   <h4 class="text-xs font-medium">{{ $t('climayte.verdicts') }}</h4>
                   <ol class="flex flex-col gap-1.5 text-xs">
-                    <li v-for="(v, i) in [...verdicts].reverse()" :key="i" class="flex flex-col gap-0.5">
+                    <li v-for="(v, i) in verdictsNewestFirst" :key="i" class="flex flex-col gap-0.5">
                       <span class="flex flex-wrap items-center gap-x-1.5">
                         <ThumbsUp v-if="v.verdict === 'pass'" class="size-3 text-success" aria-hidden="true" />
                         <ThumbsDown v-else class="size-3 text-destructive" aria-hidden="true" />

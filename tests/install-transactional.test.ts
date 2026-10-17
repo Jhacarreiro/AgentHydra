@@ -143,9 +143,16 @@ function buildReleaseDir(baseDir: string, version: string, opts: ReleaseDirOpts 
   return dir
 }
 
+/** Windows PowerShell 5.1 is the zip host (the fixture, not what is under test). Its bound has to
+ *  cover a COLD powershell.exe, and this file's very first powershell spawn is the fresh-install
+ *  fixture's first zip: on a fresh windows-latest runner that launch (start + module autoload +
+ *  Defender's first look) once took past 20s — run 39019558250, 2026-10-17, `spawnSync powershell
+ *  ETIMEDOUT` at 22041ms — while a warm zip takes ~1-3s (every [powershell] test after it passed)
+ *  and the whole same test under pwsh took 2328ms. 20s was a warm-machine measurement; 60s is the
+ *  bound install.ps1 itself is given below, so a fixture zip gets no less room. */
 function zipDir(dir: string, zipPath: string): void {
   const cmd = `Compress-Archive -LiteralPath '${psQuote(dir)}' -DestinationPath '${psQuote(zipPath)}' -Force`
-  execFileSync('powershell', ['-NoProfile', '-Command', cmd], { timeout: 20_000 })
+  execFileSync('powershell', ['-NoProfile', '-Command', cmd], { timeout: 60_000 })
 }
 
 /** Builds a release dir + zips it in one call; returns the zip path. */
@@ -189,13 +196,17 @@ function exeVersion(exePath: string): string {
   return execFileSync(exePath, ['--version'], { timeout: 10_000, encoding: 'utf8' }).trim()
 }
 
-// 240_000, the budget of every test below (a literal, not a constant: biome lays out a test call
+// 360_000, the budget of every test below (a literal, not a constant: biome lays out a test call
 // with a non-literal timeout as a multi-line call and would reindent the file). A test here makes
-// two release zips (csc 30s + Compress-Archive 20s each, per the bounds above), runs install.ps1
-// twice (60s each) and asks the exe its version (10s): 230s of its OWN stated child bounds. The 30s it had was a race against them, not a bound:
+// two release zips (csc 30s + Compress-Archive 60s each, per the bounds above), runs install.ps1
+// twice (60s each) and asks the exe its version (10s): 310s of its OWN stated child bounds. The 30s it had was a race against them, not a bound:
 // on a box full of agent work (fair-job wrapper, BelowNormal) the file took 97.38s and the
 // injected-failure test timed out at 35352ms, though it passes in a few seconds idle (2026-10-03).
 // A slow machine now reaches a child's own timeout, with its own message, before bun's.
+// Compress-Archive's 20s child bound was that same mistake once over: run 39019558250 (windows-latest,
+// 2026-10-17) died on the file's first powershell.exe spawn — a COLD start + autoload past 20s
+// (`spawnSync powershell ETIMEDOUT`, 22041ms) — while warm zips take 1-3s and the same test under
+// pwsh 2328ms; the bound now matches install.ps1's own 60s and the budget stays above 310s.
 
 /** Any `<installDir>.staging-*` (a sibling of installDir) or `<component>.old-*` (inside it, e.g.
  *  installDir\misc.old-<stamp>) artifact left behind — a real directory-listing scan, since
@@ -241,7 +252,7 @@ for (const host of PS_HOSTS) {
       expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.20.0')
       // No leftover staging/aside artifacts on a clean fresh install.
       expect(leftoverArtifacts(installDir)).toEqual([])
-    }, 240_000)
+    }, 360_000)
 
     test('an upgrade replaces misc/ and orchestrator/ while orchestrator/state/ survives', () => {
       const work = workDir('upgrade')
@@ -286,7 +297,7 @@ for (const host of PS_HOSTS) {
       expect(existsSync(join(installDir, 'misc', 'retired-sidecar.txt'))).toBe(false)
       // The user's ledger survived the orchestrator/ swap.
       expect(readFileSync(join(stateDir, 'sentinel.json'), 'utf8')).toBe('{"attempts":["keep-me"]}')
-    }, 240_000)
+    }, 360_000)
 
     test('an injected failure during the swap leaves the prior install intact', () => {
       const work = workDir('rollback')
@@ -328,7 +339,7 @@ for (const host of PS_HOSTS) {
       expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.21.0')
       expect(existsSync(join(stateDir, 'sentinel.json'))).toBe(true)
       expect(leftoverArtifacts(installDir)).toEqual([])
-    }, 240_000)
+    }, 360_000)
 
     // THE ONE ABOVE CANNOT CATCH THE STATE BUG, which is why this one exists. 'misc' is swapped
     // before 'orchestrator', so failing after it means the state-carry step never ran and the
@@ -382,7 +393,7 @@ for (const host of PS_HOSTS) {
         '{"undo":true}',
       )
       expect(leftoverArtifacts(installDir)).toEqual([])
-    }, 240_000)
+    }, 360_000)
 
     test('a version-mismatch canary refuses before touching the install', () => {
       const work = workDir('mismatch')
@@ -419,7 +430,7 @@ for (const host of PS_HOSTS) {
       // Refused before touching the install: still the old version, nothing staged or left aside.
       expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.22.0')
       expect(leftoverArtifacts(installDir)).toEqual([])
-    }, 240_000)
+    }, 360_000)
   })
 }
 
@@ -486,7 +497,7 @@ for (const host of PS_HOSTS) {
         // it fires after the swap has already begun.
         expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.23.0')
         expect(leftoverArtifacts(installDir)).toEqual([])
-      }, 240_000)
+      }, 360_000)
 
       test('-Force is still the way past it, and it installs for real', () => {
         const work = workDir('running-force')
@@ -509,7 +520,7 @@ for (const host of PS_HOSTS) {
           ).status,
         ).toBe(0)
         expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.24.0')
-      }, 240_000)
+      }, 360_000)
 
       test('a runtime pointer whose pid is gone is not a running instance', () => {
         // The other half of a trustworthy guard: one that refuses unconditionally is as useless as
@@ -577,7 +588,7 @@ for (const host of PS_HOSTS) {
         expect(result.stderr + result.stdout).not.toMatch(/appears to be running/i)
         expect(result.status).toBe(0)
         expect(exeVersion(join(installDir, 'AgentHydra.exe'))).toBe('0.25.0')
-      }, 240_000)
+      }, 360_000)
     },
   )
 }

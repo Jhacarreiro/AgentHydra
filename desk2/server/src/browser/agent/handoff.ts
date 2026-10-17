@@ -3,7 +3,7 @@
 // and handOffProfile with its helpers (browser.mjs:3228-3525), without the attach path or its session bookkeeping.
 
 import { spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import { closeBrowser, LIVE_CHROME_FLAGS, liveBrowser } from '../cdp'
 import { dropPage } from '../ledger'
@@ -16,10 +16,10 @@ import {
   registryEntry,
   safeMtime,
 } from '../profiles-write'
-import { listProfiles, storeRoot } from '../store'
+import { storeRoot } from '../store'
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
-import { forgetPagesOf } from './navigate'
+import { forgetPagesOf, profileFolder } from './navigate'
 import type { ToolDef } from './registry'
 import { findBrowserBinary, launchedHeadless } from './session'
 import { profileLocked, readSignInWindow, SIGN_IN_MARKER, waitUntil } from './sign-in-window'
@@ -80,20 +80,8 @@ export function scopedKey(root: string, dir: string): string {
 
 /** The registry key and folder a profile name resolves to, as browser_* calls resolve it. Creates nothing. */
 export async function profileLocation(name: string, cwd: string | undefined): Promise<{ key: string; dir: string }> {
-  const slug = profileSlug(name)
-  const root = storeRoot()
-  const at = (dir: string) => ({ key: scopedKey(root, dir), dir })
-  if (!cwd) return at(join(root, slug))
-  const { result, refs } = await listProfiles(cwd)
-  const open = refs.find((r) => r.profile.name === slug)
-  if (open) return at(open.dir)
-  if (!result.workspace) return at(join(root, slug))
-  const mine = join(root, 'ws', result.workspace, slug)
-  const legacy = join(root, slug)
-  const legacyStat = lstatSync(legacy, { throwIfNoEntry: false })
-  if (!existsSync(mine) && legacyStat !== undefined && legacyStat.isDirectory() && !legacyStat.isSymbolicLink())
-    return at(legacy)
-  return at(mine)
+  const dir = await profileFolder(name, cwd, false)
+  return { key: scopedKey(storeRoot(), dir), dir }
 }
 
 export type HandoffDecision = 'keep' | 'detach' | 'close-relaunch' | 'launch'

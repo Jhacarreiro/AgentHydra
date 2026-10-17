@@ -132,10 +132,13 @@ async function closeOwned(dir: string, port: number, pick: (owner: string) => bo
   const tabs = Object.fromEntries([...rows].map(([id, row]) => [id, { chat: row.chat }]))
   const ids = ownedTargetIds({ tabs, pages: pages.map((t) => ({ targetId: t.id })) }, pick)
   let closed = 0
-  for (const id of ids) {
-    if (await closePage(port, id).catch(() => false)) closed++
-    dropPage(dir, id)
-  }
+  // Each close waits for its page to go (up to 8 s), and the pages do not depend on each other: they close together.
+  await Promise.all(
+    ids.map(async (id) => {
+      if (await closePage(port, id).catch(() => false)) closed++
+      dropPage(dir, id)
+    }),
+  )
   return closed
 }
 

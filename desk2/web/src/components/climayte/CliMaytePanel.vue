@@ -60,8 +60,8 @@ const elapsedTime = (worker: CliMayteWorker): string => {
 
 const statusGlyph = (worker: CliMayteWorker): string => {
   const status = worker.status
-  if (status === 'running' || status === 'queued') return 'running'
-  if (status === 'waiting' || status === 'checking') return 'waiting'
+  if (status === 'running' || status === 'queued' || status === 'checking') return 'running'
+  if (status === 'waiting') return 'waiting'
   return status
 }
 
@@ -71,8 +71,9 @@ const glyphClass = (worker: CliMayteWorker): string => {
   switch (status) {
     case 'running':
       return base + ' animate-spin text-[var(--brand)]'
+    // Waiting for an account with room: the usage-limit pink, since yellow is only what waits on the owner (owner, 2026-10-17).
     case 'waiting':
-      return base + ' rounded-full bg-[var(--status-needs-you)] animate-pulse'
+      return base + ' rounded-full bg-[var(--status-limited)]'
     default:
       return base + ' rounded-full bg-[var(--text-muted)]'
   }

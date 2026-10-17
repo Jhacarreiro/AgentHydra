@@ -32,6 +32,8 @@ export interface ConnectorInfo {
   installable: boolean
   /** It has its own page, which Desk shows in a pane while it runs. */
   pane: boolean
+  /** Part of AgentHydra itself, not an outside app (Settings → Connectors' Type column). */
+  builtIn?: true
 }
 
 /** Where a connector stands on this machine now. */

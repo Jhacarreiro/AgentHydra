@@ -299,59 +299,86 @@ export class CodexRuntime extends ServiceRuntime {
     const now = this.now()
     switch (method) {
       case 'turn/started':
-        this.turnId = (p.turn as { id: string }).id
-        return
-      case 'item/started': {
-        const item = p.item as CodexItem
-        const startedAt = typeof p.startedAtMs === 'number' ? p.startedAtMs : now
-        this.running.set(item.id, { item, startedAt, output: '', sentAt: 0 })
-        if (item.type !== 'agentMessage' && item.type !== 'reasoning') for (const i of codexItems(item, { now, startedAt })) this.upsert(i)
-        const activity = activityOf(item)
-        if (activity) this.dispatch({ type: 'activity', activity })
-        this.publish()
-        return
-      }
+        return this.onTurnStarted(p)
+      case 'item/started':
+        return this.onItemStarted(p, now)
       case 'item/agentMessage/delta':
         return this.stream(String(p.itemId), 'assistant_text', String(p.delta ?? ''))
       case 'item/reasoning/summaryTextDelta':
         return this.stream(String(p.itemId), 'thinking', String(p.delta ?? ''))
       case 'item/commandExecution/outputDelta':
         return this.progress(String(p.itemId), String(p.delta ?? ''))
-      case 'item/completed': {
-        const item = p.item as CodexItem
-        const was = this.running.get(item.id)
-        this.running.delete(item.id)
-        const stream = this.streams.get(item.id)
-        this.streams.delete(item.id)
-        const startedAt = stream?.ts ?? was?.startedAt
-        for (const i of codexItems(item, { now, startedAt, endedAt: typeof p.completedAtMs === 'number' ? p.completedAtMs : now })) this.upsert(i)
-        // A message that ended with no text (only its deltas were seen) keeps what streamed.
-        if (stream && !codexItems(item, { now }).length && stream.text.trim()) this.upsert({ kind: stream.kind, id: item.id, ts: stream.ts, text: stream.text })
-        if (item.type === 'agentMessage' && item.text.trim()) this.lastText = item.text
-        return
-      }
+      case 'item/completed':
+        return this.onItemCompleted(p, now)
       case 'turn/plan/updated':
-        this.upsert({ kind: 'todos', id: 'todos', ts: now, todos: planTodos((p.plan as { step: string; status: string }[]) ?? []) })
-        return
-      case 'thread/tokenUsage/updated': {
-        const u = p.tokenUsage as { last?: { totalTokens?: number }; modelContextWindow?: number | null } | undefined
-        const used = u?.last?.totalTokens
-        if (typeof used === 'number' && u?.modelContextWindow) {
-          this.chat.contextPct = Math.min(100, Math.round((used / u.modelContextWindow) * 100))
-          this.publish()
-        }
-        return
-      }
-      case 'error': {
-        const e = p.error as { message?: string } | undefined
-        if (p.willRetry && e?.message) {
-          this.dispatch({ type: 'activity', activity: `Codex is trying again: ${e.message.slice(0, 80)}` })
-          this.publish()
-        }
-        return
-      }
+        return this.onPlanUpdated(p, now)
+      case 'thread/tokenUsage/updated':
+        return this.onTokenUsage(p)
+      case 'error':
+        return this.onError(p)
       case 'turn/completed':
         return this.endTurn(this.current, p.turn as CodexTurn)
+    }
+  }
+
+  private onTurnStarted(p: Record<string, unknown>): void {
+    this.turnId = (p.turn as { id: string }).id
+  }
+
+  private onItemStarted(p: Record<string, unknown>, now: number): void {
+    const item = p.item as CodexItem
+    const startedAt = typeof p.startedAtMs === 'number' ? p.startedAtMs : now
+    this.running.set(item.id, { item, startedAt, output: '', sentAt: 0 })
+    if (item.type !== 'agentMessage' && item.type !== 'reasoning') for (const i of codexItems(item, { now, startedAt })) this.upsert(i)
+    const activity = activityOf(item)
+    if (activity) this.dispatch({ type: 'activity', activity })
+    this.publish()
+  }
+
+  private onItemCompleted(p: Record<string, unknown>, now: number): void {
+    const item = p.item as CodexItem
+    const was = this.running.get(item.id)
+    this.running.delete(item.id)
+    const stream = this.streams.get(item.id)
+    this.streams.delete(item.id)
+    const startedAt = stream?.ts ?? was?.startedAt
+    for (const i of codexItems(item, { now, startedAt, endedAt: typeof p.completedAtMs === 'number' ? p.completedAtMs : now })) this.upsert(i)
+    // A message that ended with no text (only its deltas were seen) keeps what streamed.
+    if (stream && !codexItems(item, { now }).length && stream.text.trim()) this.upsert({ kind: stream.kind, id: item.id, ts: stream.ts, text: stream.text })
+    if (item.type === 'agentMessage' && item.text.trim()) this.lastText = item.text
+  }
+
+  private onPlanUpdated(p: Record<string, unknown>, now: number): void {
+    this.upsert({ kind: 'todos', id: 'todos', ts: now, todos: planTodos((p.plan as { step: string; status: string }[]) ?? []) })
+  }
+
+  private onTokenUsage(p: Record<string, unknown>): void {
+    type Counts = { totalTokens?: number }
+    const u = p.tokenUsage as { total?: Counts; last?: Counts; modelContextWindow?: number | null } | undefined
+    const used = u?.last?.totalTokens
+    let changed = false
+    if (typeof used === 'number' && u?.modelContextWindow) {
+      this.chat.contextPct = Math.min(100, Math.round((used / u.modelContextWindow) * 100))
+      changed = true
+    }
+    changed = this.addTokens(u?.total?.totalTokens, used) || changed
+    if (changed) this.publish()
+  }
+
+  /** The thread's running token total: Codex's own `total` when an event carries it, else the sum of each `last`. */
+  private addTokens(total: unknown, last: unknown): boolean {
+    const was = this.chat.tokensUsed ?? 0
+    const next = typeof total === 'number' ? total : typeof last === 'number' ? was + last : was
+    if (next === was) return false
+    this.chat.tokensUsed = next
+    return true
+  }
+
+  private onError(p: Record<string, unknown>): void {
+    const e = p.error as { message?: string } | undefined
+    if (p.willRetry && e?.message) {
+      this.dispatch({ type: 'activity', activity: `Codex is trying again: ${e.message.slice(0, 80)}` })
+      this.publish()
     }
   }
 
@@ -405,6 +432,7 @@ export class CodexRuntime extends ServiceRuntime {
       this.deps.onFailure?.({ message: error!, durationMs })
       this.notify('error', error!)
     } else this.dispatch({ type: 'stateChanged', state: 'idle', now })
+    if (ok) this.deps.onTurnClassified?.({ model: codexModel(this.chat.model) ?? 'default', effort: (this.chat.effort === 'max' ? 'xhigh' : this.chat.effort) ?? 'default', stopReason: null, text: this.lastText })
     if (this.startNext()) return
     if (ok) this.notify('finished', this.lastText.trim().slice(0, 200) || 'Codex finished.')
     this.letGo()

@@ -5,8 +5,8 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { RoutineDefinition, RoutineKind, RoutineProposal } from '@shared/routines'
-import { parseCron } from './cron'
+import { CAMPAIGN_ID, CAMPAIGNS_MAX, GROUP_MAX, type RoutineDefinition, type RoutineKind, type RoutineProposal } from '@shared/routines'
+import { momentOf, parseCron, systemZone } from './cron'
 
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 export const TIMEOUT_MIN = 5
@@ -15,8 +15,26 @@ export const TIMEOUT_DEFAULT = 120
 const ASKED_MAX = 500
 const WHY_MAX = 500
 
-/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one). */
-export type Entry<T extends RoutineDefinition = RoutineDefinition> = { id: string; def: T; broken: null } | { id: string; def: null; broken: string; name?: string }
+/** Where a central routine runs, seen from this computer (routines/central.ts placementOf): pinned here, shared by every
+ *  runner its labels match, or elsewhere. */
+export type Placement = 'here' | 'shared' | 'elsewhere'
+
+/** Where a central routine (routines/central.ts) is kept and where it runs: its document's path and the sha of its text in
+ *  the store, its runner labels, where they place it (and why not here), and a schedule's time zone. */
+export interface CentralMark {
+  path: string
+  docSha: string
+  runsOn: string[]
+  placement: Placement
+  why: string | null
+  timeZone?: string
+}
+
+/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one).
+ *  A central routine's entry carries its `central` mark. */
+export type Entry<T extends RoutineDefinition = RoutineDefinition> =
+  | { id: string; def: T; broken: null; central?: CentralMark }
+  | { id: string; def: null; broken: string; name?: string; central?: CentralMark }
 
 /** The name a file that does not check out still gives itself, so its card keeps its name rather than its file's. */
 function nameIn(raw: string): string | undefined {
@@ -35,25 +53,27 @@ const text = (v: unknown, key: string): string => {
 }
 
 /** The keys this contract knows; `tick` is refused with its replacement. */
-const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe']
+const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes', 'group', 'campaigns']
+/** A mode option: what the card shows (first letter capitalised) and what `modes.set` is handed. */
+export const MODE_OPTION = /^[a-z][a-z0-9-]{0,19}$/
+const MODES_MIN = 2
+const MODES_MAX = 5
 
-/** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
-export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
-  if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
+/** The object a routine file holds, or the reason it does not hold one. */
+function objectOf(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('the file must hold one JSON object')
-  const o = value as Record<string, unknown>
-  if ('tick' in o) throw new Error('"tick" is gone: a routine that runs a command says "run" (an argv list)')
-  for (const key of Object.keys(o)) if (!KEYS.includes(key) && !allowed.includes(key)) throw new Error(`unknown key "${key}"`)
+  return value as Record<string, unknown>
+}
 
-  const name = text(o.name, 'name')
-  const askedBy = text(o.askedBy, 'askedBy')
-  if (askedBy.length > ASKED_MAX) throw new Error(`"askedBy" must be at most ${ASKED_MAX} characters`)
-
+/** The one of `schedule`, `status` or `windowsTask` the object holds: how the routine decides when it runs. */
+function whenOf(o: Record<string, unknown>): string {
   const whens = ['schedule', 'status', 'windowsTask'].filter((k) => o[k] !== undefined)
   if (whens.length !== 1) throw new Error('a routine has exactly one of "schedule", "status" or "windowsTask"')
-  const when = whens[0]
+  return whens[0]
+}
 
-  const def: RoutineDefinition = { id, name, askedBy, timeoutMinutes: TIMEOUT_DEFAULT }
+/** Sets the `when` field the object holds (a cron expression, a status command or a Windows task), checked. */
+function setWhen(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
   if (when === 'schedule') {
     if (typeof o.schedule !== 'string') throw new Error('"schedule" must be a cron expression in a string')
     parseCron(o.schedule)
@@ -66,49 +86,136 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
       throw new Error('"windowsTask" must be the full path of a Windows task, e.g. "\\Example nightly job"')
     def.windowsTask = o.windowsTask
   }
+}
 
+/** What a routine runs: a Windows task runs nothing of ours, the others run a command or an AI prompt, never both. */
+function setRunOrPrompt(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
   if (when === 'windowsTask') {
     if (o.run !== undefined || o.prompt !== undefined) throw new Error('a windowsTask routine has no "run" or "prompt": Windows runs it')
-  } else {
-    if ((o.run !== undefined) === (o.prompt !== undefined)) throw new Error('a schedule or status routine has exactly one of "run" (a command) or "prompt" (an AI run)')
-    if (o.run !== undefined) {
-      if (!isArgv(o.run)) throw new Error('"run" must be a command: a list of strings, the program first (run with no shell)')
-      def.run = o.run
-    } else def.prompt = text(o.prompt, 'prompt')
+    return
   }
+  if ((o.run !== undefined) === (o.prompt !== undefined)) throw new Error('a schedule or status routine has exactly one of "run" (a command) or "prompt" (an AI run)')
+  if (o.run !== undefined) {
+    if (!isArgv(o.run)) throw new Error('"run" must be a command: a list of strings, the program first (run with no shell)')
+    def.run = o.run
+  } else def.prompt = text(o.prompt, 'prompt')
+}
+
+function setTimeoutMinutes(def: RoutineDefinition, o: Record<string, unknown>): void {
+  if (o.timeoutMinutes === undefined) return
+  const minutes = o.timeoutMinutes
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < TIMEOUT_MIN || minutes > TIMEOUT_MAX)
+    throw new Error(`"timeoutMinutes" must be a number from ${TIMEOUT_MIN} to ${TIMEOUT_MAX}`)
+  def.timeoutMinutes = minutes
+}
+
+function setUntil(def: RoutineDefinition, o: Record<string, unknown>): void {
+  if (o.until === undefined) return
+  if (typeof o.until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.until) || untilEndOf(o.until) === null)
+    throw new Error('"until" must be a day, YYYY-MM-DD')
+  def.until = o.until
+}
+
+function setDescribe(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
+  if (o.describe === undefined) return
+  if (typeof o.describe !== 'boolean') throw new Error('"describe" must be true or false')
+  if (when === 'windowsTask' && o.describe) throw new Error('a windowsTask routine is not described: Windows runs it, and its output never reaches the manager')
+  def.describe = o.describe
+}
+
+/** A status routine's `modes`: its options and the command that takes one. Only a status routine has them: its status is
+ *  what says which one is in force. */
+function setModes(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
+  if (o.modes === undefined) return
+  if (when !== 'status') throw new Error('only a status routine has "modes": its status says which one is in force')
+  const modes = o.modes as Record<string, unknown> | null
+  const shape = `"modes" must be { "options": ${MODES_MIN} to ${MODES_MAX} different names (a-z, 0-9 and -, starting with a letter), "set": a command }`
+  if (!modes || typeof modes !== 'object' || Array.isArray(modes) || Object.keys(modes).some((k) => k !== 'options' && k !== 'set')) throw new Error(shape)
+  const options = modes.options
+  if (!Array.isArray(options) || options.length < MODES_MIN || options.length > MODES_MAX) throw new Error(shape)
+  if (!options.every((x) => typeof x === 'string' && MODE_OPTION.test(x)) || new Set(options).size !== options.length) throw new Error(shape)
+  if (!isArgv(modes.set)) throw new Error('"modes.set" must be a command: a list of strings, the program first (run with no shell)')
+  def.modes = { options: options as string[], set: modes.set }
+}
+
+/** A routine's group (the Tools tab's Routines folder), checked: 1 to GROUP_MAX characters on one line. Throws with the reason. */
+export function checkGroup(value: unknown): string {
+  if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('"group" must be a name on one line')
+  const group = value.trim()
+  if (!group || group.length > GROUP_MAX) throw new Error(`"group" must be 1 to ${GROUP_MAX} characters`)
+  return group
+}
+
+/** A routine's campaigns, checked: 1 to CAMPAIGNS_MAX distinct campaign ids (CAMPAIGN_ID). Throws with the reason. */
+export function checkCampaigns(value: unknown): string[] {
+  const shape = `"campaigns" must be a list of 1 to ${CAMPAIGNS_MAX} campaign ids (a-z, 0-9 and -, starting with a letter or digit)`
+  if (!Array.isArray(value) || value.length < 1 || value.length > CAMPAIGNS_MAX) throw new Error(shape)
+  if (!value.every((x) => typeof x === 'string' && CAMPAIGN_ID.test(x))) throw new Error(shape)
+  if (new Set(value).size !== value.length) throw new Error('"campaigns" must not name one campaign twice')
+  return value as string[]
+}
+
+/** The values a POST meta names, checked: a key it names is set (null removes it), an absent one is left alone. Throws with the
+ *  reason. */
+export interface MetaValues {
+  group?: string | null
+  campaigns?: string[] | null
+}
+
+export function checkMeta(meta: Record<string, unknown>): MetaValues {
+  for (const key of Object.keys(meta)) if (!['id', 'group', 'campaigns'].includes(key)) throw new Error(`unknown key "${key}"`)
+  const values: MetaValues = {}
+  if (meta.group !== undefined) values.group = meta.group === null ? null : checkGroup(meta.group)
+  if (meta.campaigns !== undefined) values.campaigns = meta.campaigns === null ? null : checkCampaigns(meta.campaigns)
+  return values
+}
+
+/** Sets the keys `values` names on an object (a routine's file, or its document's front matter), removing those it names as null. */
+export function applyMeta(into: Record<string, unknown>, values: MetaValues): void {
+  for (const key of ['group', 'campaigns'] as const) {
+    if (values[key] === undefined) continue
+    if (values[key] === null) delete into[key]
+    else into[key] = values[key]
+  }
+}
+
+/** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
+export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
+  if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
+  const o = objectOf(value)
+  if ('tick' in o) throw new Error('"tick" is gone: a routine that runs a command says "run" (an argv list)')
+  for (const key of Object.keys(o)) if (!KEYS.includes(key) && !allowed.includes(key)) throw new Error(`unknown key "${key}"`)
+
+  const name = text(o.name, 'name')
+  const askedBy = text(o.askedBy, 'askedBy')
+  if (askedBy.length > ASKED_MAX) throw new Error(`"askedBy" must be at most ${ASKED_MAX} characters`)
+
+  const when = whenOf(o)
+  const def: RoutineDefinition = { id, name, askedBy, timeoutMinutes: TIMEOUT_DEFAULT }
+  setWhen(def, o, when)
+  setRunOrPrompt(def, o, when)
 
   if (o.cwd !== undefined) def.cwd = text(o.cwd, 'cwd')
   if (def.prompt !== undefined && def.cwd === undefined) throw new Error('a prompt routine needs "cwd": the folder its chat works in')
 
-  if (o.timeoutMinutes !== undefined) {
-    const minutes = o.timeoutMinutes
-    if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < TIMEOUT_MIN || minutes > TIMEOUT_MAX)
-      throw new Error(`"timeoutMinutes" must be a number from ${TIMEOUT_MIN} to ${TIMEOUT_MAX}`)
-    def.timeoutMinutes = minutes
-  }
-
-  if (o.until !== undefined) {
-    if (typeof o.until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.until) || untilEndOf(o.until) === null)
-      throw new Error('"until" must be a day, YYYY-MM-DD')
-    def.until = o.until
-  }
-
-  if (o.describe !== undefined) {
-    if (typeof o.describe !== 'boolean') throw new Error('"describe" must be true or false')
-    if (when === 'windowsTask' && o.describe) throw new Error('a windowsTask routine is not described: Windows runs it, and its output never reaches the manager')
-    def.describe = o.describe
-  }
+  setTimeoutMinutes(def, o)
+  setUntil(def, o)
+  setDescribe(def, o, when)
+  setModes(def, o, when)
+  if (o.group !== undefined) def.group = checkGroup(o.group)
+  if (o.campaigns !== undefined) def.campaigns = checkCampaigns(o.campaigns)
   return def
 }
 
-/** The end of a `until` day (YYYY-MM-DD, local), in ms: the start of the next day. Null when the text is not a real day. */
-export function untilEndOf(day: string): number | null {
+/** The end of a `until` day (YYYY-MM-DD in `zone`, this computer's unless given), in ms: the start of the next day. Null when
+ *  the text is not a real day. */
+export function untilEndOf(day: string, zone: string = systemZone()): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
   if (!m) return null
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  const start = new Date(y, mo - 1, d)
-  if (start.getFullYear() !== y || start.getMonth() !== mo - 1 || start.getDate() !== d) return null
-  return new Date(y, mo - 1, d + 1).getTime()
+  const start = new Date(Date.UTC(y, mo - 1, d))
+  if (start.getUTCFullYear() !== y || start.getUTCMonth() !== mo - 1 || start.getUTCDate() !== d) return null
+  return momentOf(zone, Date.UTC(y, mo - 1, d + 1))
 }
 
 /** A routine file's text, checked. Throws with the reason. */

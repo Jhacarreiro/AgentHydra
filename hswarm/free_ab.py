@@ -5,18 +5,21 @@ HSwarm tasks first; only a model that holds level with the API answers gets rout
 
 The four commands, in order (all state lives under ~/.hswarm/free-ab/<run>/, never in the repo):
 
-  python -m hswarm.free_ab pick   --profile critical [--tools read] [--n 30] [--skip 0] [--run NAME]
+  python -m hswarm.free_ab pick   --profile critical [--tools read|web|edit|all] [--n 30] [--skip 0] [--run NAME]
       -> candidates.jsonl: recent tasks of that profile whose tools are all Free-allowed, that the API route
-         answered ok, each with its API answer (duplicate prompts dropped, fixed-seed sample).
+         answered ok, each with its API answer (duplicate prompts dropped, fixed-seed sample). An edit or all task
+         carries the API's changes too, as a diff of its edit snapshot (survival.py).
   python -m hswarm.free_ab arm    --run NAME --model luna-thinking [--provider chatgpt|claude] [--check-reads 8] [--conc 20]
                                   [--check] [--label NAME]
       -> arm_<label or model>.jsonl: each candidate through the Free tool route, every new thread asking for that model
          (any free_chat name: gpt-instant, gpt-thinking, gpt-auto, luna-thinking, or a slug). --check asks every ChatGPT
          thread that answers early to check its claims (the claim check route_via_free_check_profiles turns on per
          profile); without it the profile's own setting applies. --label names the arm, to run one model twice.
+         An edit or all task's leg works in a scratch copy (scratch.py) and its changes are kept as a diff, never
+         landed (free_route.LAND off), so the candidate's folder stays the state both sides started from.
   python -m hswarm.free_ab judge  --run NAME --arm luna-thinking [--budget 20]
       -> judge_tasks_<model>.json, then `hswarm run` on it: a blind critical-profile worker with the task's own
-         tools grades the two answers, shown in random order as A/B.
+         tools (read in place of edit) grades the two answers, shown in random order as A/B, each with its diff.
   python -m hswarm.free_ab report --run NAME [--arm luna-thinking]
       -> JSON tally per arm and a verdict line: 'holds level' (win+tie share >= 45% and judged errors not above
          the API's) or 'loses'.
@@ -51,6 +54,9 @@ CAP = 30_000
 HOLDS_LEVEL_SHARE = 0.45
 READ_TOOLS = {"read_file", "list_dir", "glob", "grep", "outline", "unfold", "fetch_output"}
 WEB_TOOLS = READ_TOOLS | {"read_url", "web_search"}
+EDIT_TOOLS = READ_TOOLS | {"write_file", "edit_file"}
+ALL_TOOLS = EDIT_TOOLS | {"bash"}
+ALLOWED = {"web": WEB_TOOLS, "edit": EDIT_TOOLS, "all": ALL_TOOLS}
 FAIRJOB = Path.home() / ".claude" / "tools" / "fairjob.cmd"
 
 SCHEMA = {"type": "object", "required": ["winner", "a_score", "b_score", "a_errors", "b_errors", "why"], "properties": {
@@ -87,7 +93,7 @@ def pick(profile: str, tools: str | None = None, n: int = 30, skip: int = 0, job
          scan: int = 6000) -> list[dict]:
     """Recent real tasks of one profile with Free-allowed tools that the API answered ok, newest jobs first scanned."""
     jobs = jobs_dir or config.JOBS_DIR
-    allowed = WEB_TOOLS if tools == "web" else READ_TOOLS
+    allowed = ALLOWED.get(tools or "", READ_TOOLS)
     picked: list[dict] = []
     for j in sorted(os.listdir(jobs) if jobs.is_dir() else [])[-scan:]:
         jd = jobs / j
@@ -117,8 +123,11 @@ def pick(profile: str, tools: str | None = None, n: int = 30, skip: int = 0, job
                 continue
             if not t.get("cwd") or not Path(t["cwd"]).is_dir():
                 continue
-            picked.append({"job": j, "task": t, "api": {k: r.get(k) for k in (
-                "model", "answer", "data", "cost_usd", "seconds", "turns", "tool_calls", "status")}})
+            api = {k: r.get(k) for k in ("model", "answer", "data", "cost_usd", "seconds", "turns", "tool_calls", "status",
+                                         "files_changed")}
+            if names & {"write_file", "edit_file", "bash"}:
+                api["diff"] = api_diff(j, t["id"], t["cwd"])
+            picked.append({"job": j, "task": t, "api": api})
     rnd = random.Random(7)
     rnd.shuffle(picked)
     out, seen = [], set()
@@ -131,6 +140,27 @@ def pick(profile: str, tools: str | None = None, n: int = 30, skip: int = 0, job
         if len(seen) == skip + n:
             break
     return out
+
+
+def api_diff(job: str, task_id: str, cwd: str) -> str:
+    """The API leg's changes to a task, as a unified diff of its edit snapshot (survival.save): before and after of
+    every file it changed. "" when it changed nothing or the snapshot is gone."""
+    import difflib
+
+    from .survival import edits_dir
+    try:
+        rec = json.loads((edits_dir() / job / f"{task_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    out = []
+    for f in rec.get("files") or []:
+        try:
+            name = Path(f["path"]).relative_to(cwd).as_posix()
+        except ValueError:
+            name = str(f["path"])
+        out += difflib.unified_diff((f.get("before") or "").splitlines(keepends=True), (f.get("after") or "").splitlines(keepends=True),
+                                    f"a/{name}", f"b/{name}")
+    return "".join(out)
 
 
 def cmd_pick(a) -> int:
@@ -163,8 +193,10 @@ async def _arm_one(run: str, model: str, i: int, r: dict, stamp: str, label: str
     out = {"i": i, "arm": label or model, "job": r["job"], "id": r["task"]["id"], "profile": task.profile, "tools": r["task"]["tools"],
            "wall_s": round(time.monotonic() - t0 - waited, 1), "waited_s": waited, "note": note, "api": r["api"]}
     if res is not None:
+        route = (res.selection or {}).get("route") or {}
         out["free"] = {"status": res.status, "model": res.model, "answer": res.answer, "data": res.data, "turns": res.turns,
-                       "seconds": res.seconds, "tool_calls": res.tool_calls, "route": (res.selection or {}).get("route")}
+                       "seconds": res.seconds, "tool_calls": res.tool_calls, "route": {k: v for k, v in route.items() if k != "diff"},
+                       "files_changed": res.files_changed, **({"diff": route["diff"]} if "diff" in route else {})}
     print(json.dumps({"i": i, "ok": res is not None, "model": res.model if res else None,
                       "note": (note or {}).get("error") or (note or {}).get("fallback"), "wall_s": out["wall_s"]}),
           file=sys.stderr, flush=True)
@@ -178,6 +210,9 @@ async def _arm(a) -> list[dict]:
     every = ("routine", "general", "decision", "research", "code", "critical")
     config.ROUTE_VIA_FREE_TOOL_PROFILES = every
     config.ROUTE_VIA_FREE_PROFILES = every
+    config.ROUTE_VIA_FREE_EDIT_PROFILES = every
+    config.ROUTE_VIA_FREE_SHELL_PROFILES = every
+    free_route.LAND = False  # an edit leg's changes stay a diff: the candidate's folder is what the judge reads
     config.ROUTE_VIA_FREE_TOOL_ASKS = {}
     if a.check:
         config.ROUTE_VIA_FREE_CHECK_PROFILES = every
@@ -223,6 +258,8 @@ def cmd_arm(a) -> int:
 def _text_of(side: dict) -> str:
     v = side.get("data") if side.get("data") is not None else side.get("answer")
     t = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, indent=1)
+    if "diff" in side:  # an edit task: what it changed counts as much as what it said
+        t += "\n\n### The changes it made (unified diff against the folder you can read)\n\n" + (side["diff"] or "(no change)")
     return t if len(t) <= CAP else t[:CAP] + "\n[... cut ...]"
 
 
@@ -245,14 +282,20 @@ def build_judge(arm_rows: list[dict], cands: list[dict]) -> tuple[list[dict], di
         key[jid] = {"i": r["i"], "free_is": "A" if free_a else "B"}
         tasks.append({
             # purpose evaluation keeps the judge off the Free route: critical read work goes there now, and on 2026-10-13
-            # 6 of 17 judges of a GPT-6 Thinking arm were Luna Thinking threads grading a Free answer.
-            "id": jid, "cwd": t["cwd"], "tools": t["tools"], "web_hosts": t.get("web_hosts") or [], "profile": "critical",
+            # 6 of 17 judges of a GPT-6 Thinking arm were Luna Thinking threads grading a Free answer. A judge never edits:
+            # the folder it reads is the state both answers started from.
+            "id": jid, "cwd": t["cwd"], "tools": "read" if t["tools"] == "edit" else t["tools"], "web_hosts": t.get("web_hosts") or [],
+            "profile": "critical",
             "purpose": "evaluation",
             "timeout_s": 900, "schema": SCHEMA,
             "prompt": ("Two workers were given the same task and answered it independently. Grade them.\n\n"
                        "Check each answer against the sources yourself with your tools: a claim the files (or pages) contradict, "
                        "or a quote that is not where it says, is an error. Rank by correctness first, then by how completely "
                        "it does what the task asked, then by usefulness. Length is not merit. Say tie only when neither is better.\n\n"
+                       + ("Each worker may have changed files: its changes are shown under its answer as a diff against the folder "
+                          "you can read, which is the state both started from. Judge the changes first. Never change a file "
+                          "yourself.\n\n" if "diff" in a or "diff" in b else "")
+                       + 
                        f"## The task they were given\n\n{prompt}\n\n## Answer A\n\n{_text_of(a)}\n\n## Answer B\n\n{_text_of(b)}"),
         })
     return tasks, key
@@ -286,6 +329,17 @@ def _median(xs: list) -> float | None:
     return xs[len(xs) // 2] if xs else None
 
 
+def _who(d: dict, fa: bool) -> str:
+    """Which side the judge picked: the tie, the free arm (labelled A when fa), or the API arm."""
+    w = d["winner"]
+    return "tie" if w == "tie" else ("free" if (w == "A") == fa else "api")
+
+
+def _free_misses(arm_rows: list[dict]) -> list[tuple]:
+    return [((r.get("note") or {}).get("free_kind"), ((r.get("note") or {}).get("error") or "")[:90])
+            for r in arm_rows if "free" not in r]
+
+
 def report(arm_rows: list[dict], key: dict, judge_doc: dict) -> dict:
     rows = {r["i"]: r for r in arm_rows}
     results = judge_doc.get("results") or {}
@@ -300,21 +354,20 @@ def report(arm_rows: list[dict], key: dict, judge_doc: dict) -> dict:
             continue
         judge_models[res.get("model")] = judge_models.get(res.get("model"), 0) + 1
         fa = k["free_is"] == "A"
-        w = d["winner"]
-        who = "tie" if w == "tie" else ("free" if (w == "A") == fa else "api")
+        who = _who(d, fa)
         tally[who] += 1
         r = rows[k["i"]]
         by_stratum.setdefault(f"{r['profile']}/{r['tools']}", {"free": 0, "api": 0, "tie": 0})[who] += 1
-        fs += d["a_score"] if fa else d["b_score"]
-        aps += d["b_score"] if fa else d["a_score"]
-        fe += d["a_errors"] if fa else d["b_errors"]
-        ae += d["b_errors"] if fa else d["a_errors"]
+        free, api = ("a", "b") if fa else ("b", "a")
+        fs += d[f"{free}_score"]
+        aps += d[f"{api}_score"]
+        fe += d[f"{free}_errors"]
+        ae += d[f"{api}_errors"]
         n += 1
     served = [r for r in arm_rows if "free" in r]
     return {
         "sampled": len(arm_rows), "served_on_free": len(served),
-        "free_misses": [((r.get("note") or {}).get("free_kind"), ((r.get("note") or {}).get("error") or "")[:90])
-                        for r in arm_rows if "free" not in r],
+        "free_misses": _free_misses(arm_rows),
         "judged": n, "tally": tally, "by_stratum": by_stratum, "judge_models": judge_models,
         "mean_score": {"free": round(fs / max(n, 1), 2), "api": round(aps / max(n, 1), 2)},
         "errors": {"free": fe, "api": ae},

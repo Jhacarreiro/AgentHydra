@@ -7,7 +7,7 @@
 // and Shut down (the daemon is Desk's engine). The Quick Instances shortcut came along (2026-10-08): its
 // window is this copy's page, served by the daemon (server/src/quick-instances-page.ts).
 import { useStorage } from '@vueuse/core'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { tellHydra } from '@/components/hydra/api'
 import { applyRelease, type AhUpdateProgress } from '@/lib/ah-release'
 import type { PaneApi } from './api'
@@ -99,7 +99,7 @@ const THEME_KEY = 'lunarwerx-theme'
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export function useAgentHydraSettings(api: PaneApi) {
-  const settings = ref<AhSettings | null>(null)
+  const settings = shallowRef<AhSettings | null>(null)
   /** Why AgentHydra could not be read, shown in place of its rows. */
   const down = ref<string | null>(null)
   const error = ref<string | null>(null)
@@ -246,7 +246,7 @@ export function useAgentHydraSettings(api: PaneApi) {
   })
 
   // --- cloud sync ---
-  const sync = ref<AhSyncStatus | null>(null)
+  const sync = shallowRef<AhSyncStatus | null>(null)
   const syncBusy = ref(false)
   const confirmDisconnect = ref(false)
 

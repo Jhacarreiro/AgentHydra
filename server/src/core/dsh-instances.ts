@@ -40,6 +40,7 @@ import { join } from 'node:path'
 import { CONFIG_DIR, DSH_HOME } from '../config'
 import { findFreePort } from '../find-free-port.mjs'
 import { openPortableWindow } from '../portable-window.mjs'
+import { deleteNoteProblem } from './delete-note'
 import { instanceNumberFor } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -50,7 +51,7 @@ import {
 } from './json-store'
 import { isPathInside } from './paths'
 import { spawnCaptured } from './process.ts'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, firstFreeName } from './shared'
 
 /** Asking the OS who owns a port is a table read. Ten seconds is generous. */
 const PORT_LOOKUP_TIMEOUT_MS = 10_000
@@ -303,6 +304,12 @@ function nameError(name: string): string | null {
  * session store on first run, and a half-made home written by us would be a second source of truth
  * for a layout the harness owns. So this makes the folder and gets out of the way.
  */
+/** The first `DeepSeek <n>` no instance is called, for a create that names nothing. */
+export function freeDshName(): string {
+  const names = new Set(readStore().instances.map((i) => i.name.trim().toLowerCase()))
+  return firstFreeName('DeepSeek ', (name) => names.has(name.toLowerCase()))
+}
+
 export function createDshInstance(name: string): CMActionResult {
   const problem = nameError(name)
   if (problem) return fail('dsh-create', problem, null, { name })
@@ -375,8 +382,8 @@ export function renameDshInstance(id: string, name: string): CMActionResult {
 export interface DeleteDshInstanceOptions {
   /** Also delete the home directory and everything in it — sessions included. Off by default. */
   deleteFiles?: boolean
-  /** The instance's own name, typed back, when `deleteFiles` is set. */
-  confirmName?: string
+  /** Why the instance is deleted. Required: a short note of at least 3 characters. */
+  note?: string
 }
 
 /**
@@ -386,8 +393,9 @@ export interface DeleteDshInstanceOptions {
  * it is not something this app created, and `deleteFiles` against it would destroy a session store
  * AgentHydra is only ever a reader of. The refusal is unconditional — no confirm string unlocks it.
  *
- * Deleting files requires the name typed back AND the path to be inside our own instances root, so
- * a hand-edited registry pointing `home` at something else cannot be turned into a delete of it.
+ * Every delete needs a `note` saying why. Deleting files also requires the path to be inside our own
+ * instances root, so a hand-edited registry pointing `home` at something else cannot be turned into
+ * a delete of it.
  */
 export function deleteDshInstance(id: string, opts: DeleteDshInstanceOptions = {}): CMActionResult {
   if (id === 'default')
@@ -399,11 +407,9 @@ export function deleteDshInstance(id: string, opts: DeleteDshInstanceOptions = {
     )
   const rec = readStore().instances.find((i) => i.id === id)
   if (!rec) return fail('dsh-delete', `Unknown instance '${id}'.`, null, { id })
+  const noteProblem = deleteNoteProblem(opts.note)
+  if (noteProblem) return fail('dsh-delete', `Refusing to delete: ${noteProblem}`, rec.home, { id })
   if (opts.deleteFiles) {
-    if (opts.confirmName !== rec.name)
-      return fail('dsh-delete', 'Type the instance name to confirm deleting its files.', rec.home, {
-        id,
-      })
     // The registry is a plain JSON file a person can edit. A `home` pointing somewhere else must
     // therefore never become a recursive delete of somewhere else.
     if (!isPathInside(DSH_INSTANCES_ROOT, rec.home))

@@ -32,7 +32,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const servers = useDevServers()
 const { status, statusMissing, projects, projectsError, busy, actionError } = servers
-const setup = ref<FolderSetup | null>(null)
+const setup = shallowRef<FolderSetup | null>(null)
 const logs = ref(new Map<string, string[]>())
 
 const input = computed(() => ({ status: status.value, statusMissing: statusMissing.value, projects: projects.value, projectsError: projectsError.value, cwd: props.cwd, setup: setup.value }))
@@ -79,12 +79,12 @@ const lookAgain = () => (setup.value = null)
 watch(
   () => project.value?.processes.map((p) => `${p.id}:${p.status}`).join(),
   async () => {
-    for (const p of project.value?.processes ?? []) {
-      if (p.status === 'crashed' && !logs.value.has(`${p.id}:${p.exitCode}`)) {
-        const key = `${p.id}:${p.exitCode}`
-        logs.value = new Map(logs.value).set(key, tailLines(await processLogs(p.id).catch(() => [])))
-      }
-    }
+    const fresh = (project.value?.processes ?? []).filter((p) => p.status === 'crashed' && !logs.value.has(`${p.id}:${p.exitCode}`))
+    if (!fresh.length) return
+    const tails = await Promise.all(fresh.map((p) => processLogs(p.id).catch(() => [])))
+    const next = new Map(logs.value)
+    fresh.forEach((p, i) => next.set(`${p.id}:${p.exitCode}`, tailLines(tails[i]!)))
+    logs.value = next
   },
   { immediate: true }
 )
@@ -124,7 +124,8 @@ async function loadProfiles(force = false) {
   try {
     const r = await browserProfiles(cwd)
     if (cwd !== props.cwd) return
-    profiles.value = r
+    // A poll that finds the same profiles keeps the copy on screen, so nothing bound to it redraws.
+    if (JSON.stringify(profiles.value) !== JSON.stringify(r)) profiles.value = r
     profilesError.value = r.error ?? null
   } catch (err) {
     if (cwd === props.cwd) profilesError.value = err instanceof Error ? err.message : String(err)
@@ -155,7 +156,7 @@ function setAllPorts(on: boolean) {
 }
 
 // ---- the tabs: each chat's own, remembered ----
-const state = ref<TabsState>(loadTabs(props.chatId, props.aiBrowser))
+const state = shallowRef<TabsState>(loadTabs(props.chatId, props.aiBrowser))
 const activeTab = computed(() => state.value.tabs.find((t) => t.id === state.value.active) ?? state.value.tabs[0]!)
 watch(state, (s) => saveTabs(props.chatId, s), { deep: true })
 // Opened before the chat's transcript loaded, the pane learns its AI's browser late: still untouched, it goes there.
@@ -283,7 +284,8 @@ const labelOf = (profile: string | null): string | null => (profile ? (profileLi
 function applyPages(profile: string, got: BrowserTab[] | 'closed' | null) {
   if (got === null) return
   const list = (got === 'closed' ? [] : got).filter((p) => !closing.has(p.id))
-  pages.value = { ...pages.value, [profile]: list }
+  // The same tabs on every look (the usual one) keep the old object: titles and the tab strip would re-render for nothing.
+  if (JSON.stringify(list) !== JSON.stringify(pages.value[profile])) pages.value = { ...pages.value, [profile]: list }
   state.value = syncPages(state.value, profile, list)
 }
 /** The browsers this chat uses: those it has a tab for, and the one its AI last drove. */
@@ -334,6 +336,9 @@ watch(
 
 const procOf = (t: PaneTab): DevWebProcess | null => (t.kind === 'page' ? findProc(t.proc) : null)
 const titleOf = (t: PaneTab): string => (t.kind === 'new' ? 'New tab' : t.kind === 'saved' ? savedTabTitle(t, pages.value[t.target ?? ''], labelOf(t.target)) : pageTitle(t.target, procOf(t)))
+// Each tab's title and server, worked out once per change: the strip's rows read them several times per render.
+const tabTitles = computed(() => new Map<string, string>(state.value.tabs.map((t) => [t.id, titleOf(t)])))
+const tabProcs = computed(() => new Map<string, DevWebProcess | null>(state.value.tabs.map((t) => [t.id, procOf(t)])))
 
 // The transcript card's request: the tab for that browser comes forward, else it opens in a new one. A request that
 // fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
@@ -431,7 +436,7 @@ watch(
           role="tab"
           tabindex="0"
           :aria-selected="t.id === activeTab.id"
-          :title="titleOf(t)"
+          :title="tabTitles.get(t.id)"
           class="group relative flex h-8 w-42.5 max-w-47.5 flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-lg ps-2.5 pe-1 transition-colors duration-60 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
           :class="[t.kind === 'saved' && t.page ? 'min-w-33' : 'min-w-11', t.id === activeTab.id ? 'z-10 -mb-px h-8.25 bg-(--bg-page) text-(--text)' : 'text-(--text-2) hover:bg-(--fill-hover) hover:text-(--text)']"
           @click="pick(t.id)"
@@ -439,11 +444,11 @@ watch(
           @mousedown.middle.prevent
           @auxclick.middle.prevent="close(t.id)"
         >
-          <span v-if="procOf(t)" class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(procOf(t)!.status)]" aria-hidden="true" />
+          <span v-if="tabProcs.get(t.id)" class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(tabProcs.get(t.id)!.status)]" aria-hidden="true" />
           <Globe v-else-if="t.kind === 'page' || (t.kind === 'saved' && t.page)" class="size-3.5 shrink-0" aria-hidden="true" />
           <AppWindow v-else-if="t.kind === 'saved'" class="size-3.5 shrink-0" aria-hidden="true" />
           <Search v-else class="size-3.5 shrink-0" aria-hidden="true" />
-          <span class="min-w-0 flex-1 truncate text-ui-sm">{{ titleOf(t) }}</span>
+          <span class="min-w-0 flex-1 truncate text-ui-sm">{{ tabTitles.get(t.id) }}</span>
           <Tip v-if="t.kind === 'saved' && t.page" :label="`Chrome profile: ${t.target}`">
             <span
               class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-3xs leading-4 text-(--text-2)"
@@ -454,7 +459,7 @@ watch(
             type="button"
             class="size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) hover:bg-(--fill-selected) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none group-hover:flex"
             :class="t.id === activeTab.id ? 'flex' : 'hidden'"
-            :aria-label="`Close ${titleOf(t)}`"
+            :aria-label="`Close ${tabTitles.get(t.id)}`"
             @click.stop="close(t.id)"
           ><X class="size-3" /></button>
         </div>
@@ -507,8 +512,8 @@ watch(
         v-show="t.id === activeTab.id"
         :chat-id="chatId"
         :url="t.target"
-        :proc="procOf(t)"
-        :busy="!!procOf(t) && busy.has(procOf(t)!.id)"
+        :proc="tabProcs.get(t.id) ?? null"
+        :busy="!!tabProcs.get(t.id) && busy.has(tabProcs.get(t.id)!.id)"
         :just-started="justStarted.has(t.id)"
         @navigated="navigated(t.id, $event)"
         @toggle="toggle"

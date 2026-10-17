@@ -88,6 +88,25 @@ export function resumeAccount(q: ResumeQuery, data: ResumeData): string | null {
   return null
 }
 
+/** The CLI instance on the account signed in to the Claude Desktop instance a chat runs in: the one linked to that app
+ *  (AgentHydra's associatedDesktopDir), else one on the same login; null when neither is known. A chat at work there is on
+ *  this account, never the default login (owner, 2026-10-15: "shouldn't that just say ... desktop instance instead of
+ *  default login?"). */
+export function desktopAccount(instance: string | null, data: ResumeData): string | null {
+  const desktop = findDesktop(data.desktops, instance)
+  if (!desktop) return null
+  const linked = data.clis.find((c) => !!c.associatedDesktopDir && samePath(c.associatedDesktopDir, desktop.dir))
+  return (linked ?? data.clis.find((c) => sameLogin(cliLogin(c), desktop)))?.id ?? null
+}
+
+/** The list with each Claude Desktop chat's account (desktopAccount) on it. */
+export function withDesktopAccounts(list: ExternalSession[], data: ResumeData): ExternalSession[] {
+  return list.map((s) => {
+    const id = s.source === 'desktop' ? desktopAccount(s.instance, data) : null
+    return id ? { ...s, desktopAccountId: id } : s
+  })
+}
+
 /** Idle there, and a Claude Code session (in place or as a copy) or a Codex chat whose account is known (in place, on Codex): the composer carries it on. */
 export function canResume(s: Pick<ExternalSession, 'status' | 'source' | 'codexAccountId'>): boolean {
   const idle = s.status === 'idle' || s.status === 'stale'

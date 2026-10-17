@@ -5,9 +5,12 @@ fake usage cache and a fake session table in tmp_path, and conftest redirects co
 """
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from hswarm import accounts, claude_usage, config, report_html, utilization  # noqa: E402
 
 UUID_A, UUID_B, UUID_C = "uuid-max20", "uuid-max5", "uuid-pro"
+_agenthydra_prices = accounts._agenthydra_prices  # the real one: conftest swaps in {} for every test
 
 
 @pytest.fixture
@@ -52,6 +56,29 @@ def test_account_id_is_a_stable_hash_and_never_the_uuid():
     assert UUID_A not in a
 
 
+def test_stale_plan_prices_are_answered_at_once_and_fetched_on_another_thread(monkeypatch):
+    """The shared server looks a caller's account up on its event loop for every ledger line, and a price copy past its
+    window was fetched again right there: GET /health waited out AgentHydra's round trip, up to the 2 s timeout
+    (2026-10-16). Only a process's first call may wait; after that the copy stands until a thread brings the next."""
+    reply = threading.Event()
+    fetched_on = []
+
+    def urlopen(url, timeout):
+        fetched_on.append(threading.current_thread())
+        reply.wait(2)
+        return io.BytesIO(json.dumps({"settings": {"planPrices": {"Pro": 25}}}).encode())
+
+    monkeypatch.setenv("AGENTHYDRA_URL", "http://127.0.0.1:9")  # conftest blanks it; urlopen above answers instead
+    monkeypatch.setattr(accounts.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(accounts, "_ah_cache", (time.monotonic() - accounts._AH_TTL_S - 1, {"pro": 20.0}))
+    assert _agenthydra_prices() == {"pro": 20.0}  # the stale copy, while AgentHydra has not answered yet
+    reply.set()
+    assert accounts._ah_fetching.acquire(timeout=5)  # the refresh has finished
+    accounts._ah_fetching.release()
+    assert fetched_on and fetched_on[0] is not threading.current_thread()
+    assert _agenthydra_prices() == {"pro": 25.0}
+
+
 def test_tiers_read_from_the_rate_limit_tier_then_what_agenthydra_displays(hydra):
     inst = accounts.instances()
     assert inst["work"] == {"account": accounts.account_id(UUID_A), "tier": "max_20x"}
@@ -73,6 +100,25 @@ def test_sessions_fold_onto_accounts_and_only_the_ones_that_worked_are_costed(hy
     # One account worked that day, on Max 20x: one day of one plan, and the unattributed session costs nothing.
     assert accounts.day_plan_usd(got) == pytest.approx(200 / accounts.DAYS_PER_MONTH, abs=1e-6)
     assert accounts.day_plan_usd({}) is None  # nothing known is not measured, never zero
+
+
+def test_a_session_the_accounts_do_not_know_reads_them_again_once_a_window_not_once_a_line(hydra, monkeypatch):
+    """Every ledger line looks its caller's account up, and a session the cache did not know read AgentHydra's session
+    table and caches again for each line: about 12 ms a line on the shared server's event loop (2026-10-16)."""
+    monkeypatch.setattr(utilization, "_rechecked", {})
+    reads = []
+    real = accounts.session_instances
+    monkeypatch.setattr(accounts, "session_instances", lambda: reads.append(1) or real())
+    accounts.resolver()
+    reads.clear()
+    assert [utilization.caller_account({"session_id": "sess-new"}) for _ in range(20)] == [""] * 20
+    assert len(reads) == 1
+    db = sqlite3.connect(hydra / "data" / "agenthydra.db")  # AgentHydra's scan reaches the new session
+    db.execute("INSERT INTO session_stats (session_key, session_id, instance) VALUES ('k4', 'sess-new', 'five')")
+    db.commit()
+    db.close()
+    monkeypatch.setattr(utilization, "SESSION_RECHECK_S", 0.0)  # its window has passed: the next line reads again
+    assert utilization.caller_account({"session_id": "sess-new"}) == accounts.account_id(UUID_B)
 
 
 def test_plan_json_overrides_prices_and_can_be_one_flat_figure(hydra):

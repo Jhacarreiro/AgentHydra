@@ -190,7 +190,7 @@ try {
   check('4 same card', still?.kind === 'question' && still.state === 'pending', 'the question is still open under its id', still && 'state' in still ? still.state : 'gone')
 
   // 5. Answered on the new server; a hard kill of its whole tree while the command runs. An account whose
-  //    settings ask before Bash gets the command approved here first, as Jacob would.
+  //    settings ask before Bash gets the command approved here first, as the owner would.
   const ok = await api('POST', `/api/chats/${chatId}/question/${asked.id}`, { answers: { [asked.questions[0]?.question ?? 'Which color?']: 'Blue' } })
   check('5 answer', ok.status === 200, 'the answer reaches Claude Code through the host', ok.status)
   let approved = 0

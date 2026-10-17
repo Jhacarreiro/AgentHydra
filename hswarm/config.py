@@ -2,7 +2,7 @@
 
 Providers are OpenAI-compatible chat endpoints, one TOML file each: the shipped ones in hswarm/providers/, a
 person's own in ~/.hswarm/providers/ (docs/PROVIDERS.md). Adding a provider, a model or a key is a file, never a
-code change (owner asks, Michael, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
+code change (owner asks, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
 spread all over"). ROLES map a kind of work to a model, so a task can say role: "search" and get whatever is wired
 for it on this machine (~/.hswarm/settings.toml).
 
@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -264,7 +265,7 @@ PANEL: list[str] = []
 # Peak windows, UTC, Monday-Friday: 01:00-04:00 and 06:00-10:00.
 PEAK_WINDOWS = prices.peak_windows()  # DeepSeek's full-rate hours, written once in data/prices.json
 
-# ---- routing (owner ask, Michael, 2026-09-17: take the cheaper path to a model, per call) ----
+# ---- routing (owner ask, 2026-09-17: take the cheaper path to a model, per call) ----
 #
 # One logical model, several paths to it (a model's `route` in its provider file), in two TIERS. Price orders paths
 # WITHIN a tier and never across (route_plan): a path marked `fallback` serves only when no primary path has a key
@@ -305,8 +306,9 @@ _ROUTE_VIA_FREE_PROFILES_DEFAULT = ("routine", "general", "research", "decision"
 ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
 # `route_via_free_tools`: the tools a TOOL task may be offered and still go to a Free account, which runs them through a
 # text tool protocol (free_client.py); a task offered any other tool takes its API route. `route_via_free_tool_profiles`:
-# the profiles such a tool task may have (critical and code included: see their asks below). Never edit or shell tools: a Free leg that fails falls back to the API, and an
-# edit it had already made would be left behind it. The defaults are what held up in a blind A/B on 30 real tasks
+# the profiles such a tool task may have (critical and code included: see their asks below). Edit and shell tools only
+# by route_via_free_edit_profiles / _shell_profiles below, whose legs work in a scratch copy of the folder, since a Free
+# leg that fails falls back and an edit made in the real folder would be left behind it. The defaults are what held up in a blind A/B on 30 real tasks
 # against the API answers they had got (2026-10-13, Opus/GPT-6 judges with the task's own tools, mean score of 10):
 # general read 6.2 Free vs 5.8 API, decision read 6.1 vs 8.4, research web 3.8 vs 6.2 with only 4 of 10 served.
 _ROUTE_VIA_FREE_TOOLS_DEFAULT = ("read_file", "list_dir", "glob", "grep", "outline", "unfold", "fetch_output")
@@ -317,6 +319,31 @@ _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT = ("research",)
 ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
 _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general", "decision", "research", "critical", "code")
 ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
+# `route_via_free_edit_profiles` / `route_via_free_shell_profiles`: the profiles whose tool tasks may also be offered the
+# edit tools (FREE_EDIT_TOOLS) / the shell (FREE_SHELL_TOOLS) on Free. Such a leg works in a scratch copy of its folder
+# (scratch.py): a git worktree at HEAD with the checkout's dirty and small ignored files on top, or a copy of a folder that
+# is no checkout. Its changes land in the real folder only when its answer is accepted and every file it touched is
+# still what the copy started from; a failed or refused leg drops the copy, so the task's next route starts clean. An all
+# task is offered both, so its profile must be in both lists.
+# The defaults are what a blind A/B on 19 real edit and all tasks held up (2026-10-17, free_ab run edit-20261017): Sonnet
+# 5.5 on a Claude Free account, in a scratch copy, against the API answers the tasks had got, judged by Opus 5.5 with read
+# tools and both answers' diffs (mean score of 10). Free served 19 of 19. Code edit work: 5 to 4, mean 7.3 vs 7.1, 3
+# judged errors to the API's 5 (9 tasks; the API's glm-5-3-flash took a median 13 s, Free 85 s). Decision all work
+# (verdicts on branches in a folder of five checkouts, with builds and tests in the shell): 9 to 1, mean 7.9 vs 5.1, 5
+# errors to 28 (10 tasks). Not measured, so not on: the shell for code (code all tasks), critical edit and all work, and
+# every other profile; decision's edit tools were measured inside its all tasks, not alone.
+FREE_EDIT_TOOLS = ("write_file", "edit_file")
+FREE_SHELL_TOOLS = ("bash",)
+_ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT: tuple[str, ...] = ("code", "decision")
+ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
+_ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT: tuple[str, ...] = ("decision",)
+ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
+# `route_via_free_edit_asks`: per profile, the models an edit or shell task's Free thread asks for, spelled as
+# route_via_free_tool_asks spells them; a profile not listed takes its route_via_free_tool_asks. Code and decision edit
+# work asks for Sonnet on a Claude account, the model the A/B above measured; code's read asks lead with Luna Thinking,
+# never measured editing. With no Claude account free the task goes on to CliMayte, then its API route.
+_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"code": ("sonnet@claude",), "decision": ("sonnet@claude",)}
+ROUTE_VIA_FREE_EDIT_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT)
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
 # whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
@@ -333,18 +360,37 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # half its time (2026-10-13). About a third of its threads fail at once (generation_error) and take their API route.
 # Code read work (reviews, investigations with read tools only) goes there too: 7 to 5 over 12 real code read tasks,
 # mean 5.9 vs 5.0, 16 judged errors to the API's 53, where GPT-5.6 mini with the claim check drew 7 to 7, mean 4.4 vs 4.9.
+# With no ChatGPT account to take them (2026-10-15: every ChatGPT send failed 404 for a day, and the daemon now rests a
+# failing provider), critical and code read work asks Sonnet 5.5 on a Claude account next, not its API route at once:
+# that route is a flash model (glm-5-3-flash took 235 such tasks that day), and Sonnet beat the API answers 10 to 0 on
+# decision read above. Not yet measured on these two profiles; free_ab can.
 _ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",),
                                                                  "research": ("sonnet@claude", "@chatgpt"),
-                                                                 "critical": ("luna-thinking",), "code": ("luna-thinking",)}
+                                                                 "critical": ("luna-thinking", "sonnet@claude"),
+                                                                 "code": ("luna-thinking", "sonnet@claude")}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 # `route_via_free_check_profiles`: the profiles whose tool tasks on a ChatGPT thread are asked once, before they finish
 # on fewer than free_client.CHECK_READS tool results, to check their claims with their tools (free_client.CHECK). A
 # Claude thread is not asked: Sonnet won without it, and the extra turn spends its account's 5-hour window.
 _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT = ("decision", "research")
 ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
+# `route_via_free_asks`: per profile, the models a TOOL-FREE task's Free thread asks for, best first, spelled as
+# route_via_free_tool_asks spells them: "haiku@claude" or "sonnet@claude" on a Claude account, "@chatgpt" on any ChatGPT
+# account (whatever its model). Routine and general work ask ChatGPT first, then Haiku on Claude; decision and research
+# ask Sonnet on Claude first, then ChatGPT (2026-10-17: ChatGPT's sends were failing, so the Claude ask leads where the
+# task has a choice). Critical is not listed: it stays off Free for tool-free work. A profile not listed asks for its Claude
+# family on whichever account is idle.
+_ROUTE_VIA_FREE_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"routine": ("@chatgpt", "haiku@claude"),
+                                                            "general": ("@chatgpt", "haiku@claude"),
+                                                            "decision": ("sonnet@claude", "@chatgpt"),
+                                                            "research": ("sonnet@claude", "@chatgpt")}
+ROUTE_VIA_FREE_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_ASKS_DEFAULT)
+# `route_via_free_wait_s`: how long a job task whose next route is the paid API waits for a Free account with room before it
+# goes there (free_route.consult, wait). Asks never wait.
+ROUTE_VIA_FREE_WAIT_S = 90.0
 
 _CORES = os.cpu_count() or 4
-# Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
+# Process discipline (owner, 2026-09-15: "make sure we don't end up spinning up a billion sub
 # processes and murdering my cpu"). `api` workers are HTTP calls and cost no process; what costs CPU is the
 # children the sandbox spawns (ripgrep, bash, git) and the headless Claude Code `cc` workers. Every child
 # goes through procgate: at most MAX_TOOL_PROCS per server process, MACHINE_MAX_PROCS across every hswarm
@@ -434,6 +480,8 @@ def _add_provider(name: str, doc: dict, user: bool) -> None:
     for k in ("base_url", "anthropic_url"):
         if isinstance(spec.get(k), str):
             spec[k] = spec[k].strip().rstrip("/")
+    if isinstance(spec.get("region_base_urls"), list):
+        spec["region_base_urls"] = tuple(u.strip().rstrip("/") for u in spec["region_base_urls"] if isinstance(u, str) and u.strip())
     if "key_priority" in spec:
         spec["key_priority"] = ranks(spec["key_priority"])
     PROVIDERS[name] = PROVIDERS.get(name, _default_provider(name)) | spec
@@ -528,46 +576,98 @@ def _inherit() -> None:
         MODELS[name] = resolved(name, ())
 
 
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(p, str) for p in value)
+
+
 def _apply_settings(doc: dict) -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
-    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    _apply_cap_and_routing(doc)
+    _apply_climayte_settings(doc)
+    _apply_free_settings(doc)
+    _apply_free_lists(doc)
+    _apply_load_roles_panel(doc)
+
+
+def _apply_cap_and_routing(doc: dict) -> None:
+    global PRICE_ROUTING, DAILY_CAP_USD
     cap = doc.get("daily_cap_usd")
-    if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
+    if _is_number(cap) and cap > 0:
         DAILY_CAP_USD = float(cap)
     if isinstance(doc.get("routing"), bool):
         PRICE_ROUTING = doc["routing"]
+
+
+def _apply_climayte_settings(doc: dict) -> None:
+    global ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     if isinstance(doc.get("route_via_climayte"), bool):
         ROUTE_VIA_CLIMAYTE = doc["route_via_climayte"]
     mx, st = doc.get("route_via_climayte_max"), doc.get("route_via_climayte_start_s")
-    if isinstance(mx, int) and not isinstance(mx, bool) and mx >= 0:
+    if _is_int(mx) and mx >= 0:
         ROUTE_VIA_CLIMAYTE_MAX = mx
-    if isinstance(st, (int, float)) and not isinstance(st, bool) and st > 0:
+    if _is_number(st) and st > 0:
         ROUTE_VIA_CLIMAYTE_START_S = float(st)
+
+
+def _apply_free_settings(doc: dict) -> None:
+    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES
     if isinstance(doc.get("route_via_free"), bool):
         ROUTE_VIA_FREE = doc["route_via_free"]
     fmx, fpr = doc.get("route_via_free_max"), doc.get("route_via_free_profiles")
-    if isinstance(fmx, int) and not isinstance(fmx, bool) and fmx >= 0:
+    if _is_int(fmx) and fmx >= 0:
         ROUTE_VIA_FREE_MAX = fmx
-    if isinstance(fpr, list) and all(isinstance(p, str) for p in fpr):
+    if _is_str_list(fpr):
         ROUTE_VIA_FREE_PROFILES = tuple(p.strip().lower() for p in fpr)
+
+
+def _apply_free_lists(doc: dict) -> None:
+    global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S
+    global ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES, ROUTE_VIA_FREE_EDIT_ASKS
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
-    if isinstance(ftl, list) and all(isinstance(t, str) for t in ftl):
+    if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
-    if isinstance(ftp, list) and all(isinstance(p, str) for p in ftp):
+    if _is_str_list(ftp):
         ROUTE_VIA_FREE_TOOL_PROFILES = tuple(p.strip().lower() for p in ftp)
     fwp = doc.get("route_via_free_web_profiles")
-    if isinstance(fwp, list) and all(isinstance(p, str) for p in fwp):
+    if _is_str_list(fwp):
         ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
+    fep, fsp = doc.get("route_via_free_edit_profiles"), doc.get("route_via_free_shell_profiles")
+    if _is_str_list(fep):
+        ROUTE_VIA_FREE_EDIT_PROFILES = tuple(p.strip().lower() for p in fep)
+    if _is_str_list(fsp):
+        ROUTE_VIA_FREE_SHELL_PROFILES = tuple(p.strip().lower() for p in fsp)
+    fea = doc.get("route_via_free_edit_asks")
+    if isinstance(fea, dict):
+        ROUTE_VIA_FREE_EDIT_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fea.items()
+                                    if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
     fcp = doc.get("route_via_free_check_profiles")
-    if isinstance(fcp, list) and all(isinstance(p, str) for p in fcp):
+    if _is_str_list(fcp):
         ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)
     fta = doc.get("route_via_free_tool_asks")
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
                                     if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+    fas = doc.get("route_via_free_asks")
+    if isinstance(fas, dict):
+        ROUTE_VIA_FREE_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fas.items()
+                               if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+    fws = doc.get("route_via_free_wait_s")
+    if _is_number(fws) and fws >= 0:
+        ROUTE_VIA_FREE_WAIT_S = float(fws)
+
+
+def _apply_load_roles_panel(doc: dict) -> None:
+    global LOAD_BIAS
     bias = doc.get("load_bias")
-    if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
+    if _is_number(bias) and bias >= 0:
         LOAD_BIAS = float(bias)
     ROLES.update({str(k).lower(): (str(v).lower() if v else None) for k, v in (doc.get("roles") or {}).items()})
     if isinstance(doc.get("panel"), list) and len(doc["panel"]) >= 2:
@@ -593,7 +693,8 @@ _BUILTIN_DOCS = _builtins()
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES, ROUTE_VIA_FREE_ASKS
+    global ROUTE_VIA_FREE_WAIT_S, ROUTE_VIA_FREE_EDIT_PROFILES, ROUTE_VIA_FREE_SHELL_PROFILES, ROUTE_VIA_FREE_EDIT_ASKS
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -607,8 +708,18 @@ def _reset() -> None:
     ROUTE_VIA_FREE_TOOL_ASKS = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
     ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
     ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_ASKS, ROUTE_VIA_FREE_WAIT_S = dict(_ROUTE_VIA_FREE_ASKS_DEFAULT), 90.0
+    ROUTE_VIA_FREE_EDIT_PROFILES = _ROUTE_VIA_FREE_EDIT_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_SHELL_PROFILES = _ROUTE_VIA_FREE_SHELL_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_EDIT_ASKS = dict(_ROUTE_VIA_FREE_EDIT_ASKS_DEFAULT)
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
+
+
+# reload() empties the registry's tables and fills them again in place (other modules hold them by reference), so a
+# thread reading them meanwhile would see them half built. reload() holds this lock; so does a reader that runs off the
+# event loop and needs the registry whole (settings.snapshot).
+RELOAD_LOCK = threading.RLock()
 
 
 def reload() -> None:
@@ -616,24 +727,25 @@ def reload() -> None:
     then the user's provider files and settings.toml. Order is the point: a price a person wrote outlives the next
     refresh. Called at import; tests call it too."""
     global _LOADED
-    stamp = _stamp()  # taken before the reads: a change landing mid-read shows up as a new stamp next refresh()
-    _reset()
-    for name, spec in (_read_json(CATALOGUE_FILE).get("models") or {}).items():
-        if isinstance(spec, dict) and spec.get("provider") in PROVIDERS:
-            MODELS[str(name).strip().lower()] = spec
-    for cache in (_LAST_GOOD, _KEYS_READ):  # a file that is gone takes what it last said with it
-        for path in [p for p in cache if not Path(p).exists()]:
-            del cache[path]
-    for f in sorted(PROVIDERS_DIR.glob("*.toml")):
-        if not NAME_RX.match(f.stem.lower()):
-            print(f"[hswarm] {f.name}: not a provider name; ignoring it", file=sys.stderr)
-            continue
-        _add_provider(f.stem.lower(), _user_doc(f), user=True)
-    _apply_settings(_user_doc(SETTINGS_FILE))
-    _inherit()
-    _LOADED = stamp
-    from . import redaction  # the exact-value key scrub rebuilds its set from the keys this reload can see
-    redaction.forget_keys()
+    with RELOAD_LOCK:
+        stamp = _stamp()  # taken before the reads: a change landing mid-read shows up as a new stamp next refresh()
+        _reset()
+        for name, spec in (_read_json(CATALOGUE_FILE).get("models") or {}).items():
+            if isinstance(spec, dict) and spec.get("provider") in PROVIDERS:
+                MODELS[str(name).strip().lower()] = spec
+        for cache in (_LAST_GOOD, _KEYS_READ):  # a file that is gone takes what it last said with it
+            for path in [p for p in cache if not Path(p).exists()]:
+                del cache[path]
+        for f in sorted(PROVIDERS_DIR.glob("*.toml")):
+            if not NAME_RX.match(f.stem.lower()):
+                print(f"[hswarm] {f.name}: not a provider name; ignoring it", file=sys.stderr)
+                continue
+            _add_provider(f.stem.lower(), _user_doc(f), user=True)
+        _apply_settings(_user_doc(SETTINGS_FILE))
+        _inherit()
+        _LOADED = stamp
+        from . import redaction  # the exact-value key scrub rebuilds its set from the keys this reload can see
+        redaction.forget_keys()
 
 
 def _stamp() -> tuple:
@@ -660,6 +772,14 @@ def refresh() -> bool:
 def provider_enabled(provider: str) -> bool:
     """False for a provider switched off in settings (`enabled = false` in its user file)."""
     return PROVIDERS.get(provider, {}).get("enabled", True) is not False
+
+
+def regions(provider: str) -> tuple[str, ...]:
+    """Every base URL a key of this provider may be sent to: `base_url`, then the provider's other regions
+    (`region_base_urls`) in its file's order. A provider that sells region-locked keys (a China key answers 401 on the
+    international endpoint) lists them, and client.find_region looks for a key's own region among these and nowhere else."""
+    spec = PROVIDERS.get(provider, {})
+    return tuple(dict.fromkeys(u for u in (spec.get("base_url"), *(spec.get("region_base_urls") or ())) if u))
 
 
 def provider_chat(provider: str) -> bool:

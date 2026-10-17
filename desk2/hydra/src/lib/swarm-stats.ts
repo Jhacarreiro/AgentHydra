@@ -1,5 +1,5 @@
 import { j } from '@/lib/api'
-import { KIT_POLL_MS, usePoll } from '@/lib/kit'
+import { usePoll } from '@/lib/kit'
 
 export interface SwarmStatsDay {
   day: string
@@ -43,8 +43,6 @@ export interface SwarmAccountRow {
   last?: string | null
 }
 
-export const POLL_MS = KIT_POLL_MS
-
 /** The poll key of the HSwarm stats feed for a window: shared by useSwarmStats and fetchStats. */
 export const statsKey = (days: number) => `hswarm-stats:${days}`
 export const loadStats = (days: number) => j<SwarmStatsData>(`/api/hswarm/api/stats?days=${days}`)
@@ -54,13 +52,6 @@ export const loadStats = (days: number) => j<SwarmStatsData>(`/api/hswarm/api/st
 export function useSwarmStats(days = 14) {
   const { data, loading, error, offline, stop } = usePoll(statsKey(days), () => loadStats(days))
   return { stats: data, loading, error, offline, stop }
-}
-
-/** An account's saved dollars: the feed's own figure when it carries one, else its estimate less
- *  the worker's bill; null when the estimate was not measured. */
-export function accountSaved(row: SwarmAccountRow): number | null {
-  if (row.saved_usd !== undefined) return row.saved_usd
-  return row.est_usd == null ? null : row.est_usd - row.worker_usd
 }
 
 export interface WindowSum {

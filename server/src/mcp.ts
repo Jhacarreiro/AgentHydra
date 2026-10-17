@@ -30,7 +30,6 @@
 // are mcp-fan-out.ts. TOOLS below assembles them in the order agents have always seen.
 
 import { RECENT_FINISHED } from './climayte-lib'
-import { buildTrace, type CliMayteBy, parseBy, processLabel } from './climayte-trace'
 import { VERSION } from './config'
 import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
 import { BABYSITTER_TOOLS } from './mcp-babysitter'
@@ -56,19 +55,28 @@ import {
   withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
+import {
+  climaytePingLine,
+  climayteStatusPings,
+  climayteStatusRead,
+  dispatchOrigin,
+  markSeen,
+  SEEN_WAIT_MS,
+  statusScope,
+  within,
+} from './mcp-climayte'
 import { CORE_TOOLS } from './mcp-core'
 import { DASHBOARD_TOOLS } from './mcp-dashboards'
 import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
-import { MANAGER_TOOLS } from './mcp-managers'
 import { withOutputShaping } from './mcp-output'
+import { PRICECHECK_TOOLS } from './mcp-pricecheck'
 import { ROUTINES_TOOLS } from './mcp-routines'
 import {
   CALLER_AWARE_TOOLS,
   CALLER_PID_ARG,
-  type CallerChatOrigin,
   callerOrigin,
   callerPidFromArgs,
   instanceLabel,
@@ -79,6 +87,8 @@ import {
 import { SESSION_TOOLS } from './mcp-session-tools'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
+import { SUE_DREDD_TOOLS } from './mcp-sue-dredd'
+import { getPeopleAddon } from './people-host'
 import type { UsageSnapshot } from './types'
 
 // Tests, index.ts and main.ts import these from here, where they have always lived.
@@ -210,201 +220,8 @@ async function resolveMoveTarget(
   return { toRef: String(row.num), targetNote: targetConfirmation('to', row) }
 }
 
-/** What a CliMayte dispatch answers about its pings (docs/CLIMAYTE.md "Pings to the dispatching
- *  chat"). `route`: the route's own answer (absent when this daemon predates pings). */
-function climaytePingLine(
-  caller: { origin: CallerChatOrigin | null; why: string | null },
-  route: unknown,
-  group: string,
-): string {
-  const off = (why: string) =>
-    `off: ${why}; run python ~/.claude/tools/climayte_wait.py --group ${group}`
-  if (!caller.origin) return off(caller.why ?? 'the calling chat could not be identified')
-  const r = route as { on?: boolean; why?: string; to?: string } | null | undefined
-  if (!r || typeof r.on !== 'boolean') return off('this AgentHydra daemon does not send pings yet')
-  if (!r.on) return off(r.why ?? 'pings are off')
-  if (r.to) return `on: manager ${r.to} is sent a message when work settles`
-  return `on: ${caller.origin.sessionId.slice(0, 8)} is messaged when work settles (${caller.origin.how})`
-}
-
-/** The label of the process that called this tool (its script, else its program), for a dispatch whose
- *  caller is no chat: the HTTP caller's pid, or this stdio server's parents. Null when it cannot be read. */
-async function mcpProcessLabel(a: Record<string, unknown>): Promise<string | null> {
-  const pid = await callerPidFromArgs(a)
-  if (pid === null) return null
-  if (pid === undefined) return processLabel(process.pid, false)
-  if (pid === process.pid) return 'AgentHydra'
-  return processLabel(pid, true)
-}
-
-/** The calling chat for a dispatch (its ping origin), unless the caller opted out with `notify: false`, and
- *  the `by` the route records as the trace. The route's own socket is this daemon, so it cannot see the
- *  caller: whenever the origin it is sent is null, the trace goes in `by` (the chat found here, else the
- *  process, else the label the caller declared). A malformed `by` is refused here, as the route would. */
-async function dispatchOrigin(
-  a: Record<string, unknown>,
-): Promise<{ origin: CallerChatOrigin | null; why: string | null; by: CliMayteBy | undefined }> {
-  const declared = parseBy(a.by)
-  if (declared.why) throw new Error(declared.why)
-  const caller = await callerOrigin(a)
-  const origin = a.notify === false ? null : caller.origin
-  const why = a.notify === false ? 'notify: false' : caller.why
-  if (origin && !declared.by) return { origin, why: null, by: undefined }
-  const trace = await buildTrace({
-    chatSessionId: caller.origin?.sessionId,
-    by: declared.by,
-    process: () => mcpProcessLabel(a),
-  })
-  return {
-    origin,
-    why: origin ? null : why,
-    by: { label: trace.label ?? 'a chat', sessionId: trace.sessionId },
-  }
-}
-
-/** climayte_status's ping extras: `ping: true` adopts the group's live workers without an origin
- *  for the caller; pings no channel delivered to the caller are shown (and marked read). Null when
- *  there is nothing to add. Never throws: a status read must not fail on its extras. */
-async function climayteStatusPings(
-  a: Record<string, unknown>,
-  group: string | undefined,
-): Promise<Record<string, unknown> | null> {
-  const extra: Record<string, unknown> = {}
-  let caller: { origin: CallerChatOrigin | null; why: string | null } | null = null
-  if (a.ping === true) {
-    if (!group) extra.ping = 'off: ping: true needs a group'
-    else {
-      caller = await callerOrigin(a)
-      try {
-        const r = caller.origin
-          ? ((await api('/api/corch/adopt', {
-              method: 'POST',
-              headers: JSON_HEADERS,
-              body: JSON.stringify({ group, origin: caller.origin }),
-            })) as { adopted?: number; ping?: unknown })
-          : null
-        if (r) extra.adopted = r.adopted ?? 0
-        extra.ping = climaytePingLine(caller, r?.ping, group)
-      } catch (err) {
-        const why = err instanceof Error ? err.message : String(err)
-        extra.ping = climaytePingLine({ origin: null, why }, null, group)
-      }
-    }
-  }
-  try {
-    const { unread } = (await api('/api/corch/pings')) as { unread?: string[] }
-    if (Array.isArray(unread) && unread.length) {
-      caller ??= await callerOrigin(a)
-      const sid = caller.origin?.sessionId
-      if (sid && unread.includes(sid))
-        extra.unreadPings = await api('/api/corch/pings/read', {
-          method: 'POST',
-          headers: JSON_HEADERS,
-          body: JSON.stringify({ sessionId: sid }),
-        })
-    }
-  } catch {
-    // a daemon without the pings route: nothing unread to show
-  }
-  return Object.keys(extra).length ? extra : null
-}
-
-/** The longest a scoped status read or a cancel holds its answer, past the answer itself, for markSeen. The trace
- *  starts with the call and keeps its own CALLER_ORIGIN_BUDGET_MS: a slower one stamps after the answer has gone.
- *  A 3 s budget for the trace itself missed on the first read after a daemon restart (2026-10-13, at 99% CPU). */
-const SEEN_WAIT_MS = 3_000
-
-/** Wait for `p` at most `ms`; it goes on either way. */
-async function within(p: Promise<unknown>, ms: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([p, new Promise((r) => (timer = setTimeout(r, ms)))])
-  clearTimeout(timer)
-}
-
-/** Tell the daemon the calling chat has looked at `scope` as of `at` (a scoped climayte_status read, or its own
- *  climayte_cancel), so the pings queued about those workers before then are left out (climayte-ping.ts stale).
- *  Never throws: a read or a cancel must not fail on its stamp; without one the ping goes as before. */
-async function markSeen(
-  trace: Promise<{ origin: CallerChatOrigin | null }>,
-  scope: { ids?: string[]; group?: string },
-  at: number,
-): Promise<void> {
-  try {
-    const { origin } = await trace
-    if (!origin || (!scope.group && !scope.ids?.length)) return
-    await api('/api/corch/seen', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ sessionId: origin.sessionId, ...scope, at }),
-    })
-  } catch {
-    // a daemon without the seen route, or a stamp that failed: the ping goes as it would have
-  }
-}
-
-/** What a climayte_status call looked at, for markSeen: its ids, else its group. Nothing for an unscoped list
- *  or `active` (finished workers it did not show). */
-function statusScope(
-  a: Record<string, unknown>,
-  group: string | undefined,
-): { ids?: string[]; group?: string } | null {
-  if (a.active === true) return null
-  const ids = [
-    ...(a.id != null && str(a.id) ? [str(a.id)] : []),
-    ...(Array.isArray(a.ids)
-      ? a.ids.filter((x): x is string => typeof x === 'string' && x !== '')
-      : []),
-  ]
-  if (ids.length) return { ids }
-  return group ? { group } : null
-}
-
-/** climayte_status's own answer: one worker, a wave, or the list in scope. `waitCap`: the most it may
- *  watch, what the call has left of CLIMAYTE_MAX_WAIT_S. */
-async function climayteStatusRead(
-  a: Record<string, unknown>,
-  group: string | undefined,
-  waitCap: number,
-  seenBy?: string,
-): Promise<unknown> {
-  const wait = Math.min(waitCap, Math.max(0, Number(a.wait_seconds) || 0))
-  const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
-  if (a.wave != null && str(a.wave)) {
-    const w = str(a.wave)
-    const wave = (await api(`/api/corch/waves/${encodeURIComponent(w)}`)) as { group?: string }
-    const part = (group: string) =>
-      api(`/api/corch/workers${qs({ group, brief: 1, all: a.all === true ? 1 : undefined })}`)
-    const [manager, tasks] = await Promise.all([part(`mgr-${w}`), part(wave?.group ?? '')])
-    return [...(manager as unknown[]), ...(tasks as unknown[])]
-  }
-  if (a.id != null && str(a.id) && a.report !== true)
-    return api(
-      `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined, seen_by: seenBy })}`,
-    )
-  const limit =
-    a.limit != null && Number.isFinite(Number(a.limit))
-      ? Math.max(0, Math.floor(Number(a.limit)))
-      : group
-        ? undefined
-        : RECENT_FINISHED
-  const report = a.report === true
-  const chars = Number(a.chars)
-  return api(
-    `/api/corch/workers${qs({
-      group,
-      id: report && a.id != null && str(a.id) ? str(a.id) : undefined,
-      ids: ids.length ? ids.join(',') : undefined,
-      active: a.active === true ? 1 : undefined,
-      limit: ids.length ? undefined : limit,
-      brief: report ? undefined : 1,
-      all: a.all === true ? 1 : undefined,
-      report: report ? 1 : undefined,
-      chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
-      wait: wait > 0 ? wait : undefined,
-      seen_by: seenBy,
-    })}`,
-  )
-}
+/** The people add-on's own tools (server/src/people-host.ts); none without it. */
+const PEOPLE_ADDON_TOOLS: HydraTool[] = (await getPeopleAddon())?.tools ?? []
 
 export const TOOLS: HydraTool[] = [
   // --- sessions (read-only), analytics, queue, incidents, live agent status: mcp-session-tools.ts
@@ -918,6 +735,17 @@ export const TOOLS: HydraTool[] = [
                 type: 'boolean',
                 description:
                   'true for a worker that only reads and edits files (a builder that runs no build or test): it has no shell and no MCP server but climayte_ask, and it starts at once on a busy machine instead of waiting for the CPU. Its `check`, if any, is still run by CliMayte after it reports.',
+              },
+              role: {
+                type: 'string',
+                enum: ['seat'],
+                description:
+                  "'seat' for a worker that carries a persona (`persona`): it is dispatched like any other. Omit it for an ordinary task, which is a drone: a drone never starts workers, so its climayte_run, climayte_manage and fan_out are refused.",
+              },
+              persona: {
+                type: 'string',
+                description:
+                  "With role 'seat': the id of a catalog entry (the hydra-core catalog) for the persona the worker carries.",
               },
               size: {
                 type: 'string',
@@ -1682,7 +1510,7 @@ export const TOOLS: HydraTool[] = [
       if (a.title != null && str(a.title).trim() !== '') args.push('--title', str(a.title).trim())
       if (a.dry_run === true) args.push('--dry-run')
       // Off by default, and migrate_chat enforces the same default independently (exit 7),
-      // so omitting this can only ever be safe. Owner, Michael, 2026-09-05: a move touches
+      // so omitting this can only ever be safe. Owner, 2026-09-05: a move touches
       // unarchived chats only, unless the human asked for that specific chat.
       if (a.archived === true) args.push('--archived')
       // ⛔ THE MOVE MAY OUTLAST THE CALL (2026-09-30): the desktop app's MCP client drops a call at
@@ -1983,7 +1811,9 @@ export const TOOLS: HydraTool[] = [
     () => LISTED_TOOLS,
   ),
   ...DASHBOARD_TOOLS,
-  ...MANAGER_TOOLS,
+  ...PRICECHECK_TOOLS,
+  ...SUE_DREDD_TOOLS,
+  ...PEOPLE_ADDON_TOOLS,
   ...CORE_TOOLS,
   {
     name: 'archive_desktop_chat',
@@ -2168,7 +1998,7 @@ export const TOOLS: HydraTool[] = [
     name: 'orchestrator_operation',
     listed: true,
     description:
-      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
+      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A chat move (migrate_batch, migrate_chat) keeps running and keeps its record through a daemon restart. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
     inputSchema: S({
       id: {
         type: 'string',
@@ -2460,7 +2290,13 @@ Always name the account when you quote a percentage. A number a person gives you
 
 Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained tasks on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens visible chats on other accounts; fan_out_status reads them and fan_out_send steers them. Delete a probe chat you create afterwards with hydra_run { tool: 'fan_out_delete', args: { group } }. move_chat moves a chat to another account. add_queue_item and launch_terminal_session refuse every call.
 
-Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.`
+Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.${
+  // Seen only as a name among hundreds of deferred tools, price_check read as a shop-price lookup
+  // and pages went out unpriced (2026-10-16); it is price_tag since. Only when the private price check is installed.
+  PRICECHECK_TOOLS.some((t) => t.name === 'price_tag')
+    ? '\n\nBefore and after you build, change or review a page or screen, price it with price_tag { mode: "page", page }: what it costs the person looking (words, controls, fields). Cheaper wins; say both prices.'
+    : ''
+}`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
@@ -2483,13 +2319,18 @@ export function runMcp(): Promise<void> {
 /** Old tool names still answered (never listed): a chat keeps the tool list it got at its start,
  *  but its MCP process restarts onto new code with the daemon, so after a rename every call by the
  *  old name failed with "Unknown tool" mid-run (2026-10-01, Corch -> CliMayte: the orchestrator of
- *  a live run lost every corch_* tool and carried on through the HTTP routes). */
-export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries(
-  TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
+ *  a live run lost every corch_* tool and carried on through the HTTP routes). price_check* became
+ *  price_tag* on 2026-10-16 (the owner: a name that says what it is for). */
+export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries([
+  ...TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
     t.name.replace(/^climayte_/, 'corch_'),
     t.name,
   ]),
-)
+  ...PRICECHECK_TOOLS.filter((t) => t.name.startsWith('price_tag')).map((t) => [
+    t.name.replace(/^price_tag/, 'price_check'),
+    t.name,
+  ]),
+])
 
 /** `tools` with old names answered: the stdio engine (shared server-lib mcp-stdio.mjs, synced from
  *  the kit, so not edited here) lists `tools` with `map` and looks a call up with `find(predicate)`;

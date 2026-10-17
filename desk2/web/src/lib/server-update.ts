@@ -2,7 +2,7 @@
 // after it started, on every hello and every minute, and the Menu restarts the server onto that code. A change
 // to the window alone needs no restart (stale-bundle.ts).
 
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type { ServerUpdate } from '@shared/protocol'
 
 const LOOK_EVERY_MS = 60_000
@@ -28,7 +28,7 @@ export function markUpdateSeen(seen: boolean): void {
   storage?.setItem(SEEN_KEY, seen ? '1' : '0')
 }
 /** A restart asked for and not yet answered by the new server's hello, or why it could not start. */
-export const restartState = ref<{ restarting: true } | { error: string } | null>(null)
+export const restartState = shallowRef<{ restarting: true } | { error: string } | null>(null)
 
 /** What the Menu shows: null while the server runs the code on disk. */
 export interface UpdateOffer {

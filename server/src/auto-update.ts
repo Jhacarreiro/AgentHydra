@@ -25,6 +25,9 @@
  * Settings are persisted via db.ts's setSetting/getSetting (same pattern scheduler.ts uses); primed
  * + toggled live from POST /api/update/settings; started in server/src/index.ts after boot.
  */
+import { watch } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
+import { spawnCaptured } from './core/process'
 import { getSetting, setSetting } from './db'
 import { applyUpdate, checkForUpdate, type UpdateStatus } from './updater'
 
@@ -47,7 +50,7 @@ export interface AutoUpdateHooks {
   check: typeof checkForUpdate
   apply: typeof applyUpdate
   /** Restart the daemon so the freshly-pulled code takes over. Wired by server/src/index.ts. */
-  relaunch: () => void
+  relaunch: () => void | boolean | Promise<void | boolean>
   /** True when dispatch runs are in flight. An update relaunches the daemon; even though runs now
    *  survive that (they're detached + reattached), we DEFER updating while the queue is busy so a
    *  relaunch never churns a live run's stream, for at most AUTO_UPDATE_MAX_DEFER_S. Wired by
@@ -92,6 +95,9 @@ let started = false // true only after the daemon finishes booting (startAutoUpd
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
 let applying = false // an apply is in flight — never overlap checks/applies
+let pendingRelaunch = false
+let pendingRelaunchGuard: (() => boolean) | null = null
+let relaunchRequest: Promise<boolean> | null = null
 /** When the waiting update was first held back by busy runs; null while nothing waits on them. */
 let deferredSince: number | null = null
 
@@ -156,6 +162,33 @@ export interface AutoUpdateRunResult {
   reason?: string
 }
 
+/** An applied update still needs its restart while the manual apply's guard holds it (a CliMayte worker the
+ * daemon spawned itself) or the handoff failed. Keep retrying that handoff without applying the same update
+ * again, including after a manual apply. */
+export function relaunchAfterUpdate(mayRelaunch?: () => boolean): Promise<boolean> {
+  pendingRelaunch = true
+  if (mayRelaunch) pendingRelaunchGuard = mayRelaunch
+  if (relaunchRequest) return relaunchRequest
+  if (pendingRelaunchGuard && !pendingRelaunchGuard()) {
+    retime()
+    return Promise.resolve(false)
+  }
+  relaunchRequest = Promise.resolve()
+    .then(() => hooks.relaunch())
+    .then((handedOver) => {
+      if (handedOver === false) return false
+      pendingRelaunch = false
+      pendingRelaunchGuard = null
+      return true
+    })
+    .catch(() => false)
+    .finally(() => {
+      relaunchRequest = null
+      retime()
+    })
+  return relaunchRequest
+}
+
 /**
  * One check → maybe apply → maybe relaunch. Applies ONLY when the engine reports an update is
  * available AND applicable (`canApply`: clean tree, on a branch with an update remote) — so a dirty
@@ -164,6 +197,20 @@ export interface AutoUpdateRunResult {
  */
 export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRunResult> {
   if (applying) return { checked: false, applied: false, relaunched: false, reason: 'busy' }
+  if (pendingRelaunch) {
+    applying = true
+    try {
+      const relaunched = await relaunchAfterUpdate()
+      return {
+        checked: false,
+        applied: false,
+        relaunched,
+        ...(relaunched ? {} : { reason: 'restart-pending' }),
+      }
+    } finally {
+      applying = false
+    }
+  }
   let status: Awaited<ReturnType<typeof checkForUpdate>>
   try {
     status = await hooks.check()
@@ -208,8 +255,13 @@ export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRun
     const res = await hooks.apply()
     if (!res.ok) return { checked: true, applied: false, relaunched: false, reason: 'apply-failed' }
     if (res.restartRequired) {
-      hooks.relaunch()
-      return { checked: true, applied: true, relaunched: true }
+      const relaunched = await relaunchAfterUpdate()
+      return {
+        checked: true,
+        applied: true,
+        relaunched,
+        ...(relaunched ? {} : { reason: 'restart-pending' }),
+      }
     }
     return { checked: true, applied: true, relaunched: false }
   } catch {
@@ -246,6 +298,7 @@ export async function runUpdateCheckOnce(): Promise<{ ok: boolean; updateAvailab
 // what made "I was never told there was an update" the default experience — see lastCheck above.
 /** Seconds until the next tick, given what this loop is currently for. */
 function tickIntervalSecs(): number {
+  if (pendingRelaunch) return 5
   return enabled ? intervalSecs : UPDATE_CHECK_INTERVAL_S
 }
 function schedule(): void {
@@ -255,7 +308,7 @@ async function runTick(): Promise<void> {
   timer = null
   ticking = true
   try {
-    if (enabled) await runAutoUpdateOnce()
+    if (enabled || pendingRelaunch) await runAutoUpdateOnce()
     else await runUpdateCheckOnce()
   } catch {
     /* a round failing is non-fatal — we just try again next window */
@@ -291,6 +344,8 @@ export function startAutoUpdate(): void {
 export function stopAutoUpdate(): void {
   started = false
   deferredSince = null
+  pendingRelaunch = false
+  pendingRelaunchGuard = null
   if (timer) {
     clearTimeout(timer)
     timer = null
@@ -311,4 +366,66 @@ export function setAutoUpdateIntervalSecs(secs: number): number {
   setSetting(SETTING_INTERVAL, String(intervalSecs))
   retime()
   return intervalSecs
+}
+
+// ── a push from this PC is taken at once ─────────────────────────────────────────────────────
+//
+// The live checkout is a git worktree of the working one (scripts/live-checkout.ps1), so both share one git folder, and
+// a push from the working checkout moves the upstream's remote-tracking ref there (refs/remotes/origin/main). Watching
+// that ref runs the same unattended tick PUSH_SETTLE_MS after it last moved, instead of up to a whole interval later
+// (owner, 2026-10-14, a landed change waiting up to 15 minutes for live: "whatever you're waiting on shouldn't wait").
+// A burst of lands is one apply, and the tick's own gates still hold (a clean tree, busy runs, auto-apply off means a
+// check only). A push from another PC still arrives at the next tick.
+
+/** Quiet time after the ref last moved, so one land's commits, or a few lands in a row, are one apply. */
+export const PUSH_SETTLE_MS = 20_000
+let settleTimer: ReturnType<typeof setTimeout> | null = null
+
+/** The ref moved: run the tick once it has been still for `settleMs`. */
+function refMoved(settleMs: number): void {
+  if (!started) return
+  if (settleTimer) clearTimeout(settleTimer)
+  settleTimer = setTimeout(() => {
+    settleTimer = null
+    // A tick in flight read the ref before it moved (or moved it itself, fetching): look again once it is done.
+    if (ticking) return refMoved(settleMs)
+    if (timer) clearTimeout(timer)
+    timer = null
+    void runTick()
+  }, settleMs)
+  settleTimer.unref?.()
+}
+
+/** Watch the folder `dir` for the ref file `name` moving (git writes `<name>.lock`, then renames it). Returns the stop. */
+export function watchRemoteRef(dir: string, name: string, settleMs = PUSH_SETTLE_MS): () => void {
+  const watcher = watch(dir, (_event, file) => {
+    const leaf = String(file ?? '')
+    if (leaf === name || leaf === `${name}.lock`) refMoved(settleMs)
+  })
+  watcher.on('error', () => watcher.close())
+  return () => {
+    watcher.close()
+    if (settleTimer) clearTimeout(settleTimer)
+    settleTimer = null
+  }
+}
+
+/** Watch the upstream ref of the source checkout at `appRoot` (server/src/index.ts). Null when it has no upstream or
+ *  its ref folder cannot be watched: the timer alone still updates it. */
+export async function watchPushes(appRoot: string): Promise<(() => void) | null> {
+  const git = (args: string[]) =>
+    spawnCaptured(['git', ...args], { cwd: appRoot, timeoutMs: 10_000, lane: 'updater' })
+  const [common, upstream] = await Promise.all([
+    git(['rev-parse', '--git-common-dir']),
+    git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
+  ])
+  const up = upstream.code === 0 ? upstream.stdout.trim() : ''
+  const slash = up.indexOf('/')
+  if (common.code !== 0 || slash <= 0) return null
+  const ref = join(resolve(appRoot, common.stdout.trim()), 'refs', 'remotes', up)
+  try {
+    return watchRemoteRef(dirname(ref), basename(ref))
+  } catch {
+    return null
+  }
 }

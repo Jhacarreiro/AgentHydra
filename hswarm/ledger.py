@@ -56,7 +56,10 @@ def error_fields(res) -> dict:
 
 def free_miss_row(note: dict, job: str, task: str, caller: dict | None = None) -> dict | None:
     """The EXTRA ledger row for a Free try HSwarm did not accept (the API row that then served the task is the task):
-    model free:<model>, provider free, status error|timeout, cost 0. None when the note is not a Free miss."""
+    model free:<model>, provider free, status error|timeout, cost 0, and the daemon's or the run's own error text (at
+    most 200 characters) in `free_error`: the route note that carried it is replaced by the leg that served the task, so
+    without it a Free failure reads only "free tool run error" afterwards (2026-10-17). None when the note is not a
+    Free miss."""
     if not isinstance(note, dict) or not note.get("free_miss"):
         return None
     return {
@@ -64,7 +67,8 @@ def free_miss_row(note: dict, job: str, task: str, caller: dict | None = None) -
         "backend": "api", "model": note.get("free_model") or "free:unknown", "provider": "free", "status": note.get("free_status") or "error",
         "error_kind": note.get("free_kind") or "unavailable", "free_miss": True, "calls": 0, "in_hit": 0, "in_miss": 0, "out": 0,
         "reasoning": 0, "cost_usd": 0.0, "seconds": 0.0, "billed": False, "free_account": note.get("account"),
-        "free_fallback": note.get("fallback"), "token_basis": "chars/4", **ledger_fields(caller),
+        "free_fallback": note.get("fallback"), "free_error": (str(note["error"])[:200] if note.get("error") else None),
+        "token_basis": "chars/4", **ledger_fields(caller),
     }
 
 
@@ -364,7 +368,8 @@ def routing_rows(hours: float) -> list[dict]:
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     rows = []
     if config.ROUTING.exists():
-        with config.ROUTING.open(encoding="utf-8") as f:
+        with config.ROUTING.open("rb") as f:
+            f.seek(_window_start(f, since))
             for line in f:
                 try:
                     r = json.loads(line)

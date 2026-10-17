@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { AlertCircle, RotateCw } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -34,7 +34,7 @@ const props = defineProps<{ state: HswarmState; client?: string }>()
 // changed: a client was registered or removed, so the HSwarm tree refreshes its client dots.
 const emit = defineEmits<{ changed: [] }>()
 
-const clients = ref<Client[]>([])
+const clients = shallowRef<Client[]>([])
 const loading = ref(false)
 const shownClients = computed(() =>
   props.client ? clients.value.filter((c) => c.client === props.client) : clients.value,
@@ -106,7 +106,7 @@ function getStatus(client: Client) {
 
 function getStatusClass(client: Client) {
   if (client.registered === null)
-    return 'bg-warning/10 text-warning'
+    return 'bg-info/10 text-info'
   if (client.registered) return 'bg-success/10 text-success'
   return 'bg-muted text-muted-foreground'
 }

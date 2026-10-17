@@ -127,7 +127,7 @@ not know is refused the same way.
 |---|---|
 | `tasks` | prompt strings, or `{prompt, id?, ...}` objects carrying any task key |
 | `concurrency` | how many tasks of this job run at once. Unset, the job shares the server's default |
-| `budget_usd` | caps the WHOLE job. Once crossed, what is still pending is cancelled. Unset, the job has no ceiling |
+| `budget_usd` | caps the WHOLE job. Each api turn reserves its worst case before it is sent and settles to its real cost when the reply lands. A turn refused or cut off before a request went out costs nothing; one cut off with a request out and no reply keeps its worst case, since it may have been billed. Once the next turn's worst case does not fit what is left, what is still pending is cancelled. Unset, the job has no ceiling |
 | `label` | a name for the job in `hswarm_jobs`, the ledger and the console |
 | `wait`, `wait_s` | `wait: true` (default) returns what finished within `wait_s`, at most 240 s: an MCP client drops a call that is silent for about 300 s. The job runs on; read it with `hswarm_status` / `hswarm_results`. `wait: false` returns the job id at once |
 | `max_answer_chars` | cuts each answer in this reply (default 4000). `hswarm_results` returns them whole |

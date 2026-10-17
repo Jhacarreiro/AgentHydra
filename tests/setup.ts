@@ -55,6 +55,9 @@ process.env.AGENTHYDRA_HOME = scratch
 // The install guard probes the real claude and may start a repair (npm install -g): never from a test.
 // tests/claude-install-guard.test.ts fakes the machine and turns it back on.
 process.env.AGENTHYDRA_CLAUDE_GUARD = '0'
+// hydra_find's intent search would load (and on a fresh machine download) the real embedding model: never from a test.
+// server/tests/tool-intent.test.ts hands its ToolIntent a fake model instead.
+process.env.AGENTHYDRA_TOOL_INTENT = '0'
 process.env.AGENTHYDRA_DB = path.join(scratch, 'agenthydra-test.db')
 // Isolate per-run dispatch logs (+ the detached runner's spec/status sidecars) too, so the
 // dispatch tests never write into the real ~/.agenthydra/data/run-logs.
@@ -91,3 +94,15 @@ process.env.ORCH_NO_TUNNEL = '1'
 // The Hydra family's manifest folder is machine-wide (~/.hydra-family): a daemon a test boots must
 // not advertise its throwaway port there, and a peer's real manifest must not leak into a test.
 process.env.HYDRA_FAMILY_DIR = path.join(scratch, 'hydra-family')
+// Hydra Core's folder (ON, PLACEMENT, log.jsonl, chats/): a test must never read the live core's switches or write
+// lead-pick lines into its log. A test that needs a core dir sets its own.
+process.env.AGENTHYDRA_CORE_DIR = path.join(scratch, 'core')
+// A suite run inside a CliMayte worker inherits its identity: fan_out and core_use would then refuse
+// as that worker. A test that needs a worker identity sets these itself.
+for (const k of [
+  'AGENTHYDRA_CLIMAYTE_WORKER',
+  'AGENTHYDRA_CLIMAYTE_CHAT',
+  'AGENTHYDRA_MANAGER',
+  'HYDRA_DESK_CHAT_ID',
+])
+  delete process.env[k]

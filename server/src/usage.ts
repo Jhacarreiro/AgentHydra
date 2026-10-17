@@ -26,7 +26,7 @@ import { pinHaikuModel } from './core/haiku-pin'
 import { spawnCaptured } from './core/process.ts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
-import { fetchUsageApi } from './usage-api'
+import { fetchUsageApi, revokedLoginError } from './usage-api'
 
 // The DTO types (UsageLimit / UsageSnapshot) are defined in the web-safe types hub (./types) and
 // re-exported here so existing `from './usage'` importers keep resolving.
@@ -510,6 +510,8 @@ export function pruneUsageProbeTranscripts(): number {
  * status - 401 the token was refused, 429 rate-limited, 0 the request never completed.
  */
 const lastApiFailure = new Map<string, { status: number; error: string; retryAfterSec?: number }>()
+// The scalar grant identity is kept separately so callers still receive the original failure DTO.
+const lastApiFailureGrant = new Map<string, string>()
 
 /** The last API failure recorded for `label`, or null. Cleared as soon as that label reads OK. */
 export function lastUsageApiFailure(
@@ -540,8 +542,15 @@ export function lastUsageApiFailure(
  * answers 200 (measured 2026-09-14, instance #3). Keyed per label, the dead grant's window silenced
  * the live one too, so a working account could not read its usage at all. The token part is a
  * digest (tokenFingerprint), never the token.
+ *
+ * `status` is what the hold reports while it lasts: 429 for a real rate limit, 401 for a login the
+ * profile endpoint says is revoked (revokedLoginError), which is held off just as long so a dead
+ * token is not asked twice a minute.
  */
-const apiBackoffUntil = new Map<string, Map<string, { until: number; error: string }>>()
+const apiBackoffUntil = new Map<
+  string,
+  Map<string, { until: number; status: number; error: string }>
+>()
 
 /** A token's identity inside this process: a short digest, so no map ever holds a credential. */
 function tokenFingerprint(token: string): string {
@@ -562,7 +571,23 @@ export function usageApiBackoffMsRemaining(label: string | null, now = Date.now(
 /** Test seam: forget every recorded API failure and server-issued backoff. */
 export function resetUsageApiBackoff(): void {
   lastApiFailure.clear()
+  lastApiFailureGrant.clear()
   apiBackoffUntil.clear()
+}
+
+/** A successful profile authentication can retire this exact grant's old 401 diagnosis. Genuine
+ *  rate limits, other grants and other labels keep their backoff and last failure. */
+export function clearVerifiedUsageAuthFailure(label: string, token: string): void {
+  const fingerprint = tokenFingerprint(token)
+  const windows = apiBackoffUntil.get(label)
+  if (windows?.get(fingerprint)?.status === 401) {
+    windows.delete(fingerprint)
+    if (!windows.size) apiBackoffUntil.delete(label)
+  }
+  if (lastApiFailure.get(label)?.status === 401 && lastApiFailureGrant.get(label) === fingerprint) {
+    lastApiFailure.delete(label)
+    lastApiFailureGrant.delete(label)
+  }
 }
 
 /**
@@ -599,11 +624,17 @@ async function fastApiUsageRead(
   const backoff = apiBackoffUntil.get(labelKey)?.get(fingerprint)
   const nowMs = Date.now()
   if (backoff && backoff.until > nowMs) {
-    lastApiFailure.set(labelKey, {
-      status: 429,
-      error: backoff.error,
-      retryAfterSec: Math.max(1, Math.ceil((backoff.until - nowMs) / 1000)),
-    })
+    lastApiFailureGrant.set(labelKey, fingerprint)
+    lastApiFailure.set(
+      labelKey,
+      backoff.status === 429
+        ? {
+            status: 429,
+            error: backoff.error,
+            retryAfterSec: Math.max(1, Math.ceil((backoff.until - nowMs) / 1000)),
+          }
+        : { status: backoff.status, error: backoff.error },
+    )
     return parseUsageOutput('', label)
   }
 
@@ -622,6 +653,7 @@ async function fastApiUsageRead(
   // the user saw the same "Claude returned no usage numbers for this instance", and so did
   // anyone reading the code. Kept per label (not returned) so the snapshot type and every
   // caller stay unchanged; usage-service reads it when it builds the no-data result.
+  lastApiFailureGrant.set(labelKey, fingerprint)
   lastApiFailure.set(labelKey, {
     status: res.status,
     error: res.error,
@@ -636,10 +668,19 @@ async function fastApiUsageRead(
   // AND ARM THE BACKOFF so the NEXT poll skips this endpoint until the window lifts. The server
   // usually names the delay; when it does not, wait a conservative minute rather than resume the
   // 30-second knocking that turns one 429 into a stuck one.
+  //
+  // ⛔ BUT A REVOKED LOGIN IS ANSWERED 429 TOO, so ask the profile endpoint first: a 401 there means
+  // this credential is dead, not paused, and it is recorded as the 401 it is (revokedLoginError).
   if (res.status === 429) {
+    const revoked = await revokedLoginError(token, opts.timeoutMs)
+    if (revoked) lastApiFailure.set(labelKey, { status: 401, error: revoked })
     const waitSec = res.retryAfterSec && res.retryAfterSec > 0 ? res.retryAfterSec : 60
     const windows = apiBackoffUntil.get(labelKey) ?? new Map()
-    windows.set(fingerprint, { until: Date.now() + waitSec * 1000, error: res.error })
+    windows.set(fingerprint, {
+      until: Date.now() + waitSec * 1000,
+      status: revoked ? 401 : 429,
+      error: revoked ?? res.error,
+    })
     apiBackoffUntil.set(labelKey, windows)
     return parseUsageOutput('', label)
   }
@@ -768,6 +809,7 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
   // described as rate-limited, and the rate limit outranked the truth. A stale diagnosis is worse
   // than none, because it is confidently specific and sends you to fix the wrong thing.
   lastApiFailure.delete(label ?? '(ambient)')
+  lastApiFailureGrant.delete(label ?? '(ambient)')
 
   // --- fast path: the direct API read, whenever we can lay hands on an OAuth token ---------------
   const fastResult = await fastApiUsageRead(opts, label)

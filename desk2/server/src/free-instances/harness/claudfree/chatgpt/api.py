@@ -1,6 +1,7 @@
-"""ChatGPT Temporary Chats over HTTP; only manual login opens a browser."""
+"""ChatGPT Temporary Chats with current first-party preparation and HTTP readback."""
 
 from functools import partial
+import hashlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from ..api import Client
 from ..errors import ClaudeError
 from ..registry import chat_lock, valid_name
 from ..results import brief_result, export_results
-from .http import TEXT_MODEL, connection, thread_model, visible_messages
+from .http import TEXT_MODEL, connection, continuation_summary, visible_messages
 from .registry import ChatGPTRegistry
 from .state import ChatGPTState
 
@@ -30,13 +31,14 @@ def _check_chat(http, registry, entry):
 
 
 class ChatGPTClient(Client):
-    """Use private chats by local name or UUID without starting a browser.
+    """Use private chats by local name or UUID with verified first-party sends.
 
     state_dir selects the shared root; ChatGPT state always lives in its chatgpt/
     subfolder. Login is manual. HTTP reads send a Temporary Chat routing marker.
-    HTTP sending prepares fresh single-use verification automatically when needed.
+    Automatic sending restores saved cookies and completes the requested message
+    in an owned ordinary browser once; HTTP verifies readback without resending.
     auto_prepare=False requires an explicit prepare() before sending.
-    prepare() uses a short JavaScript process.
+    Explicit legacy prepare() uses a short JavaScript process.
     No transcript is stored unless export_dir is supplied. Calls are serialized.
     """
 
@@ -108,9 +110,9 @@ class ChatGPTClient(Client):
             }
 
     def _execute(self, args, *, on_text=None):
-        if args.model or args.regular or args.web_search or args.org_id or args.stream or on_text:
+        if args.model or args.web_search or args.org_id or args.stream or on_text:
             raise ClaudeError(
-                "ChatGPT currently supports default-model Temporary Chats. Model selection, regular chats, forced web search, organizations and token streaming are not supported.",
+                "ChatGPT currently supports default-model Temporary Chats. Model selection, forced web search, organizations and token streaming are not supported.",
                 code="unsupported_option",
             )
         command = args.command
@@ -124,6 +126,15 @@ class ChatGPTClient(Client):
         if command == "auth":
             with connection(self._state, args.request_timeout) as http:
                 value = {"authenticated": True, "account_label": http.account_label, "account_email": http.account_email}
+            # The connection has saved any rotated cookies; _run still holds the session lock.
+            # Bind this authenticated identity to the exact persisted login without exposing cookies.
+            try:
+                value["login_fingerprint"] = hashlib.sha256(self._state.session_file.read_bytes()).hexdigest()
+            except OSError:
+                raise ClaudeError(
+                    "The verified login could not be read back. Keep the pool import pending.",
+                    code="session_save_failed",
+                ) from None
         elif command == "usage":
             with connection(self._state, args.request_timeout) as http:
                 value = http.usage()
@@ -170,8 +181,17 @@ class ChatGPTClient(Client):
                 if command in {"read", "track"}:
                     return self._read_or_track(registry, args, entry, server_id, body)
                 # A preference picks a NEW chat's model; a continued chat stays on the model its thread answered on.
-                model = http.model_for(args.prefer) if body is None else thread_model(body)
-                return self._send(http, registry, pool, args.prompt, entry, server_id, body, model)
+                continuation = {}
+                if body is None:
+                    model = http.model_for(args.prefer)
+                else:
+                    # Validate the selected visible branch before dispatch, then
+                    # release its text/metadata before waiting for a browser slot.
+                    model, continuation['previous_ids'] = continuation_summary(body)
+                    continuation['previous_ids'] = frozenset(continuation['previous_ids'])
+                    body = {key: body[key] for key in
+                        ('conversation_id', 'current_node', 'is_temporary_chat') if key in body}
+                return self._send(http, registry, pool, args.prompt, entry, server_id, body, model, **continuation)
         finally:
             registry.close()
 
@@ -217,15 +237,12 @@ class ChatGPTClient(Client):
             }
         return self._read_result(entry, server_id, messages)
 
-    def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL):
+    def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL, *, previous_ids=None):
         # Verify the reference and privacy before preparing. Reuse this
-        # authenticated connection for preparation, POST and readback.
+        # authenticated connection for preparation and readback. The ordinary
+        # browser dispatches the automatic generation request exactly once.
         measurements = []
-        if self.auto_prepare and not pool.status()["ready_messages"]:
-            from .runtime import collect
-
-            entries, measurements = collect(http, 1)
-            pool.replace(http.account_key, entries)
+        prepared_request = None
         entry = registry.record(
             entry["chat_id"],
             "chatgpt",
@@ -236,11 +253,19 @@ class ChatGPTClient(Client):
         if server_id:
             registry.link(entry["chat_id"], server_id)
         try:
+            if self.auto_prepare:
+                from .browser_request import prepare
+
+                prepared_request = prepare(http, prompt, body, directory=self._state.directory, model=model,
+                    on_id=partial(registry.link, entry['chat_id']))
+                measurements = [prepared_request['metrics']]
             body, messages, reply, complete = http.send(
                 prompt,
                 existing=body,
                 on_id=partial(registry.link, entry["chat_id"]),
                 model=model,
+                prepared_request=prepared_request,
+                **({'previous_ids': previous_ids} if previous_ids is not None else {}),
             )
         except ClaudeError as error:
             registry.status(entry["chat_id"], error.code)
@@ -253,8 +278,13 @@ class ChatGPTClient(Client):
                 model=model,
             ) from None
         registry.status(entry["chat_id"], "available")
+        return self._chat_result(entry, body, messages, reply, complete, measurements)
+
+    @staticmethod
+    def _chat_result(entry, body, messages, reply, complete, measurements):
+        """Render one confirmed reply without account, registry or filesystem access."""
         return {
-            **self._read_result(entry, body["conversation_id"], messages),
+            **ChatGPTClient._read_result(entry, body["conversation_id"], messages),
             "response": reply["text"],
             "model": reply["model"],
             "message_id": reply["id"],
@@ -304,9 +334,9 @@ class ChatGPTClient(Client):
                 "follow_redirects": False,
             },
             "default_privacy": {"temporary": True, "personalization": False},
-            "browser_required_for": ["login"],
-            "preparation_methods": {"default": "javascript"},
-            "preparation_runtime": "Node.js 24+ with Happy DOM 20.14.5 and pinned public web assets; see docs/CHATGPT.txt",
+            "browser_required_for": ["login", "message_send"],
+            "preparation_methods": {"default": "first_party_browser_http", "explicit_legacy": "javascript"},
+            "preparation_runtime": "Installed headless Chrome/Edge with zendriver; restores saved cookies without submitting login. Desk reuses one browser with up to three disposable isolated contexts. Each context closes after authenticated HTTP readback; the empty browser closes after 60 idle seconds.",
             "commands": {
                 name: "Use --provider chatgpt"
                 for name in [
@@ -346,12 +376,12 @@ class ChatGPTClient(Client):
                 "browser_free_auth": True,
                 "browser_free_read": True,
                 "offline_listing": True,
-                "browser_free_send": True,
-                "browser_free_workflow": True,
+                "browser_free_send": False,
+                "browser_free_workflow": False,
                 "send_requires_fresh_preparation": True,
                 "automatic_preparation": True,
                 "explicit_prepare_required": False,
-                "http_send_status": "create and resume verified with browser-free JavaScript preparation after manual login; one credential per message",
+                "http_send_status": "ordinary first-party browser HTTP send using saved cookies, followed by authenticated HTTP readback; the message is sent once, with no automatic resend",
                 "read_requires": "requires saved login, UUID and server availability; routing marker supplied automatically",
                 "remaining_usage": False,
                 "raw_tool_results": False,
@@ -359,13 +389,13 @@ class ChatGPTClient(Client):
             },
             "rules": [
                 "chat_id is a local UUID; server_conversation_id is the service UUID. Accessible unknown server UUIDs can be read/tracked with the saved login.",
-                "HTTP never starts a browser or falls back to one; only manual login opens a browser.",
+                "Automatic sends restore the existing login in an owned ordinary browser for current first-party preparation. No email login is submitted and interactive verification is never bypassed.",
                 "Temporary privacy is verified before reading/resuming. Creation requests unpersonalized mode; HTTP reads do not independently verify personalization.",
                 "Names and UUIDs are stored without transcripts. HTTP supplies the Temporary Chat routing cookie automatically, enabling reads after the browser closes while the service permits access.",
                 "Offline listings do not verify availability; readable/resumable=null means unknown. --check performs HTTP reads.",
-                "chat/resume automatically collect one JavaScript preparation when the pool is empty or expired, using the same authenticated connection. Read-only commands never prepare. auto_prepare=False / --no-auto-prepare retains explicit preparation.",
-                "prepare optionally collects up to eight single-use preparations without sending messages. prepared reports local readiness, not a required next step.",
-                "HTTP sending consumes one DPAPI-encrypted preparation before POST, including on failure. Preparations are account-bound with a five-minute local cutoff; service acceptance is not guaranteed. JavaScript collection failures create no pending chat and send no message.",
+                "chat/resume validate the exact prompt, branch, privacy mode and model before allowing one ordinary browser HTTP request. HTTP readback never posts again. Read-only commands never open a browser. auto_prepare=False retains explicit legacy preparation.",
+                "prepare collects up to eight single-use preparations for explicit legacy sends with auto_prepare=False, without sending messages. Automatic browser sends do not use this pool, so prepare does not prewarm them. prepared reports legacy pool readiness, not a required next step.",
+                "Automatic preparation credentials remain in memory and are single-use. The local handle is recorded before preparation and linked to a browser-created conversation before readback, so an uncertain outcome can be reviewed without resending. Explicit legacy preparations remain account-bound with a five-minute cutoff.",
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
                 "No message is retried automatically. On timeout, read the returned chat_id before sending again.",
                 "usage verifies Free access to GPT-5.6 Luna Instant and reports its documented unlimited text policy, with separate tool limits; exact remaining-message counters remain unavailable. It never sends a message.",

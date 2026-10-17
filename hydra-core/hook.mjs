@@ -6,7 +6,6 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
-  readdirSync,
   readFileSync,
   readSync,
   writeFileSync,
@@ -14,15 +13,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadAddon } from "./addon.mjs";
 
 export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LEAD_CAP = 20000;
 const TAIL_CHUNK = 1 << 20;
 const NAME_CAP = 60;
-const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
-const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
-const BLOCK_REASON =
-  'Before you ask Jacob, ask the owner tier (core_use { mode: "consult", id: "person:creaitor", question } or the creaitor.py ask command); ask Jacob only if that answer says it needs him (a credential, money, a physical step); otherwise act on the answer.';
+export const PACK_TIMEOUT_MS = 1500;
+const PRESIDENT = path.join("people", "router", "president.mjs");
 
 export function coreDir(env = process.env) {
   return env.AGENTHYDRA_CORE_DIR || path.join(os.homedir(), ".agenthydra", "core");
@@ -30,6 +29,54 @@ export function coreDir(env = process.env) {
 
 export function isWorker(env = process.env) {
   return Boolean(env.AGENTHYDRA_CLIMAYTE_WORKER) && !env.AGENTHYDRA_CLIMAYTE_CHAT;
+}
+
+function seatChatOf(dir, deskChat) {
+  try {
+    return JSON.parse(readFileSync(path.join(dir, "seat-chats.json"), "utf8"))[deskChat] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Why this session gets nothing from Hydra Core (ROLES.md: seats keep their own persona, drones get no pack or
+ *  persona), or null for a Prime or the owner's own chat. A CliMayte launch names the role in AGENTHYDRA_ROLE; a Desk
+ *  chat core_use opened as a seat is listed in seat-chats.json. */
+export function skipOf(env = process.env, dir = coreDir(env)) {
+  const role = (env.AGENTHYDRA_ROLE ?? "").trim();
+  if (role === "seat") return { role, why: "a seat keeps its own persona: no pack, lead or lead change (AGENTHYDRA_ROLE=seat)" };
+  if (role === "drone") return { role, why: "a drone gets no pack or persona (AGENTHYDRA_ROLE=drone)" };
+  const deskChat = (env.HYDRA_DESK_CHAT_ID ?? "").trim();
+  const seat = deskChat ? seatChatOf(dir, deskChat) : null;
+  if (seat) {
+    return { role: "seat", why: `Desk chat is a seat of ${seat.persona} (seat-chats.json): it keeps its own persona` };
+  }
+  if (role !== "prime" && isWorker(env)) {
+    return {
+      role: "drone",
+      why: "started from a CliMayte worker's shell (AGENTHYDRA_CLIMAYTE_WORKER set, AGENTHYDRA_CLIMAYTE_CHAT unset): treated as a drone",
+    };
+  }
+  return null;
+}
+
+function logSkip(input, env, dir, skip) {
+  try {
+    let chat = null;
+    try {
+      chat = chatKey(input, env);
+    } catch {}
+    const line = {
+      at: new Date().toISOString(),
+      event: "hook-skip",
+      chat,
+      hook: input.hook_event_name,
+      role: skip.role,
+      worker: env.AGENTHYDRA_CLIMAYTE_WORKER || null,
+      why: skip.why,
+    };
+    appendFileSync(path.join(dir, "log.jsonl"), `${JSON.stringify(line)}\n`);
+  } catch {}
 }
 
 export function chatKey(input, env = process.env) {
@@ -54,6 +101,11 @@ export function parseHydraMd(text) {
   return { lead: name && name.toLowerCase() !== "none" ? name : null, leadPath: leadPath || null, tier };
 }
 
+// Pings the manager sends into a chat (task notifications, "Not from the user") are not the owner's words.
+const NOT_OWNER = /^(<task-notification>|\[[^\]\n]*\] Not from the user\.)/;
+
+const fromOwner = (prompt) => !NOT_OWNER.test(prompt.trimStart());
+
 function promptBlock(key, hydraPath, hydraText) {
   let state = "none yet";
   if (hydraText !== null) {
@@ -61,6 +113,35 @@ function promptBlock(key, hydraPath, hydraText) {
     state = `lead ${(lead ?? "none").slice(0, NAME_CAP)}, tier ${tier ?? "?"}`;
   }
   return `Hydra Core: before you act on this message, call core_scope { chat: "${key}" } (agenthydra MCP) and answer its questions with core_answer until it says go. hydra.md: ${hydraPath} (${state}).`;
+}
+
+// What AgentHydra wraps around the owner's words before the hook sees them (desk2/server/src/engine/system-text.ts reads
+// the same shapes back out): the Send now and urgent prefaces, a handoff's note and document after the owner's message
+// (climayte-lib continuationPrompt), and task notifications or reminders queued with the message.
+const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/;
+const URGENT = /^\s*AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator\.[^\n]*\n\n/;
+const CONTINUED = /\n\n---\nAn earlier session already worked on this task /;
+const CONTINUED_MESSAGES =
+  /\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n([\s\S]*?)\n\n--- HANDOFF ---\n/;
+const QUEUED = /<(task-notification|system-reminder)>[\s\S]*?<\/\1>/g;
+
+/** The owner's own words in a prompt: what the per-message additions are scored on and prompt.txt records. */
+export function ownerText(prompt) {
+  let text = prompt.replace(SENT_NOW, "").replace(URGENT, "");
+  const at = text.search(CONTINUED);
+  if (at >= 0) {
+    const list = CONTINUED_MESSAGES.exec(text.slice(at))?.[1]?.trim() ?? "";
+    const later = list ? list.replace(/^- /, "").split("\n- ").map((m) => m.trim()) : [];
+    text = [text.slice(0, at), ...later].filter(Boolean).join("\n\n");
+  }
+  return text.replace(QUEUED, "").trim();
+}
+
+// A prompt the hook acts on, as the owner's words; null for a command, a ping, or nothing left once the wrappers go.
+function ownerPrompt(input) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  return ownerText(prompt) || null;
 }
 
 function sessionText(hydraPath, hydraText) {
@@ -79,17 +160,261 @@ function sessionText(hydraPath, hydraText) {
 
 const output = (hookEventName, additionalContext) => ({ hookSpecificOutput: { hookEventName, additionalContext } });
 
-function userPromptSubmit(input, env, dir) {
-  const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/")) return null;
+const cwdOf = (input) => (typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+
+function recordPrompt(input, env, dir, prompt) {
   const key = chatKey(input, env);
   const chatDir = path.join(dir, "chats", key);
   mkdirSync(chatDir, { recursive: true });
   writeFileSync(path.join(chatDir, "prompt.txt"), prompt);
-  writeFileSync(path.join(chatDir, "cwd.txt"), typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+  writeFileSync(path.join(chatDir, "cwd.txt"), cwdOf(input));
   const hydraPath = path.join(chatDir, "hydra.md");
   const hydraText = existsSync(hydraPath) ? readFileSync(hydraPath, "utf8") : null;
-  return output("UserPromptSubmit", promptBlock(key, hydraPath, hydraText));
+  return { key, hydraPath, hydraText };
+}
+
+function userPromptSubmit(input, env, dir) {
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
+  recordPrompt(input, env, dir, prompt);
+  return null;
+}
+
+// A compaction drops the additions the session was sent (the slot stays: it is in the system prompt), so the session's
+// sent.json list is cleared and they can go again.
+function forgetSent(input, env, dir) {
+  if (input.source !== "compact") return;
+  const file = path.join(dir, "chats", chatKey(input, env), "sent.json");
+  const session = String(input.session_id ?? "");
+  try {
+    const sent = JSON.parse(readFileSync(file, "utf8"));
+    if (!Object.hasOwn(sent, session)) return;
+    delete sent[session];
+    writeFileSync(file, JSON.stringify(sent, null, 2));
+  } catch {}
+}
+
+function injectOn(dir) {
+  const file = path.join(dir, "INJECT");
+  return existsSync(file) && readFileSync(file, "utf8").trim() === "ON";
+}
+
+function placementOf(dir) {
+  const file = path.join(dir, "PLACEMENT");
+  if (!existsSync(file)) return "off";
+  const raw = readFileSync(file, "utf8").trim();
+  return raw === "slot" || raw === "file" || raw === "attach" ? raw : "off";
+}
+
+// The `<core>/ASK` setting: absent or anything but "off" means a placed chat is told to scope each owner message.
+function asksOf(dir) {
+  const file = path.join(dir, "ASK");
+  return !existsSync(file) || readFileSync(file, "utf8").trim() !== "off";
+}
+
+// The `<core>/CRANIUM` file: the flowchart lives in the CrAInium, one per workspace behind connections_core, so the
+// hook only tells the chat to walk it and keeps nothing on this PC (the owner's ruling 2026-10-15). Absent, the local
+// tree below runs as before; each PC switches when its owner says.
+function craniumOn(dir) {
+  return existsSync(path.join(dir, "CRANIUM"));
+}
+
+const CORE_VIA = '(Connections MCP; when it is not in your tool list, connections_execute { tool_name: "connections_core", params })';
+
+// The Connections MCP writes each folder's quick exits to a head file: the flowchart's first questions, which the chat
+// answers itself. The owner's design is three quick questions on every message, which cut most of what a message costs;
+// only what they do not settle needs the core. An entry older than a day is not trusted: the flowchart may have changed.
+const HEAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function folderKey(p) {
+  const key = String(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(key) ? key.toLowerCase() : key;
+}
+
+function headEntry(input, env) {
+  let head;
+  try {
+    head = JSON.parse(
+      readFileSync(env.AGENTHYDRA_CRANIUM_HEAD_FILE || path.join(os.homedir(), ".connections", "cranium", "core-head.json"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  const entry = head?.folders?.[folderKey(cwdOf(input))];
+  const at = Date.parse(entry?.readAt);
+  return Number.isFinite(at) && Date.now() - at < HEAD_TTL_MS ? entry : null;
+}
+
+// Null when the entry holds no usable quick exit (no ask, no exit, or a shape this does not read): the walk line stands.
+function fastPath(entry, at) {
+  if (!entry.asks?.length || !entry.exits?.length) return null;
+  try {
+    const asks = entry.asks.map((ask) => `- ${ask.id}: ${ask.text} (${ask.answers.join(" | ")})`);
+    const exits = entry.exits.map((exit) => {
+      const when = Object.entries(exit.answers).map(([id, answer]) => `${id} ${answer}`).join(", ");
+      return `If your answers are ${when}: ${exit.outcome}.${exit.say ? ` ${exit.say}` : ""}`;
+    });
+    return [
+      `Hydra Core (flowchart v${entry.version}): answer these yourself before you act; they need no tool call.`,
+      ...asks,
+      ...exits,
+      `Any other answers: walk it, connections_core { action: "run", ${at}, answers: { <your answers to the questions above> }, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with that answer added. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+    ].join("\n");
+  } catch {
+    return null;
+  }
+}
+
+function craniumPrompt(input, env) {
+  if (!ownerPrompt(input)) return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  const entry = headEntry(input, env);
+  if (entry?.status === "none") return null;
+  const fast = entry?.status === "ok" ? fastPath(entry, at) : null;
+  return output(
+    "UserPromptSubmit",
+    fast ??
+      `Hydra Core: before you act on this message, walk the workspace flowchart: connections_core { action: "run", ${at}, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with answers: { <ask.id>: <one of ask.answers> } added to the answers so far. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+  );
+}
+
+// One outbox line per turn: whether the chat walked the core and whether it handed work to a delegate. Only a delegate
+// needs the core (the quick questions are answered in the chat), so these two counts show which turns still pay for a
+// core call. Never blocks the Stop and never throws.
+const DELEGATES = /^(Agent|Task|Workflow)$|(hswarm_run|climayte_run|fan_out)$/;
+
+function craniumLedger(input, env) {
+  try {
+    if (input.stop_hook_active === true) return;
+    // A folder whose workspace has no flowchart has no core to measure.
+    const entry = headEntry(input, env);
+    if (entry?.status === "none") return;
+    const { tools } = lastTurn(input);
+    const called = tools.some((tool) => {
+      const name = String(tool.name ?? "");
+      if (name.endsWith("connections_core")) return true;
+      return (
+        name.endsWith("connections_execute") &&
+        tool.input?.tool_name === "connections_core" &&
+        (tool.input?.params?.action ?? "run") === "run"
+      );
+    });
+    const delegated = tools.some((tool) => DELEGATES.test(String(tool.name ?? "")));
+    const chat = chatKey(input, env);
+    const line = {
+      uid: `turn:${chat.slice(0, 50)}:${Date.now()}`.replace(/[^A-Za-z0-9._:-]/g, "_"),
+      at: new Date().toISOString(),
+      chat,
+      folder: folderKey(cwdOf(input)),
+      // The server matches a folder as written, so the ledger sends this; folder is the cache key.
+      folderPath: cwdOf(input),
+      called,
+      delegated,
+      version: entry?.version ?? null,
+      pc: os.hostname(),
+    };
+    const outbox =
+      env.AGENTHYDRA_CRANIUM_OUTBOX_FILE || path.join(os.homedir(), ".connections", "cranium", "core-outbox.jsonl");
+    mkdirSync(path.dirname(outbox), { recursive: true });
+    appendFileSync(outbox, `${JSON.stringify(line)}\n`);
+  } catch {}
+}
+
+function craniumSession(input, env) {
+  if (input.source !== "compact") return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  return output(
+    "SessionStart",
+    `Hydra Core: this chat was compacted. If the flowchart handed this work on, connections_core { action: "brief", ${at} } ${CORE_VIA} gives its last brief back.`,
+  );
+}
+
+// Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had,
+// after the core_scope line when ASK is on (the chat picks its own lead; the owner's ruling 2026-10-15).
+async function placedPrompt(input, env, dir) {
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
+  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
+  const scope = asksOf(dir) ? promptBlock(key, hydraPath, hydraText) : null;
+  const join = (text) => (scope && text ? `${scope}\n${text}` : scope || text);
+  try {
+    const match = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt, placement: placementOf(dir) },
+      env,
+    );
+    const text = join(match.text);
+    return text ? output("UserPromptSubmit", text) : null;
+  } catch (error) {
+    return output("UserPromptSubmit", join(`Hydra Core pack unavailable: ${error.message}`));
+  }
+}
+
+// A file chat's first turn either opened its pack.md or did not: one pack_read line per session.
+function logPackRead(input, env, dir) {
+  if (placementOf(dir) !== "file" || input.stop_hook_active === true) return;
+  try {
+    const key = chatKey(input, env);
+    const chatDir = path.join(dir, "chats", key);
+    const session = String(input.session_id ?? key);
+    const marker = path.join(chatDir, "pack-read.txt");
+    if (existsSync(marker) && readFileSync(marker, "utf8") === session) return;
+    const { tools } = lastTurn(input);
+    const packPath = path.resolve(chatDir, "pack.md");
+    const read = tools.some((tool) => tool.name === "Read" && path.resolve(String(tool.input?.file_path ?? "")) === packPath);
+    writeFileSync(marker, session);
+    appendFileSync(
+      path.join(dir, "log.jsonl"),
+      `${JSON.stringify({ at: new Date().toISOString(), event: "pack_read", chat: key, session, read, firstTool: tools[0]?.name ?? null })}\n`,
+    );
+  } catch {}
+}
+
+async function requestPack(req, env) {
+  const base = env.AGENTHYDRA_DAEMON_URL || "http://127.0.0.1:7787";
+  const res = await fetch(`${base}/api/core/pack`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+    signal: AbortSignal.timeout(PACK_TIMEOUT_MS),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `the daemon answered ${res.status}`);
+  return body;
+}
+
+async function injectPrompt(input, env, dir) {
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
+  const { key } = recordPrompt(input, env, dir, prompt);
+  try {
+    const pack = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt },
+      env,
+    );
+    return pack.text ? output("UserPromptSubmit", pack.text) : null;
+  } catch (error) {
+    return output("UserPromptSubmit", `Hydra Core pack unavailable: ${error.message}`);
+  }
+}
+
+// A resumed session still holds every pack it was sent (a chat that resumes for each message would otherwise get
+// the full pack every time); a session that never got one gets its first pack with its next message. Only a
+// compaction drops what was sent, so only a compaction resends it.
+async function injectSession(input, env, dir) {
+  if (input.source !== "compact") return null;
+  const key = chatKey(input, env);
+  try {
+    const pack = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt: "", full: true },
+      env,
+    );
+    return pack.text ? output("SessionStart", pack.text) : null;
+  } catch (error) {
+    const old = sessionStart(input, env, dir);
+    const note = `Hydra Core pack unavailable: ${error.message}`;
+    if (!old) return output("SessionStart", note);
+    return output("SessionStart", `${old.hookSpecificOutput.additionalContext}\n${note}`);
+  }
 }
 
 function sessionStart(input, env, dir) {
@@ -163,84 +488,55 @@ function lastTurn(input) {
   return { text, tools };
 }
 
-export function asksQuestion(text) {
-  // Markdown headings are labels, not questions (the recap's "## Am I 100% done?" ends every reply).
-  const prose = text
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/`[^`\n]*`/g, "")
-    .replace(/^#{1,6}\s.*$/gm, "");
-  const paragraphs = prose
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-  return /\?(?=\s|$)/.test(paragraphs.at(-1) ?? "");
-}
-
-function ownerIds(dir) {
-  const ids = new Set();
-  const catalog = path.join(dir, "catalog");
-  if (!existsSync(catalog)) return ids;
-  for (const name of readdirSync(catalog)) {
-    if (!/^(generated|hand)-.*\.json$/.test(name)) continue;
-    try {
-      for (const entry of JSON.parse(readFileSync(path.join(catalog, name), "utf8"))) {
-        if (entry?.kind === "person" && entry.tier === "owner" && typeof entry.id === "string") ids.add(entry.id);
-      }
-    } catch {}
-  }
-  return ids;
-}
-
-function isOwner(id, dir) {
-  const owners = ownerIds(dir);
-  return owners.size ? owners.has(id) : OWNER_FALLBACK.test(id);
-}
-
-function consults(tool, dir) {
-  const input = tool.input ?? {};
-  if (typeof tool.name === "string" && tool.name.endsWith("core_use")) {
-    return input.mode === "consult" && typeof input.id === "string" && isOwner(input.id, dir);
-  }
-  if (tool.name === "Bash" || tool.name === "PowerShell") return ASK_CREAITOR.test(String(input.command ?? ""));
-  return false;
-}
-
-function logBlock(input, env, dir) {
+// The president rule lives in the people add-on (people/router/president.mjs in the sue-dredd checkout); without that
+// checkout a Stop does nothing. Any failure to load or run it lets the stop through.
+async function presidentStop(input, env, dir) {
   try {
-    mkdirSync(dir, { recursive: true });
-    const chat = chatKey(input, env);
-    appendFileSync(path.join(dir, "log.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), event: "president-block", chat })}\n`);
-  } catch {}
-}
-
-function stopCheck(input, env, dir) {
-  if (input.stop_hook_active === true) return null;
-  try {
-    const { text, tools } = lastTurn(input);
-    if (!asksQuestion(text)) return null;
-    if (tools.some((tool) => consults(tool, dir))) return null;
+    const president = await loadAddon(PRESIDENT, APP_ROOT, env);
+    if (!president) return null;
+    return president.stop(input, env, dir, { chatKey, lastTurn });
   } catch {
     return null;
   }
-  logBlock(input, env, dir);
-  return { decision: "block", reason: BLOCK_REASON };
 }
 
-export function run(input, env = process.env) {
+export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
-  if (isWorker(env)) return null;
   const dir = coreDir(env);
-  if (!existsSync(path.join(dir, "ON"))) return null;
-  if (event === "Stop") return stopCheck(input, env, dir);
+  // CRANIUM needs no ON: ON also turns on the daemon's local core mode, which a CRANIUM PC must not get.
+  if (!existsSync(path.join(dir, "ON")) && !craniumOn(dir)) return null;
+  const skip = skipOf(env, dir);
+  if (skip) {
+    if (event !== "Stop" && !craniumOn(dir)) logSkip(input, env, dir, skip);
+    return null;
+  }
+  if (craniumOn(dir)) {
+    if (event === "UserPromptSubmit") return craniumPrompt(input, env);
+    if (event === "Stop") craniumLedger(input, env);
+    return event === "SessionStart" ? craniumSession(input, env) : null;
+  }
+  if (event === "Stop") {
+    logPackRead(input, env, dir);
+    return presidentStop(input, env, dir);
+  }
+  const placement = placementOf(dir);
+  if (placement === "slot" || placement === "file") {
+    if (event === "UserPromptSubmit") return placedPrompt(input, env, dir);
+    forgetSent(input, env, dir);
+    return null;
+  }
+  if (injectOn(dir) || placement === "attach") {
+    return event === "UserPromptSubmit" ? injectPrompt(input, env, dir) : injectSession(input, env, dir);
+  }
   return event === "UserPromptSubmit" ? userPromptSubmit(input, env, dir) : sessionStart(input, env, dir);
 }
 
-export function handle(text, env = process.env) {
+export async function handle(text, env = process.env) {
   let input = null;
   try {
     input = JSON.parse(text.trim() ? text : "{}");
-    return run(input, env);
+    return await run(input, env);
   } catch (error) {
     if (input && EVENTS.has(input.hook_event_name)) {
       return output(input.hook_event_name, `Hydra Core hook error: ${error.message}`);
@@ -254,7 +550,7 @@ if (isMain) {
   let text = "";
   for await (const chunk of process.stdin) text += chunk;
   try {
-    const result = handle(text);
+    const result = await handle(text);
     if (result) process.stdout.write(JSON.stringify(result));
   } catch (error) {
     process.stderr.write(`Hydra Core hook: ${error.message}\n`);

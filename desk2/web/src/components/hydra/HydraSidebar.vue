@@ -17,6 +17,8 @@ import {
   ListChecks,
   LoaderCircle,
   Network,
+  Pause,
+  Play,
   PictureInPicture2,
   PiggyBank,
   Plug,
@@ -27,6 +29,7 @@ import {
   Search,
   Server,
   TriangleAlert,
+  Wrench,
   X
 } from '@lucide/vue'
 import type { EmbedIcon, EmbedTone, SidebarModel, SidebarRow } from '@shared/hydra-embed'
@@ -36,7 +39,7 @@ import { cleanSidebar } from '@/components/sidebar/clean'
 import { tellHydra } from './api'
 
 // Hydra Desk 2: the sidebar of AgentHydra's current tab (HSwarm's tree), drawn here in
-// Desk's sidebar and Desk's look while AgentHydra is open (Michael, 2026-10-04: one sidebar for
+// Desk's sidebar and Desk's look while AgentHydra is open (the other owner, 2026-10-04: one sidebar for
 // everything, beside the content). The copy describes it (shared/hydra-embed.ts) and keeps every rule of
 // what a row says; a click goes back to it. Rows are 26px like the desk list; hovers are the native
 // title, so a 300-row tree costs no tooltip per row.
@@ -69,7 +72,10 @@ const ICONS: Record<EmbedIcon, Component> = {
   'list-checks': ListChecks,
   'circle-check': CircleCheck,
   'circle-x': CircleX,
-  ban: Ban
+  ban: Ban,
+  pause: Pause,
+  play: Play,
+  wrench: Wrench
 }
 const icon = (name: EmbedIcon | undefined): Component | null => (name ? (ICONS[name] ?? null) : null)
 const TONE: Record<EmbedTone, string> = {
@@ -78,6 +84,7 @@ const TONE: Record<EmbedTone, string> = {
   accent: 'text-accent-text',
   success: 'text-success-text',
   warning: 'text-warning-text',
+  limited: 'text-[var(--status-limited-text)]',
   danger: 'text-danger-text'
 }
 const DOT: Record<EmbedTone | 'hollow', string> = {
@@ -86,6 +93,7 @@ const DOT: Record<EmbedTone | 'hollow', string> = {
   accent: 'bg-accent',
   success: 'bg-success',
   warning: 'bg-warning',
+  limited: 'bg-[var(--status-limited)]',
   danger: 'bg-danger',
   hollow: 'border border-text-muted'
 }
@@ -214,7 +222,7 @@ const FOOT_BTN =
     >
       <span class="min-w-0 flex-1 truncate">{{ s.label }}<span v-if="s.note" class="tnum"> · {{ s.note }}</span></span>
       <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="s.on ? 'bg-accent' : 'bg-(--fill-secondary)'">
-        <span class="absolute top-0.5 size-2.5 rounded-full bg-white transition-[left]" :class="s.on ? 'left-3' : 'left-0.5'" />
+        <span class="absolute top-0.5 left-0.5 size-2.5 rounded-full bg-white transition-transform" :class="s.on ? 'translate-x-2.5' : ''" />
       </span>
     </button>
 
@@ -246,12 +254,12 @@ const FOOT_BTN =
     </div>
 
     <div ref="list" role="tree" :aria-label="model.title" class="flex flex-col">
-      <section v-for="sec in model.sections" :key="sec.key" :aria-label="sec.label || undefined">
+      <div v-for="sec in model.sections" :key="sec.key" role="group" :aria-label="sec.label || undefined">
         <Tip v-if="sec.label" :label="sec.hint ?? ''">
           <header class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-ui-sm leading-4 text-text-muted">
             <span class="truncate">{{ sec.label }}</span>
             <span class="flex-1" />
-            <span class="tnum">{{ sec.rows.length }}</span>
+            <span class="tnum">{{ sec.count ?? sec.rows.length }}</span>
           </header>
         </Tip>
         <div class="flex flex-col gap-[1.5px] pt-[1.5px]">
@@ -326,7 +334,7 @@ const FOOT_BTN =
           </div>
           </Tip>
         </div>
-      </section>
+      </div>
     </div>
 
     <div v-if="empty && model.loading" class="flex flex-col gap-1.5 px-1.5 pt-2" aria-busy="true">

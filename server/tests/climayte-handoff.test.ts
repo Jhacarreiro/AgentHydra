@@ -1,5 +1,5 @@
 // When CliMayte asks a session to hand off for its conversation's size (climayte-lib.ts).
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -41,6 +41,8 @@ describe('continuationPrompt', () => {
   })
 })
 
+const SCRATCH = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
+afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }))
 const now = Date.now()
 const reading = (sessionPct: number) => ({
   sessionPct,
@@ -149,12 +151,29 @@ describe('a chat worker winds down silently', () => {
     expect(text).not.toContain('end your turn with one line saying the handoff is written')
   })
 
+  test('the chat ask keeps the turn going: nothing in it reads as handing the work over now', () => {
+    // 2026-10-16: told "the rest of the task goes to a fresh session", chats ended their turn on a
+    // progress report within a minute, and sat done until the owner asked why they stopped.
+    const asks = [
+      ask(true),
+      windDownMessage({ reason: 'usage', pct: 86, week: false }, 'h.md', true),
+      windDownMessage({ reason: 'request' }, 'h.md', true),
+    ]
+    for (const text of asks) {
+      expect(text).toContain('keep working until it is fully done')
+      expect(text).toContain('no reason to stop, wrap up or end your turn early')
+      expect(text).not.toMatch(
+        /rest of the task goes|must hand the task|hand the task to a fresh session/,
+      )
+    }
+  })
+
   test('a non-chat ask keeps its one-line report', () => {
     expect(ask(false)).toContain('end your turn with one line saying the handoff is written')
   })
 
   test('a chat whose handoff was written ends done, not handoff', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
+    const dir = mkdtempSync(join(SCRATCH, 'handoff-'))
     const path = join(dir, 'h.md')
     const at = Date.now()
     writeFileSync(path, 'handoff')
@@ -214,7 +233,7 @@ describe('a handoff the daemon writes from the transcript', () => {
 
 describe('the w-984f4bed sequence (invented text)', () => {
   test('a chat turn that hit the size line, wrote its handoff silently, and ends done', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
+    const dir = mkdtempSync(join(SCRATCH, 'chat-'))
     const path = join(dir, 'w-984f4bed-4-wind.md')
     const at = Date.now()
     // The session was asked to wind down during a short turn and wrote the handoff in that turn.
@@ -233,7 +252,7 @@ describe('a launch that threw after its runner started', () => {
   // 2026-10-02: the launch wrote its 'moved' event and then threw before the worker was
   // marked running. Its runner was live, but the worker stayed queued on the account it left, so the
   // next tick launched the same handoff again: two runners, and two 'moved' events from one account.
-  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-handoff-retry-'))
+  const root = mkdtempSync(join(SCRATCH, 'retry-'))
   const configDir = (name: string): string => {
     const dir = join(root, name)
     mkdirSync(dir, { recursive: true })

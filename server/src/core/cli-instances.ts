@@ -32,6 +32,7 @@ import { basename, join } from 'node:path'
 import { syncOwnerClaude } from '../climayte-owner-sync'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { AccountPlacement, CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
+import { deleteNoteProblem } from './delete-note'
 import { pinHaikuModel } from './haiku-pin'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
@@ -48,8 +49,9 @@ import {
   windowsTerminalArgv,
 } from './launch-options'
 import { ownerClaudeDir } from './owner-claude-dir'
-import { isPathInside } from './paths'
+import { isPathInside, normalizeInstancePath } from './paths'
 import { type CMActionResult, prettyTier, resolvePlanLabel } from './shared'
+import { type StatStamp, stampOf, unchangedSince } from './stat-stamp'
 
 export type { CliInstance } from '../types'
 
@@ -199,11 +201,43 @@ export function setCliLoginVeto(
   loginVeto = fn
 }
 
-/** True when the config dir has been `/login`'d once (a `.credentials.json` is present). */
+// A signed-out Claude Code can leave its credential object behind with both tokens empty. Keep
+// only that definite local refusal (never the tokens); polling unchanged files adds no JSON reads.
+const emptyLoginCache = new Map<
+  string,
+  { stamp: StatStamp; dev: number; ino: number; empty: boolean }
+>()
+
+/** A credential file exists and has not explicitly cleared both of its OAuth tokens. */
 export function isLoggedIn(configDir: string): boolean {
+  const path = join(configDir, '.credentials.json')
   try {
-    return existsSync(join(configDir, '.credentials.json'))
+    const readAt = Date.now()
+    const st = statSync(path)
+    const hit = emptyLoginCache.get(path)
+    if (hit && hit.dev === st.dev && hit.ino === st.ino && unchangedSince(hit.stamp, st))
+      return !hit.empty
+    let empty = false
+    try {
+      // Unknown legacy formats keep the existing file-presence behavior. An expired access grant
+      // with a refresh token is also still usable: the CLI owns its normal refresh.
+      if (st.isFile() && st.size <= 64 * 1024) {
+        const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
+        empty =
+          typeof oauth?.accessToken === 'string' &&
+          !oauth.accessToken.trim() &&
+          typeof oauth?.refreshToken === 'string' &&
+          !oauth.refreshToken.trim()
+      }
+    } catch {
+      /* An unreadable or unfamiliar login is not proof of a cleared OAuth grant. */
+    }
+    emptyLoginCache.delete(path)
+    emptyLoginCache.set(path, { stamp: stampOf(st, readAt), dev: st.dev, ino: st.ino, empty })
+    if (emptyLoginCache.size > 512) emptyLoginCache.delete(emptyLoginCache.keys().next().value!)
+    return !empty
   } catch {
+    emptyLoginCache.delete(path)
     return false
   }
 }
@@ -241,14 +275,32 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
  *  label the desktop rows show: "Pro", "Max 5×", "Max 20×" (owner, 2026-09-30). Only those two
  *  fields are used; the token beside them is never returned or logged. Null when there is no login
  *  or it states no plan. */
+// Keep only the display label, never the parsed credentials or their tokens. CLI pool/list reads
+// revisit these files each second; a changed, replaced or removed login is detected on every call.
+const planCache = new Map<
+  string,
+  { stamp: StatStamp; dev: number; ino: number; label: string | null }
+>()
+const PLAN_CACHE_MAX = 512
+
 export function cliPlanLabel(configDir: string): string | null {
+  const path = join(configDir, '.credentials.json')
   try {
-    const path = join(configDir, '.credentials.json')
+    const readAt = Date.now()
+    const st = statSync(path)
+    const hit = planCache.get(path)
+    if (hit && hit.dev === st.dev && hit.ino === st.ino && unchangedSince(hit.stamp, st))
+      return hit.label
     const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
     const plan = typeof oauth?.subscriptionType === 'string' ? oauth.subscriptionType : null
     const tier = typeof oauth?.rateLimitTier === 'string' ? oauth.rateLimitTier : null
-    return resolvePlanLabel(plan, prettyTier(tier))
+    const label = resolvePlanLabel(plan, prettyTier(tier))
+    planCache.delete(path)
+    planCache.set(path, { stamp: stampOf(st, readAt), dev: st.dev, ino: st.ino, label })
+    if (planCache.size > PLAN_CACHE_MAX) planCache.delete(planCache.keys().next().value!)
+    return label
   } catch {
+    planCache.delete(path)
     return null
   }
 }
@@ -304,7 +356,10 @@ function hydrate(rec: CliInstance, num?: number): CliInstance {
   // so a listing stays as fast as it was.
   const cred = isLoggedIn(configDir)
   const loginNote = (cred && loginVeto?.(rec.id, configDir)) || null
-  const who = cred ? cliAccountIdentity(configDir) : null
+  // Keep the last known identity of an explicitly cleared login so renewal targets this same
+  // managed entry. Identity metadata does not make its empty credential usable.
+  const cleared = emptyLoginCache.get(join(configDir, '.credentials.json'))?.empty === true
+  const who = cred || cleared ? cliAccountIdentity(configDir) : null
   const { loginNote: _stale, ...stored } = rec
   return {
     ...stored,
@@ -410,6 +465,11 @@ export function reconcileCliInstanceDirs(): CliInstanceReconciliation {
 }
 
 // --- read --------------------------------------------------------------------
+
+/** Fresh canonical config folders without reading logins, account metadata or instance numbers. */
+export function listCliConfigDirs(): string[] {
+  return readStore().instances.map(canonicalConfigDir)
+}
 
 /** Every CLI instance, each with its live loggedIn state. */
 export function listCliInstances(): CliInstance[] {
@@ -670,7 +730,7 @@ export function linkCliInstanceToDesktop(
     if (!rec) return { result: null, changed: false }
     if (desktopDir) {
       for (const other of store.instances) {
-        if (other.id !== id && other.associatedDesktopDir === desktopDir) {
+        if (other.id !== id && sameDesktopDir(other.associatedDesktopDir, desktopDir)) {
           other.associatedDesktopDir = null
           other.associatedDesktopLabel = null
         }
@@ -698,10 +758,19 @@ export function linkCliInstanceToDesktop(
   }
 }
 
+/** One desktop profile folder however it is spelled: a link stored as `c:\users\me\...` is the profile listed as
+ *  `C:\Users\me\...` (2026-10-14: 6 of 7 links here were stored lower-cased, so an exact compare found none of them). */
+export function sameDesktopDir(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  return !!a && !!b && normalizeInstancePath(a) === normalizeInstancePath(b)
+}
+
 /** The CLI instance linked to this desktop instance dir, or null. The reverse of the link above —
  *  used by the desktop usage route to find a backup credential when the desktop token can't be used. */
 export function cliInstanceForDesktop(desktopDir: string): CliInstance | null {
-  const rec = readStore().instances.find((i) => i.associatedDesktopDir === desktopDir)
+  const rec = readStore().instances.find((i) => sameDesktopDir(i.associatedDesktopDir, desktopDir))
   return rec ? hydrate(rec) : null
 }
 
@@ -868,9 +937,9 @@ export interface DeleteCliInstanceOptions {
 }
 
 /**
- * Guarded delete: `confirmName` must equal the instance's display name (same discipline as the
- * desktop delete). Removes the record AND its config dir (which holds the login) — irreversible, so
- * the confirm gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
+ * Guarded delete: `note` says why the instance is deleted (at least 3 characters, see
+ * {@link deleteNoteProblem}). Removes the record AND its config dir (which holds the login) —
+ * irreversible, so the note gate matters. The dir is always under CLI_INSTANCES_ROOT (we created it), so there is
  * no "outside the root" escape to guard against as there is for desktop dirs.
  *
  * The record is dropped ONLY once the directory is verifiably gone (audit AH-03). The previous
@@ -881,7 +950,7 @@ export interface DeleteCliInstanceOptions {
  */
 export function deleteCliInstance(
   id: string,
-  confirmName?: string,
+  note?: string,
   options: DeleteCliInstanceOptions = {},
 ): CMActionResult {
   const rec = readStore().instances.find((i) => i.id === id)
@@ -893,12 +962,13 @@ export function deleteCliInstance(
       message: 'CLI instance not found.',
       data: { id },
     }
-  if (!confirmName || confirmName !== rec.name) {
+  const noteProblem = deleteNoteProblem(note)
+  if (noteProblem) {
     return {
       ok: false,
       action: 'cli-delete',
       dir: rec.configDir,
-      message: `Refusing to delete: confirmName must exactly match the instance name '${rec.name}'.`,
+      message: `Refusing to delete: ${noteProblem}`,
       data: { id },
     }
   }

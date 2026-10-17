@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The header's always-on helpers chip (owner, 2026-10-12: the background servers and watchers were
 // "random PowerShells that sit on their own, and Pythons that sit on their own"; the daemon owns them
-// now, server/src/helpers.ts). At a glance: how many run and the memory they hold, amber when one is
+// now, server/src/helpers.ts). At a glance: the helper count, amber when one is
 // down. Open: each helper with its memory drawn against the largest, a restart on each, and Stop all,
 // which acts at once and offers Undo. Hidden on a PC with no helpers.json.
 import { Boxes, Power, PowerOff, RotateCw } from '@lucide/vue'
@@ -80,7 +80,8 @@ const tone = computed(() => (view.value?.paused || down.value ? 'text-warning' :
 function dot(h: HelperRow): string {
   if (h.state === 'running') return 'bg-success'
   if (h.state === 'stopped') return 'bg-muted-foreground/50'
-  return 'bg-warning'
+  // Starting or waiting to start: work under way, never the yellow that means it waits on the owner (2026-10-17).
+  return 'bg-muted-foreground animate-pulse'
 }
 
 function note(h: HelperRow): string | null {
@@ -106,7 +107,7 @@ function note(h: HelperRow): string | null {
             :aria-label="label"
           >
             <Boxes class="size-3.5" />
-            <span class="hidden tabular-nums sm:inline">{{ label }}</span>
+            <span class="hidden tabular-nums sm:inline">{{ rows.length }}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" class="w-72">
@@ -124,11 +125,11 @@ function note(h: HelperRow): string | null {
                 <span class="min-w-0 flex-1 truncate text-xs" :title="h.label">{{ h.label }}</span>
                 <span class="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted">
                   <span
-                    class="block h-full rounded-full bg-foreground/40"
-                    :style="{ width: `${Math.round(((h.memoryMB ?? 0) / largestMB) * 100)}%` }"
+                    class="block h-full w-(--bar-w) rounded-full bg-foreground/40"
+                    :style="{ '--bar-w': `${Math.round(((h.memoryMB ?? 0) / largestMB) * 100)}%` }"
                   />
                 </span>
-                <span class="w-12 shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
+                <span class="w-12 shrink-0 text-end text-2xs tabular-nums text-muted-foreground">
                   {{ h.memoryMB === null ? '' : memory(h.memoryMB) }}
                 </span>
                 <Button

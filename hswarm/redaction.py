@@ -110,6 +110,9 @@ _SALT = os.urandom(16)
 # map back when a later leg writes them into a file or returns them in its answer. Tags are salted per process,
 # so one map is consistent across every task in it.
 _ORIGINALS: dict[str, str] = {}
+# Every tag shape `<kind:8 or 16 hex>` (kind may hold a colon), so restore() visits each tag once in a single pass
+# instead of str.replace-ing every entry ever stored. A tag-shaped string the map does not know is left as it is.
+_RESTORE_RX = re.compile(r"<[^<>]+:[0-9a-f]{8}(?:[0-9a-f]{8})?>")
 
 # Tools whose arguments get hash tags mapped back to real values: the ones that write to this machine. read_url
 # and the rest stay tagged, so an injected page cannot talk the worker into fetching `?k=<secret:..>` with the real key.
@@ -120,9 +123,7 @@ def restore(text: str) -> str:
     """Hash tags (from any leg of any task in this process) mapped back to their real values."""
     if not _ORIGINALS or "<" not in text:
         return text
-    for tag, value in _ORIGINALS.items():
-        text = text.replace(tag, value)
-    return text
+    return _RESTORE_RX.sub(lambda m: _ORIGINALS.get(m.group(0), m.group(0)), text)
 
 
 def restore_deep(value: object) -> object:

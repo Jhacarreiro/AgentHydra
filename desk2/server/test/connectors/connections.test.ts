@@ -1,9 +1,11 @@
 // plugins/56-connections.ts and connectors/connections-client.ts against a fake Connections loader that speaks MCP
 // over stdio: the workspace of a chat (its pin, else its folder's), the list, the switch per scope, the 409 before a
-// chat has a session, the environment the child was given, and sign-in.
+// chat has a session, the environment the child was given, and sign-in. The config names the fake `connections-local`
+// (an installer's name) behind another server that runs a --connect helper of its own, so every test here also proves
+// Desk finds Connections by what the entry launches, not by its key.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -120,9 +122,13 @@ async function boot(): Promise<Rig> {
   CHATS.newChat2 = { cwd: dflt, sessionId: 'sess-new2', createdAt: later }
   CHATS.pinnedNew = { cwd: dflt, sessionId: 'sess-pinned', createdAt: later }
   const dir = temp('desk-cx-')
-  writeFileSync(join(dir, 'loader.mjs'), LOADER)
+  // where an install keeps the loader (…/local-mcp/loader.mjs), so the entry is known by what it launches
+  const loader = join(dir, 'local-mcp', 'loader.mjs')
+  mkdirSync(join(dir, 'local-mcp'))
+  writeFileSync(loader, LOADER)
   const cfg = join(dir, 'claude.json')
-  writeFileSync(cfg, JSON.stringify({ mcpServers: { connections: { command: process.execPath, args: [join(dir, 'loader.mjs'), dir] } } }))
+  const other = { type: 'http', url: 'http://127.0.0.1:1/mcp', headersHelper: 'node example-tool/helper.mjs --connect' }
+  writeFileSync(cfg, JSON.stringify({ mcpServers: { 'other-example': other, 'connections-local': { command: process.execPath, args: [loader, dir] } } }))
   const plugins = temp('desk-cx-plugins-')
   writeFileSync(join(plugins, '56-connections.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
   // Stands in for the engine's GET /api/chats/:id.

@@ -323,21 +323,16 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
   }
 }
 
-const createOpen = ref(false)
+// A new instance is made at once and named by the daemon until its account names the row: nobody is
+// asked for a name (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are").
 const creating = ref(false)
-const createError = ref<string | null>(null)
-function openCreate() {
-  createOpen.value = true
-}
-async function onCreate(name: string) {
+async function openCreate() {
+  if (creating.value) return
   creating.value = true
-  createError.value = null
   try {
-    const result = await create(name)
-    if (result?.ok) {
-      createOpen.value = false
-      toast.success(t('codexInstances.toastCreated'))
-    } else createError.value = result?.message ?? t('codexInstances.toastCreateFailed')
+    const result = await create()
+    if (result?.ok) toast.success(t('codexInstances.toastCreated'))
+    else toast.error(result?.message ?? t('codexInstances.toastCreateFailed'))
   } finally {
     creating.value = false
   }
@@ -386,12 +381,12 @@ function openDelete(instance: CodexInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDelete(name: string) {
+async function onDelete(note: string) {
   const target = deleteTarget.value
   if (!target) return
   deleting.value = true
   try {
-    const result = await remove(target.id, name)
+    const result = await remove(target.id, note)
     if (result?.ok) {
       deleteOpen.value = false
       toast.success(t('codexInstances.toastDeleted'))
@@ -614,7 +609,8 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   <InstanceRow
     v-for="instance in visibleRows"
     :key="instance.id"
-    :style="orderStyle(instance)"
+    class="order-(--row-order)"
+    :style="{ '--row-order': orderStyle(instance)?.order }"
     :columns="columns"
     :row="rowModels.get(instance.id)!"
   >
@@ -813,17 +809,8 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   </Dialog>
 
   <CliInstanceNameDialog
-    v-model:open="createOpen"
-    namespace="codexInstances"
-    mode="create"
-    :submitting="creating"
-    :error-message="createError"
-    @submit="onCreate"
-  />
-  <CliInstanceNameDialog
     v-model:open="renameOpen"
     namespace="codexInstances"
-    mode="rename"
     :current-name="renameTarget?.name ?? null"
     :submitting="renaming"
     :error-message="renameError"
@@ -832,7 +819,6 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   <DeleteInstanceDialog
     v-model:open="deleteOpen"
     namespace="codexInstances"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDelete"

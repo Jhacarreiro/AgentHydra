@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // The transcript: a windowed list (only the rows near the viewport are in the DOM, so a 3,000-item
-// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send, the down arrow's last step
+// chat scrolls smoothly), auto-scroll that lets go when the owner scrolls up (a send, the down arrow's last step
 // or scrolling back down takes it back to the bottom), and a Working row under the last item while the
 // chat's turn runs.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type Directive } from 'vue'
+import { LoaderCircle } from '@lucide/vue'
 import { icons } from '@/lib/icons'
-import type { ChatSummary, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { watchTranscript } from '@/lib/chat-audio'
 import { buildRows, estimateHeight } from './lib/rows'
@@ -13,10 +14,10 @@ import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
 import { groupRows, liveRow, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
-import { nextMessageStep, stepTarget } from './lib/steps'
+import { nextMessageStep, sentOverIndex, stepTarget } from './lib/steps'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
-import { COLLAPSE_MS } from './lib/motion'
+import { COLLAPSE_MS, reducedMotion } from './lib/motion'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { MENU_CONTENT, MENU_ITEM } from '@/components/sidebar/menuClasses'
 import { Tip } from '@/components/ui/tooltip'
@@ -27,6 +28,7 @@ import TaskGroup from './parts/TaskGroup.vue'
 import BrowserCard from './parts/BrowserCard.vue'
 import MessagePeek from './parts/MessagePeek.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
+import SeatsRow from '@/components/tasks/SeatsRow.vue'
 import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
 
@@ -53,7 +55,16 @@ const props = defineProps<{
   /** The history is not loaded yet; with `loadError`, the last try at it failed and another is coming. */
   loading?: boolean
   loadError?: string | null
+  /** Items older than the first one given that the server still holds: their height is counted in the scrollbar at the average row height. */
+  olderCount?: number
+  /** The page above is being fetched: a spinner row shows at the top. */
+  loadingOlder?: boolean
+  /** The chat's index: the step arrows and the peek reach every message sent, loaded or not. */
+  index?: TranscriptIndex | null
+  /** One item by id, for the peek of a message that is not loaded. */
+  fetchItem?: (id: string) => Promise<TranscriptItem | null>
 }>()
+const emit = defineEmits<{ loadOlder: [] }>()
 
 const desk = useDesk()
 
@@ -146,9 +157,28 @@ const layout = computed(() => {
   return { gaps, h }
 })
 const gaps = computed(() => layout.value.gaps)
+// Rows not loaded yet (props.olderCount) stand above the first one as blank height at the average row height, so the
+// scrollbar's size is the whole transcript's. The average is taken when the rows are first given and again when rows are
+// put in above (never as rows are measured), so the blank does not drift under someone reading.
+const avgRow = ref(0)
+watch(
+  display,
+  (now, before) => {
+    if (avgRow.value && before?.length && now[0]?.id === before[0]?.id) return
+    const h = layout.value.h
+    let sum = 0
+    for (let i = 0; i < h.length; i++) sum += h[i]
+    avgRow.value = h.length ? sum / h.length : 0
+  },
+  { immediate: true },
+)
+const virtualTop = computed(() => Math.round((props.olderCount ?? 0) * avgRow.value))
 const offsets = computed(() => {
   void version.value
-  return prefixOffsets(layout.value.h)
+  const out = prefixOffsets(layout.value.h)
+  const v = virtualTop.value
+  if (v) for (let i = 0; i < out.length; i++) out[i] += v
+  return out
 })
 const range = computed(() => visibleRange(offsets.value, scrollTop.value, viewHeight.value, 800))
 const visible = computed(() =>
@@ -168,7 +198,7 @@ function estimateRow(r: DisplayRow): number {
   return estimateHeight(it) + (it.kind === 'user' || r.endOfTurn ? 28 : 0)
 }
 
-// Auto-scroll: pinned to the bottom until Jacob scrolls up by any means (wheel, touchpad, scrollbar, keys); only
+// Auto-scroll: pinned to the bottom until the owner scrolls up by any means (wheel, touchpad, scrollbar, keys); only
 // scrolling back down to the bottom, the down arrow's last step or a send re-pins. A reply growing never pulls him down.
 const pinned = ref(true)
 let lastTop = 0
@@ -337,7 +367,7 @@ const sent = computed(() => {
     ids.push(r.id)
     tops.push(rowTop(i))
   })
-  return { ids, tops }
+  return sentOverIndex({ ids, tops }, props.index?.userMessages, avgRow.value, 20 + (props.insetTop ?? 0))
 })
 
 // A step glides there by the transcript's own frames, not the browser's smooth scroll. The rows on the way start as
@@ -379,7 +409,7 @@ function glideTo(to: string | null) {
   stopGlide()
   userScrolls()
   pinned.value = false
-  const ms = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : GLIDE_MS
+  const ms = reducedMotion() ? 0 : GLIDE_MS
   glide = { to, t0: performance.now(), ms, eased: 0, frame: 0, last: Number.NaN, still: 0, after: 0 }
   heading.value = { to }
   glide.frame = requestAnimationFrame(glideFrame)
@@ -422,22 +452,53 @@ function stopGlide() {
   heading.value = null
 }
 onBeforeUnmount(stopGlide)
+/** Asks for the page above until the row `id` is loaded; false when the pages ran out first. */
+async function ensureLoaded(id: string): Promise<boolean> {
+  for (let n = 0; n < 200 && !indexById.value.has(id); n++) {
+    if ((props.olderCount ?? 0) <= 0 && !props.loadingOlder) return false
+    const had = props.items.length
+    if (!props.loadingOlder) emit('loadOlder')
+    await nextTick()
+    for (let ms = 0; ms < 15_000 && props.loadingOlder; ms += 25) await new Promise((r) => setTimeout(r, 25))
+    await nextTick()
+    if (props.items.length === had && !indexById.value.has(id)) return false
+  }
+  return indexById.value.has(id)
+}
+async function glideToMessage(id: string) {
+  if (!indexById.value.has(id) && !(await ensureLoaded(id))) return
+  glideTo(id)
+}
 function stepUp() {
   const i = prevStep.value
-  if (i !== null) glideTo(sent.value.ids[i]!)
+  if (i !== null) void glideToMessage(sent.value.ids[i]!)
 }
 function stepDown() {
   const i = nextStep.value
-  glideTo(i === null ? null : sent.value.ids[i]!)
+  if (i === null) glideTo(null)
+  else void glideToMessage(sent.value.ids[i]!)
 }
 
 // The peek under the arrows (parts/MessagePeek.vue): the message the up arrow would go to, shown in a tray over the
 // top while the view stays put. A second press closes it.
 const peekId = ref<string | null>(null)
+const peekFetched = shallowRef<Extract<TranscriptItem, { kind: 'user' }> | null>(null)
 const peekItem = computed(() => {
   const i = peekId.value === null ? undefined : indexById.value.get(peekId.value)
   const r = i === undefined ? undefined : display.value[i]
-  return r?.kind === 'item' && r.item.kind === 'user' ? r.item : null
+  if (r?.kind === 'item' && r.item.kind === 'user') return r.item
+  return peekFetched.value && peekFetched.value.id === peekId.value ? peekFetched.value : null
+})
+// A message outside the loaded rows is fetched by its id for the tray.
+watch(peekId, async (id) => {
+  peekFetched.value = null
+  if (!id || indexById.value.has(id) || !props.fetchItem) return
+  try {
+    const it = await props.fetchItem(id)
+    if (it && it.kind === 'user' && peekId.value === id) peekFetched.value = it
+  } catch {
+    peekId.value = null // floor-ok: nothing to show; the tray closes
+  }
 })
 function peek() {
   const i = prevStep.value
@@ -446,7 +507,7 @@ function peek() {
 function goToPeek() {
   const id = peekId.value
   peekId.value = null
-  if (id) glideTo(id)
+  if (id) void glideToMessage(id)
 }
 
 let rowObserver: ResizeObserver | null = null
@@ -488,7 +549,7 @@ onMounted(() => {
       heights.set(id, h)
       layout.value.h[idx] = h
       changed = true
-      // A row above the viewport changed size: keep what Jacob is reading where it is (a held row does that itself).
+      // A row above the viewport changed size: keep what the owner is reading where it is (a held row does that itself).
       if (!pinned.value && !held && idx < firstOnScreen) anchorDelta += h - old
     }
     if (!changed) return
@@ -529,12 +590,26 @@ onBeforeUnmount(() => {
 })
 
 // Follow new items, streaming growth and re-measured rows while pinned; scrolled up, they only tell the jump button how far down the bottom is.
+// The window moving follows too: a jump to the bottom is written against the rows on screen before it, and when those
+// were estimated taller than they render the browser stops short; the rows that replace them at the bottom are already
+// measured, so no offset changes and nothing else would take it the rest of the way (a chat whose history loaded again
+// under it sat 185px above its bottom, 2026-10-14).
+function onListChange() {
+  if (pinned.value) return void nextTick(follow)
+  trimSlack()
+  if (scroller.value) fromBottom.value = distanceOf(scroller.value)
+}
+watch([offsets, showWorking, () => props.items[props.items.length - 1]], onListChange, { flush: 'post' })
+// Once a frame: rows not measured yet land each jump on another window, and following every one of those without a
+// frame between never lets them be measured (the lazy parity scene's page hung there, 2026-10-14).
+let windowFollowed = false
 watch(
-  [offsets, showWorking, () => props.items[props.items.length - 1]],
+  () => range.value.start,
   () => {
-    if (pinned.value) return void nextTick(follow)
-    trimSlack()
-    if (scroller.value) fromBottom.value = distanceOf(scroller.value)
+    if (windowFollowed) return
+    windowFollowed = true
+    requestAnimationFrame(() => (windowFollowed = false))
+    onListChange()
   },
   { flush: 'post' },
 )
@@ -679,6 +754,17 @@ watch(
   { flush: 'post' },
 )
 
+// Within about two screens of the first loaded row, with more above: ask for the page above (the parent fetches it and
+// puts the rows in front; the anchor below keeps the row on screen still). Asked again as long as it stays near.
+const nearTop = computed(() => scrollTop.value - virtualTop.value < viewHeight.value * 2)
+watch(
+  [nearTop, () => props.olderCount, () => props.loadingOlder, () => props.items.length],
+  () => {
+    if (nearTop.value && (props.olderCount ?? 0) > 0 && !props.loadingOlder && props.items.length) emit('loadOlder')
+  },
+  { flush: 'post', immediate: true },
+)
+
 // Rows put in above what is on screen (a long outside session's older part, read behind its newest): scrolled up, the
 // row at the top of the view stays where it is, as for a row above re-measuring; pinned, the bottom is followed as for
 // any change. It is found again by an item it holds, not its row id: a run of tool calls the new rows go on from
@@ -748,9 +834,14 @@ watch(
   <div class="relative h-full min-h-0 bg-bg-page">
     <ContextMenu>
     <ContextMenuTrigger as-child>
+    <!-- The open rail lies --rail-over over the chat's right (DeskFrame): the scroller ends at its left edge, so the scrollbar
+         sits beside the step arrows and the peek's right edge, never under the rail (owner, 2026-10-17: the scroll bar was
+         "behind the sidebar"). The wrapper inside gives the same width back on the left, so the column stays centred on the
+         whole chat. Padded on the scroller itself, its container (the column's queries below) would lose the overlap twice,
+         and pe-12 would take 12px off the text at every width where the rail pushes the column over. -->
     <div
       ref="scroller"
-      class="@container h-full overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
+      class="@container mr-[var(--rail-over,0px)] h-full overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
       role="feed"
       aria-label="Chat messages"
       data-transcript-scroller
@@ -760,11 +851,18 @@ watch(
       @contextmenu.capture="onContextCapture"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane).
+           The right one is 48 once the pane is too narrow to centre the text 48 clear of its edge: the step arrows' lane
+           (12px in, 24 wide, 12 clear of the text; owner, 2026-10-14: they sat on a right-hand message's picture).
            Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
-      <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <div class="pl-[var(--rail-over,0px)]">
+      <div class="mx-auto w-full max-w-210 px-9 pb-37.5 @max-[864px]:pe-12 @max-[560px]:ps-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
-        <div :style="{ height: `${padTop}px` }" />
+        <div class="relative" :style="{ height: `${padTop}px` }">
+          <div v-if="loadingOlder" class="absolute inset-x-0 bottom-0 flex justify-center py-3 text-text-muted" role="status" aria-label="Loading earlier messages" data-testid="older-spinner">
+            <LoaderCircle class="size-4 animate-spin" />
+          </div>
+        </div>
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />
           <TaskGroup v-else-if="r.kind === 'tasks'" :id="r.id" :items="r.items" />
@@ -773,8 +871,10 @@ watch(
         </div>
         <div :style="{ height: `${padBottom}px` }" />
         <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" :shimmer="liveRowId === null" class="mt-4" @reveal="revealStep" />
+        <SeatsRow v-if="chat && !readOnly" :chat="chat" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
+      </div>
       </div>
     </div>
     </ContextMenuTrigger>
@@ -802,8 +902,8 @@ watch(
          opens between them. -->
     <div
       v-if="prevStep !== null || showStepDown || peekItem"
-      class="pointer-events-none absolute right-5 z-[9] flex flex-col gap-1"
-      :style="{ top: `${(insetTop ?? 0) + 12}px` }"
+      class="pointer-events-none absolute z-9 flex flex-col gap-1 transition-[right] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
+      :style="{ top: `${(insetTop ?? 0) + 12}px`, right: 'calc(var(--rail-over, 0px) + 0.75rem)' }"
     >
       <span class="flex size-6">
         <Tip v-if="prevStep !== null" label="Previous message you sent" side="left">

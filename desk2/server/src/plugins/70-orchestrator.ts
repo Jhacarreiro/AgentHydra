@@ -2,7 +2,7 @@
 // CLI, CliMayte or Codex session AgentHydra knows) active in the last `?days=` days (3 by default) with the one move
 // the orchestrator would make next and why; `?ask=1` also asks the CreAitor, when this machine has it, what the owner
 // would answer each one that waits on a question. Phase A, shadow: that is all it does. Phase B, armed: the
-// `orchestrator` setting (Settings > Managers, beside the babysitter's switch; or POST the same path { armed }), off by
+// `orchestrator` setting (the switch on AgentHydra's Tools > Orchestrator page; or POST the same path { armed }), off by
 // default and kept until it is turned off (owner, 2026-10-09: "I may not always want the foreman on ... but sometimes I
 // might want it on"). Armed, it looks every TICK_MS, and a model judges each chat that needs it (orchestrator/judge.ts):
 // every running chat due a peek, and every Desk chat an error stopped. The model's verdict decides; its message goes
@@ -12,9 +12,8 @@
 // no act. Own page only, and GET /api/orchestrator/model says which model the judge asks.
 // README "What Desk 2 adds", the orchestrator.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Hono } from 'hono'
 import type { AccountInfo, ChatSummary, CliMayteWorker, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
@@ -23,8 +22,7 @@ import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { DIAGNOSTICS_API } from '../engine/diagnostics'
 import { afterGivingUp, decide } from '../orchestrator/act'
 import { askCreaitor, creaitorTool } from '../orchestrator/creaitor'
-import { DEFAULT_ACCOUNT, ROOM_PCT } from '../bridge/accounts'
-import { pickHealthy } from '../engine/chat-manager'
+import { pickHealthy, ROOM_PCT } from '../bridge/accounts'
 import {
   askOf,
   CONTEXT_STEPS,
@@ -41,6 +39,8 @@ import {
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank, WAIT_MS } from '../orchestrator/plan'
 import { stuckWorkers } from '../orchestrator/stuck'
+import { loadStuckRecord } from '../orchestrator/stuck-record'
+import { factsOf } from '../orchestrator/waiting-facts'
 import { notOwnPage } from '../own-page'
 
 const WHAT = "the orchestrator's plan"
@@ -61,8 +61,6 @@ const ACTS_KEPT = 50
 const HOUR_MS = 3_600_000
 /** The wait before a stuck worker's failed nudge or cancel is tried again: after the first failure, the second, then each later one. */
 const STUCK_BACKOFF_MS = [10 * 60_000, 30 * 60_000, 2 * HOUR_MS]
-/** A job or worker still running this long after a chat began waiting on it is overdue, and its chat is judged anyway. */
-const WAIT_OVERDUE_MS = 6 * HOUR_MS
 /** Judgments kept for the page. */
 const JUDGED_KEPT_MS = 24 * HOUR_MS
 /** A judge error that is the account's login being refused, worth one try on another account. */
@@ -114,18 +112,6 @@ interface Candidate {
   waitingOn?: string[]
 }
 
-/** What the orchestrator found out about one thing a chat waits on, without a model. */
-interface Fact {
-  /** The line for the judge. */
-  text: string
-  /** Still running and not yet overdue: its chat is left alone. */
-  running: boolean
-}
-
-const HSWARM_JOB = /^\d{8}-\d{6}-[0-9a-f]{4}$/
-const WORKER_ID = /^w-[0-9a-f]{8}$/
-const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
-
 export default function plugin(app: Hono, ctx: ServerContext): void {
   let stopped = false
   const armed = (): boolean => !stopped && ctx.settings().orchestrator === true
@@ -139,76 +125,20 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const sends = new Map<string, { at: number; kind: 'note' | 'continue' }[]>()
   /** Chat id -> the things it waited on that got their one nudge (a waiting chat's waitingOn, joined). */
   const nudged = new Map<string, Set<string>>()
-  /** "<worker id>|<reason>" -> already acted on (a nudge or a cancel), kept in a file so a restart does not repeat it. */
   const stuckFile = typeof ctx.home === 'string' ? join(ctx.home, 'orchestrator-stuck.json') : null
-  /** "<worker id>|<reason>" -> failed attempts so far and the earliest time of the next one. */
-  const stuckRetry = new Map<string, { fails: number; next: number }>()
-  const stuckDone = new Set<string>()
-  try {
-    const saved = stuckFile ? (JSON.parse(readFileSync(stuckFile, 'utf8')) as { done?: string[]; retry?: Record<string, { fails: number; next: number }> } | string[]) : null
-    if (Array.isArray(saved)) for (const k of saved) stuckDone.add(k)
-    else if (saved) {
-      for (const k of saved.done ?? []) stuckDone.add(k)
-      for (const [k, v] of Object.entries(saved.retry ?? {})) stuckRetry.set(k, v)
-    }
-  } catch {
-    /* no record yet */
-  }
-  const saveStuck = (): void => {
-    try {
-      if (!stuckFile) return
-      mkdirSync(dirname(stuckFile), { recursive: true })
-      writeFileSync(stuckFile, JSON.stringify({ done: [...stuckDone], retry: Object.fromEntries(stuckRetry) }))
-    } catch {
-      /* kept in memory for this run */
-    }
-  }
+  const { done: stuckDone, retry: stuckRetry, save: saveStuck } = loadStuckRecord(stuckFile)
   /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
   let resolved: { setting: string; model: string } | null = null
+  /** Items route -> the transcript read() last fetched there and the chat's itemsStamp and updatedAt it was fetched at.
+   *  Reused only while both are the same: the stamp moves with the chat's file (an append that leaves updatedAt alone),
+   *  updatedAt with the rest. Only the chats of the last read are kept, never a failed fetch. */
+  const fetched = new Map<string, { stamp: string; updatedAt: number; items: TranscriptItem[] }>()
 
   /** The judge's model: the owner's test double when the context carries one (tests inject it under deps), else the SDK. */
   const askModel = (): AskModel => (ctx.deps.orchestratorAsk as AskModel | undefined) ?? sdkAskModel(ctx.home, () => claudeCodeBinaryFor(ctx.home).path())
 
   /** HSwarm's folder: the test's own, else ~/.hswarm. */
   const hswarmHome = (): string => (ctx.deps.hswarmHome as string | undefined) ?? process.env.HSWARM_HOME ?? join(homedir(), '.hswarm')
-
-  /** What a job's record says (~/.hswarm/jobs/<id>/job.json): finished when and with what counts, or still running. */
-  function jobFact(id: string, now: number): Fact {
-    let job: { state?: unknown; finished?: unknown; summary?: { created?: unknown; finished?: unknown; counts?: unknown } }
-    try {
-      job = JSON.parse(readFileSync(join(hswarmHome(), 'jobs', id, 'job.json'), 'utf8'))
-    } catch {
-      return { text: `HSwarm job ${id}: no record of it could be read`, running: false }
-    }
-    const finished = typeof job.finished === 'string' && job.finished ? job.finished : typeof job.summary?.finished === 'string' ? job.summary.finished : ''
-    const counts = job.summary?.counts && typeof job.summary.counts === 'object' ? Object.entries(job.summary.counts as Record<string, unknown>).map(([k, n]) => `${String(n)} ${k}`).join(', ') : ''
-    if (finished && Number.isFinite(Date.parse(finished)))
-      return { text: `HSwarm job ${id} finished at ${iso(Date.parse(finished))}${counts ? ` (${counts})` : ''}; its results: hswarm_results('${id}')`, running: false }
-    const created = typeof job.summary?.created === 'string' ? Date.parse(job.summary.created) : NaN
-    const overdue = Number.isFinite(created) && now - created > WAIT_OVERDUE_MS
-    return { text: `HSwarm job ${id} is ${String(job.state ?? 'running')}${overdue ? ' and overdue' : ''}${counts ? ` (${counts})` : ''}`, running: !overdue }
-  }
-
-  function workerFact(id: string, w: CliMayteWorker | undefined, now: number): Fact {
-    if (!w) return { text: `CliMayte worker ${id}: the daemon does not list it`, running: false }
-    if (!w.active) return { text: `CliMayte worker ${id} is ${w.status}${w.endedAt ? ` since ${iso(w.endedAt)}` : ''}`, running: false }
-    const overdue = w.startedAt !== null && now - w.startedAt > WAIT_OVERDUE_MS
-    return { text: `CliMayte worker ${id} is ${w.status}${overdue ? ' and overdue' : ''}`, running: !overdue }
-  }
-
-  /** The facts that can be checked without a model about what a chat waits on: HSwarm job ids and CliMayte worker ids. */
-  async function factsOf(on: readonly string[], now: number): Promise<Fact[]> {
-    const out: Fact[] = []
-    let workers: CliMayteWorker[] | null | undefined
-    for (const id of on) {
-      if (HSWARM_JOB.test(id)) out.push(jobFact(id, now))
-      else if (WORKER_ID.test(id)) {
-        workers ??= await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
-        out.push(workerFact(id, workers?.find((w) => w.id === id), now))
-      }
-    }
-    return out
-  }
 
   async function get<T>(path: string): Promise<T | null> {
     const res = await app.request(path)
@@ -223,6 +153,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return typeof answer?.error === 'string' ? answer.error : `${path} answered ${res.status}`
   }
 
+  /** A chat's transcript: the one fetched last while its itemsStamp and updatedAt are what they were then, else fetched
+   *  afresh. A chat with no stamp (an outside session, a running turn) is fetched every time. */
+  async function transcript(path: string, stamp: string | undefined, updatedAt: number): Promise<TranscriptItem[] | null> {
+    const hit = fetched.get(path)
+    if (stamp && hit?.stamp === stamp && hit.updatedAt === updatedAt) return hit.items
+    // The stamp is the one the list gave before this fetch: a change in between moves it again, and the next look fetches.
+    const got = await get<TranscriptItem[]>(path)
+    if (got && stamp) fetched.set(path, { stamp, updatedAt, items: got })
+    else fetched.delete(path)
+    return got
+  }
+
   /** Each open chat's row (with `outside`, each outside session's too), the most recently active first, and each
    *  one's Claude session and transcript. `blind` when Desk's own chats could not be read; `unread`, the chats whose
    *  transcript could not be (each is classified as if it were empty, which is fine to show and never enough to act on). */
@@ -231,10 +173,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     outside: boolean
   ): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean; unread: Set<string>; items: Map<string, TranscriptItem[]> }> {
     const now = Date.now()
-    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
+    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats?stamps=1'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
     const subjects = [
-      ...(own ?? []).filter((ch) => !ch.archived).map((ch) => ({ s: fromChat(ch), items: `/api/chats/${encodeURIComponent(ch.id)}/items` })),
-      ...(others ?? []).filter((x) => !x.archived && x.status !== 'stale').map((x) => ({ s: fromExternal(x), items: `/api/external/sessions/${encodeURIComponent(x.id)}/items` }))
+      ...(own ?? []).filter((ch) => !ch.archived).map((ch) => ({ s: fromChat(ch), items: `/api/chats/${encodeURIComponent(ch.id)}/items`, stamp: ch.itemsStamp })),
+      ...(others ?? []).filter((x) => !x.archived && x.status !== 'stale').map((x) => ({ s: fromExternal(x), items: `/api/external/sessions/${encodeURIComponent(x.id)}/items`, stamp: undefined }))
     ]
       .filter(({ s }) => now - s.updatedAt < days * 86_400_000)
       .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
@@ -242,13 +184,16 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const rows: OrchestratorRow[] = []
     const unread = new Set<string>()
     const transcripts = new Map<string, TranscriptItem[]>()
-    for (const { s, items } of subjects) {
+    const looked = new Set<string>()
+    for (const { s, items, stamp } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
-      const got = busy ? null : await get<TranscriptItem[]>(items)
+      if (!busy) looked.add(items)
+      const got = busy ? null : await transcript(items, stamp, s.updatedAt)
       if (!busy && got === null) unread.add(s.id)
       if (got) transcripts.set(s.id, got)
       rows.push(classify(s, got, now))
     }
+    for (const path of fetched.keys()) if (!looked.has(path)) fetched.delete(path)
     return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null, unread, items: transcripts }
   }
 
@@ -327,25 +272,21 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
 
   /** One judgment, signed in with any signed-in account AgentHydra lists that has room, whichever account the judged
    *  chats run on (owner, 2026-10-09: "just use ... anything that's available"): one nobody is using first, the least
-   *  used first (chat-manager's pickHealthy), then a busy one, and the next when a login is refused. The default
-   *  ~/.claude login comes last: its token expires (every judgment failed "OAuth session expired" on it, 2026-10-09).
-   *  With no account listed, the default login is what there is, and its refusal shows on the row. With accounts
-   *  listed and none under the 85% line (hasRoom), no judgment runs: the unread default login is no way around it. */
+   *  used first (pickHealthy), then a busy one, and the next when a login is refused. With no account under the 85%
+   *  line (hasRoom), no judgment runs. */
   async function judgeOnAnAccount(c: Candidate, model: string): Promise<JudgeResult> {
     const accounts = (await get<AccountInfo[]>('/api/accounts')) ?? []
-    const managed = accounts.filter((a) => a.id !== DEFAULT_ACCOUNT.id)
-    const idle = managed.filter((a) => !a.inUse)
-    const tried: string[] = []
+    const idle = accounts.filter((a) => !a.inUse)
+    const tried = new Set<string>()
     let result: JudgeResult | null = null
     for (let attempt = 0; attempt < JUDGE_ACCOUNT_TRIES; attempt++) {
       const account = pickHealthy(idle, tried) ?? pickHealthy(accounts, tried)
-      if (!account && !tried.length && managed.length)
-        return { ok: false, error: `no account has room: every signed-in account is at or past ${ROOM_PCT}% or unread`, resolved: null, read: null }
-      if (!account && tried.length) break
-      if (account) tried.push(account.id)
+      if (!account)
+        return result ?? { ok: false, error: `no account has room: every signed-in account is at or past ${ROOM_PCT}% or unread`, resolved: null, read: null }
+      tried.add(account.id)
       const now = Date.now()
-      result = await judgeChat((step) => briefOf(c, now, step), model, askModel(), JUDGE_TIMEOUT_MS, account?.configDir ?? null)
-      if (result.ok || !account || !LOGIN_REFUSED.test(result.error)) break
+      result = await judgeChat((step) => briefOf(c, now, step), model, askModel(), JUDGE_TIMEOUT_MS, account.configDir)
+      if (result.ok || !LOGIN_REFUSED.test(result.error)) break
     }
     return result!
   }
@@ -425,12 +366,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
    *  one nudge for it. A chat whose job still runs, or whose transcript could not be read, is left (never blind). */
   async function waitingCandidates(now: number, look: Looked, skip: ReadonlySet<string>): Promise<Candidate[]> {
     const out: Candidate[] = []
+    // One GET per path for the whole pass: a row on a live worker is reprocessed every tick, and each one used to fetch the whole worker list again (2026-10-16).
+    const pass = new Map<string, Promise<unknown>>()
+    const passGet = <T>(path: string) => {
+      if (!pass.has(path)) pass.set(path, get<T>(path))
+      return pass.get(path) as Promise<T | null>
+    }
     for (const r of look.blind ? [] : look.rows) {
       if (r.move !== 'waiting' || !r.waitingOn || skip.has(r.id)) continue
       if (nudged.get(r.id)?.has(r.waitingOn.join('|'))) continue
       const last = judgments.get(r.id)?.at
       if (last !== undefined && now - last < PEEK_MS) continue
-      const facts = await factsOf(r.waitingOn, now)
+      const facts = await factsOf(r.waitingOn, now, hswarmHome, passGet)
       if (facts.some((f) => f.running)) continue
       out.push({
         id: r.id,
@@ -545,7 +492,8 @@ CliMayte worker ${w.id} (${w.title}) has sat stuck for ${how}: ${s.why}. Answer 
         const waiting = new Set(queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
         const skip = new Set([...look.unread, ...waiting])
         const candidates = limitCandidates(now, look, skip)
-        candidates.push(...(await runningCandidates(now, skip)), ...(await waitingCandidates(now, look, skip)))
+        const [running, waitingChats] = await Promise.all([runningCandidates(now, skip), waitingCandidates(now, look, skip)])
+        candidates.push(...running, ...waitingChats)
         await pool(candidates, JUDGE_WIDTH, async (c) => {
           if (armed()) await judgeOne(c)
         })

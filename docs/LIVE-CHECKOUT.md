@@ -20,7 +20,7 @@ the updater (2026-10-10).
 | Tray (`misc\AgentHydra-Tray.exe AgentHydra-Tray.json`) | `live/` | Its config is relative (`appRoot ".."`), so only the shortcut moves. A tray still running under its old name, `lunarwerx-tray.exe`, is the old setup: it restarts the daemon from `app/`. |
 | Desk 2, the window (`desk2\server` on 7798, `launcher\HydraDesk2.exe`) | `live\desk2` | The AgentHydra shortcuts run `live\desk2\launcher\start.vbs`. `-Apply` installs and builds it there. |
 | Desk 2's dev-servers service | the Desk that started it | It outlives a Desk restart. Once its code differs from Desk's and it runs no server, Desk replaces it on the next `/dw/api/*` request. With servers running it is left alone, and `GET /dw/status` says `stale`. |
-| Always-on helpers: the servers and watchers in `<CONFIG_DIR>\helpers.json` (on the owner's PC the switch-card watcher, `approve_switch_card.ps1`, one for every account, and the orchestrator dashboard on 7799) | the paths in the list; `{APP_ROOT}` there is `live\` | The daemon starts each one nothing runs, adopts one already running, and restarts one that exits or passes its memory cap ([server/src/helpers.ts](../server/src/helpers.ts)). The window's header lists them. A helper keeps running across a daemon restart, with the path it started with. |
+| Always-on helpers: the servers and watchers in `<CONFIG_DIR>\helpers.json` (on the owner's PC the switch-card watcher, `approve_switch_card.ps1`, one for every account, and the orchestrator dashboard on 7799) | the paths in the list; `{APP_ROOT}` there is `live\` | The daemon starts each one nothing runs, adopts one already running, and restarts one that exits or passes its memory cap ([server/src/helpers.ts](../server/src/helpers.ts)). The window's header lists them. A helper keeps running across a daemon restart, with the path it started with: on Windows the daemon starts each one through WMI, outside its own process tree and job, under a hidden `cmd.exe` that appends its output to `<DATA_DIR>\logs\helpers\<id>.log` ([server/src/core/outside-start.ts](../server/src/core/outside-start.ts)), and the next daemon adopts it. A program on a helper's port whose command line lacks the helper's arguments is left alone. |
 | HSwarm: the `hswarm` command (`pip install -e`) and every chat's MCP connect step (`headersHelper` in the `mcpServers` map, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) | `live\hswarm` | Not moved by `-Apply` (step 6 below). The shared MCP server on 7793 runs its own copy of the committed code, in `~\.hswarm\code`. |
 | `AgentHydra Daemon Supervisor`, `AgentHydra Daemon Watchdog` tasks | `live\misc\Supervisor-Tick.vbs`, `live\scripts\watchdog.vbs` | Same `wscript` switches, same triggers. |
 | `Orchestrator-*` tasks (the dashboard's only where `jobs.dashboard.enabled` is on; elsewhere it is a helper) | the job wrappers in the state dir, which run `live\orchestrator\...` | Wrappers are rewritten by text, not regenerated. |
@@ -57,8 +57,13 @@ dashboard keeps its log open), `-Apply` stops before the move, names the process
    `restartNeeded: true`, `bootCommit` older than `diskCommit`), restart it in place with
    `POST /api/daemon/restart` (the app header's Restart). The new daemon starts first and takes over the
    same port; CliMayte workers under their runners keep going and the new daemon picks them up (50 ran
-   through one on 2026-10-10). It answers 409 while a worker runs inside the daemon itself or a chat move
-   is in flight. The auto-update loop waits for running work on its own.
+   through one on 2026-10-10). Free batches never hold it (2026-10-17): each one is saved in
+   `<DATA_DIR>\free-batches`, the restart parks them (no new send starts; a look at Desk 2 under way
+   finishes first, at most 20 s), and the new daemon carries every one on, so `free_results` answers for a
+   batch started before the restart. A `free_chat` during the handoff is taken, saved, and sent by the new
+   daemon. A send cut off by a crash is resent under its own request id, which Desk 2 answers with the
+   operation it already has. It answers 409 while a worker runs inside the daemon itself or a chat move
+   is in flight. The auto-update loop waits for a chat move, and up to an hour for dispatch runs.
 
 Never edit files in `live/`. If it has local edits, `-Plan` reports a problem and the updater refuses
 the pull.
@@ -75,7 +80,8 @@ order, while no CliMayte runner (`climayte-runner-*.exe`) is working, since a da
 3. Desk 2: restart it to update, from the window's Menu > Restart to update or, as an agent, with
    `POST http://127.0.0.1:7798/api/server/restart` once `/api/server/update` reads `stale: true` (`desk2/AGENTS.md`).
    Chats keep running in their hosts and the open window reconnects.
-4. Always-on helpers: stop the ones whose command line names `app\`. The daemon starts them again from
+4. Always-on helpers: stop the ones whose command line names `app\` (the helper itself; the `cmd.exe` above it
+   exits with it). The daemon starts them again from
    `live\` within 15 seconds.
 5. Dev-servers service: once `GET http://127.0.0.1:7798/dw/status` shows `running: 0`, any `/dw/api/*` request
    (for example `GET /dw/api/settings`) makes Desk replace it from `live\`.

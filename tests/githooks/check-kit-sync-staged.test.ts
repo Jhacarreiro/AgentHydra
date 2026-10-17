@@ -48,6 +48,8 @@ const HOOK_TEST_TIMEOUT = 45_000
 
 const REAL_PRECOMMIT = join(REPO_ROOT, '.githooks', 'pre-commit')
 const REAL_GUARD = join(REPO_ROOT, '.githooks', 'check-kit-sync-staged.mjs')
+// pre-commit's people guard runs after the kit-sync one, so the sandbox carries it too (2c079274).
+const REAL_PEOPLE_GUARD = join(REPO_ROOT, '.githooks', 'check-people.mjs')
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -129,6 +131,7 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
     // Byte-identical copies of the REAL hook files, read fresh every run.
     writeFileSync(join(repo, '.githooks', 'pre-commit'), readFileSync(REAL_PRECOMMIT))
     writeFileSync(join(repo, '.githooks', 'check-kit-sync-staged.mjs'), readFileSync(REAL_GUARD))
+    writeFileSync(join(repo, '.githooks', 'check-people.mjs'), readFileSync(REAL_PEOPLE_GUARD))
     chmodSync(join(repo, '.githooks', 'pre-commit'), 0o755) // git on POSIX refuses a non-executable hook
 
     git(repo, 'init', '-q', '-b', 'main')

@@ -7,7 +7,7 @@ import { PHOTO_TYPES, managerFace, uploadPhoto, type ChatManager } from './manag
 
 // The manager a chat is on, left of its row's title (manager-face.ts): its photo or its initial, 16px round. A click opens
 // its card, without selecting the row: the photo larger, the name, title, one-line description and stats line, and Change photo,
-// which replaces the photo for every row of that manager. `open` tells the row, which hides its own tooltip meanwhile.
+// which replaces the photo for every row of that manager (a Hydra Core lead or seat who is no manager has none). `open` tells the row, which hides its own tooltip meanwhile.
 const props = defineProps<{ manager: ChatManager }>()
 const open = defineModel<boolean>('open', { default: false })
 
@@ -81,12 +81,13 @@ async function onPicked() {
       <p v-if="manager.oneLiner" class="line-clamp-3 text-ui-sm leading-4.5 text-text-2" :title="manager.oneLiner">{{ manager.oneLiner }}</p>
       <!-- Its analytics, one line as the server words it; nothing before there is data. -->
       <p v-if="manager.statsLine" data-testid="manager-stats" class="tnum truncate text-2xs text-text-muted" :title="manager.statsLine">{{ manager.statsLine }}</p>
-      <div class="flex items-center gap-2">
+      <!-- A persona who is no manager (a Hydra Core lead or seat) has its photo from elsewhere: nothing here changes it. -->
+      <div v-if="face.canChangePhoto" class="flex items-center gap-2">
         <Button variant="outline" size="sm" :disabled="busy" @click="picker?.click()">{{ busy ? 'Saving photo…' : 'Change photo' }}</Button>
         <span class="text-2xs text-text-muted">Up to 2 MB</span>
       </div>
       <p v-if="error" role="alert" class="text-ui-sm leading-4.5 text-danger-text">{{ error }}</p>
-      <input ref="picker" type="file" :accept="PHOTO_TYPES.join(',')" class="hidden" aria-label="Choose a photo" @change="onPicked" />
+      <input v-if="face.canChangePhoto" ref="picker" type="file" :accept="PHOTO_TYPES.join(',')" class="hidden" aria-label="Choose a photo" @change="onPicked" />
     </PopoverContent>
   </Popover>
 </template>

@@ -14,9 +14,11 @@ const emit = defineEmits<{ close: [] }>()
 const REFRESH_MS = 60_000
 const scope = shallowRef<FourmanScope>({ kind: 'folder', cwd: props.cwd })
 const board = shallowRef<FourmanBoard | null>(null)
+const fetchedAt = ref<number | null>(null)
 const folderProject = ref<string | null>(null)
 const projectKeys = ref<string[]>([])
 const error = ref<string | null>(null)
+const loading = ref(false)
 const now = ref(Date.now())
 const menuOpen = ref(false)
 const openTiers = ref(new Set<FourmanTier>())
@@ -26,7 +28,7 @@ const choices = computed<ScopeChoice[]>(() => projectChoices(props.cwd, folderPr
 const current = computed(() => choices.value.find((c) => sameScope(c.scope, scope.value))?.label ?? folderName(props.cwd))
 const forYouRows = computed(() => (board.value ? forYou(board.value) : []))
 const sections = computed(() => (board.value ? tierSections(board.value, openTiers.value) : []))
-const ago = computed(() => (board.value ? timeAgo(board.value.fetchedAt, now.value) : ''))
+const ago = computed(() => (fetchedAt.value !== null ? timeAgo(fetchedAt.value, now.value) : ''))
 
 function sameScope(a: FourmanScope, b: FourmanScope): boolean {
   if (a.kind !== b.kind) return false
@@ -35,14 +37,22 @@ function sameScope(a: FourmanScope, b: FourmanScope): boolean {
   return true
 }
 
+// Every fetch stamps a new fetchedAt, so that field is left out: a poll that finds the same tasks keeps the board it has.
+const sameBoard = (a: FourmanBoard, b: FourmanBoard): boolean =>
+  JSON.stringify({ ...a, fetchedAt: 0 }) === JSON.stringify({ ...b, fetchedAt: 0 })
+
 async function load() {
+  loading.value = true
   try {
     const next = await fourmanBoard(scope.value)
-    board.value = next
+    if (!board.value || !sameBoard(board.value, next)) board.value = next
+    fetchedAt.value = next.fetchedAt
     if (scope.value.kind === 'folder') folderProject.value = next.project
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loading.value = false
   }
   now.value = Date.now()
 }
@@ -73,13 +83,22 @@ const toggleTier = (tier: FourmanTier) => {
   openTiers.value = next
 }
 
+// The minute refresh runs only while the window is shown; coming back looks at once.
 let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
+function pace() {
+  if (timer) clearInterval(timer)
+  timer = null
+  if (document.hidden) return
   void load()
-  void loadKeys()
   timer = setInterval(() => void load(), REFRESH_MS)
+}
+onMounted(() => {
+  document.addEventListener('visibilitychange', pace)
+  pace()
+  void loadKeys()
 })
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', pace)
   if (timer) clearInterval(timer)
 })
 </script>
@@ -109,7 +128,7 @@ onBeforeUnmount(() => {
           <span aria-hidden="true">·</span>
           <span class="whitespace-nowrap">{{ ago }}</span>
         </template>
-        <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Refresh" @click="load()">
+        <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Refresh" :disabled="loading" :aria-busy="loading" @click="load()">
           <RotateCw :size="12" aria-hidden="true" />
         </button>
         <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Close" @click="emit('close')">

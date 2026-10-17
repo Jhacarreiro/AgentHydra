@@ -75,11 +75,14 @@ export const sidebarUserChats = (): ChatSummary[] =>
   ])
 
 /** The sidebar with chats on managers (sidebar/ManagerAvatar.vue, e2e/manager-avatar.e2e.ts): Ada has a photo, which the e2e
- *  serves from its own managers folder, and is on two chats; Bo has none and draws an initial. Invented names. */
+ *  serves from its own managers folder, and is on two chats; Bo has none and draws an initial; Cy leads one chat for Hydra Core. Invented names. */
 export const MANAGER_ADA = { slug: 'ada-design', name: 'Ada', title: 'Head of Design', oneLiner: 'Owns how every screen, row and card looks and works, and decides by the recorded rulings.', photo: 1760000000000, statsLine: '41 turns · 98% answered · judge 7.6 · 3 corrections' }
 export const MANAGER_BO = { slug: 'bo-backend', name: 'Bo', title: 'Backend Engineer', oneLiner: 'Owns the server: its routes, storage and the data each screen reads.', photo: null }
+/** A chat's Hydra Core lead who is no manager: its photo comes from the personas route, which the e2e serves from a portraits folder. */
+export const LEAD_CY = { slug: 'cy-layout', name: 'Cy', title: 'Layout designer', oneLiner: 'Designs dashboard layouts and styling.', photo: 1760000000500, role: 'lead' as const, persona: true as const }
 export const managerChats = (): ChatSummary[] =>
   chats([
+    ['lead', 'Invented onboarding flow sketch', C, 'idle', { manager: LEAD_CY }],
     ['ahs', 'Agent Hydra subprocess issue', C, 'working', { manager: MANAGER_BO }],
     ['mkt', 'Plugin marketplace onboarding UX review', C, 'idle', { manager: MANAGER_ADA }],
     ['ccd', 'Desktop client rewrite plan', C, 'idle'],

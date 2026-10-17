@@ -2,11 +2,16 @@
 // when missing), and short readable errors. No credential is sent: in loopback local mode RepoYeti answers /api/* to
 // Desk's server without one; a refusal says so in words and never carries a token.
 
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const CALL_MS = 20_000
 /** Pushing and pulling go over the network. */
 const NET_MS = 90_000
+/** A folder outside any work tree is asked again after this, so a `git init` shows soon. */
+const NOT_REPO_MS = 30_000
+/** Remote URL and default branch are reused this long; a change of either shows within it. */
+const FACTS_MS = 60_000
 
 export class RepoYetiError extends Error {
   constructor(
@@ -46,10 +51,37 @@ export async function ensureUpstream(root: string, branch: string): Promise<void
   }
 }
 
-/** The root of the git work tree `cwd` is in, or null when it is not in one. */
-export async function workTreeRoot(cwd: string): Promise<string | null> {
-  const out = await gitOut(cwd, ['rev-parse', '--show-toplevel'])
-  return out ? resolve(out) : null
+interface Memo {
+  at: number
+  known?: string | null
+  value: Promise<string | null>
+}
+
+const roots = new Map<string, Memo>()
+const facts = new Map<string, Memo>()
+
+/** The root of the git work tree `cwd` is in, or null when it is not in one. Asks share one git start while in flight. */
+export function workTreeRoot(cwd: string): Promise<string | null> {
+  const key = resolve(cwd)
+  const hit = roots.get(key)
+  if (hit && (hit.known === undefined || (hit.known ? existsSync(hit.known) : Date.now() - hit.at < NOT_REPO_MS))) return hit.value
+  const memo: Memo = { at: Date.now(), value: Promise.resolve(null) }
+  memo.value = gitOut(cwd, ['rev-parse', '--show-toplevel']).then((out) => {
+    memo.known = out ? resolve(out) : null
+    return memo.known
+  })
+  roots.set(key, memo)
+  return memo.value
+}
+
+/** gitOut for a setting that rarely changes (remote URL, default branch): a repeat within FACTS_MS reuses the answer. */
+export function gitFact(cwd: string, args: string[]): Promise<string | null> {
+  const key = JSON.stringify([cwd, args])
+  const hit = facts.get(key)
+  if (hit && Date.now() - hit.at < FACTS_MS) return hit.value
+  const memo: Memo = { at: Date.now(), value: gitOut(cwd, args) }
+  facts.set(key, memo)
+  return memo.value
 }
 
 const short = (s: unknown, fallback: string): string => String(s ?? fallback).replace(/\s+/g, ' ').slice(0, 200)

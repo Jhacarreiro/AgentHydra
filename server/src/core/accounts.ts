@@ -46,7 +46,7 @@ function log(_level: 'info' | 'warn' | 'error', _message: string): void {
 }
 
 /** `planLabel` — NOT the raw pretty tier. Passing the tier here leaked the unmapped generic value
- *  into the Quick view's one-liner ("Michael <owner@example.com> · default_claude_ai") for every
+ *  into the Quick view's one-liner ("Alex <owner@example.com> · default_claude_ai") for every
  *  account whose tier is `default_claude_ai`; the label must show what the Plan column shows. */
 function buildLabel(name: string | null, email: string | null, planLabel: string | null): string {
   let namePart: string | null = null
@@ -371,10 +371,11 @@ function buildGrant(grantKey: string, value: RawGrantValue, expiresAt: number): 
 // Profile API
 // ----------------------------------------------------------------------------
 
-interface ProfileResponse {
+export interface ProfileResponse {
   account?: {
     email?: string
     full_name?: string
+    display_name?: string
     uuid?: string
     has_claude_max?: boolean
     has_claude_pro?: boolean
@@ -400,7 +401,7 @@ interface ProfileResponse {
  *  (401/403) - the one failure another grant of the same profile can still get past. */
 type ProfileResult = { ok: true; profile: ProfileResponse } | { ok: false; refused: boolean }
 
-async function fetchProfile(token: string): Promise<ProfileResult> {
+export async function fetchProfile(token: string): Promise<ProfileResult> {
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)
@@ -693,7 +694,7 @@ function loadAccountConfig(instanceDir: string): {
 async function resolveGrants(
   config: Record<string, unknown>,
   instanceDir: string,
-): Promise<Grant[]> {
+): Promise<{ grants: Grant[]; cleared: boolean }> {
   let tokenCacheB64: string | null = null
   let usedV1 = false
   if (typeof config['oauth:tokenCacheV2'] === 'string' && config['oauth:tokenCacheV2']) {
@@ -707,7 +708,7 @@ async function resolveGrants(
       'info',
       `resolveAccount: no oauth token cache (v1 or v2) present in config.json for '${instanceDir}'.`,
     )
-    return []
+    return { grants: [], cleared: false }
   }
   try {
     const decrypted = await decryptSafeStorage(tokenCacheB64, instanceDir)
@@ -716,12 +717,37 @@ async function resolveGrants(
         'warn',
         `resolveAccount: could not decrypt token cache (${usedV1 ? 'v1' : 'v2'}) for '${instanceDir}'.`,
       )
-      return []
+      return { grants: [], cleared: false }
     }
-    return orderGrants(decrypted)
+    // A successfully decrypted empty object is an explicit cleared login, unlike missing,
+    // corrupt or unreadable storage. Check an older cache too before calling it signed out.
+    const empty = (raw: string): boolean => {
+      try {
+        const value = JSON.parse(raw)
+        return (
+          !!value &&
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          Object.keys(value).length === 0
+        )
+      } catch {
+        return false
+      }
+    }
+    let cleared = empty(decrypted)
+    if (
+      cleared &&
+      !usedV1 &&
+      typeof config['oauth:tokenCache'] === 'string' &&
+      config['oauth:tokenCache']
+    ) {
+      const older = await decryptSafeStorage(config['oauth:tokenCache'] as string, instanceDir)
+      cleared = !!older && empty(older)
+    }
+    return { grants: orderGrants(decrypted), cleared }
   } catch (err) {
     log('warn', `resolveAccount: decryptSafeStorage threw for '${instanceDir}': ${String(err)}`)
-    return []
+    return { grants: [], cleared: false }
   }
 }
 
@@ -849,7 +875,14 @@ export async function resolveAccount(
       return fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, null)
     }
 
-    const grants = await resolveGrants(config, instanceDir)
+    const { grants, cleared } = await resolveGrants(config, instanceDir)
+    if (cleared) {
+      return {
+        ...fallbackAccountFromCache(instanceDir, lastKnownAccountUuid, null),
+        status: 'loggedout',
+        source: 'loggedout',
+      }
+    }
 
     // ---- decide whether to go live or fall back ----------------------------------
     const nowMs = Date.now()

@@ -34,6 +34,7 @@ import {
   walls,
   workers,
 } from './climayte-core'
+import { createDeliveryEchoObserver } from './climayte-delivery-echo'
 import { firstLine } from './climayte-journal'
 import {
   aboutToBill,
@@ -230,6 +231,10 @@ let runnerCheck: Promise<void> | null = null
 
 let runnerCheckAt = 0
 
+/** False only when the last killLateStarts walk left no attempt marked killOnStart. Starts true: a
+ *  load can bring marks back from disk, which nothing else here would notice. */
+let lateStartsMaybe = true
+
 /** 'unknown' is read as still running: taking a failed or blank query for "ended" classed the
  *  attempt interrupted and relaunched it with --resume beside a CLI that may still have been
  *  running the same session, paying for the same work twice (review, 2026-10-01). */
@@ -289,18 +294,19 @@ export function checkRunners(): void {
   if (Date.now() - runnerCheckAt < RUNNER_RECHECK_MS) return
   const runners: { pid: number; log: string }[] = []
   for (const w of workers.values()) {
-    const at = w.attempts[w.attempts.length - 1]
+    const at = w.status === 'running' ? w.attempts[w.attempts.length - 1] : undefined
     const pid = at?.runner?.pid
     if (w.status === 'running' && at && pid && runnerIdentity(pid) === 'unknown')
       runners.push({ pid, log: at.log })
     // And every runner a stop is still waiting to kill, on any attempt of any worker: a cancelled
     // worker's or an urgent message's earlier attempt is neither 'running' nor the last (re-review).
-    for (const a of w.attempts) {
-      const late = a.runner?.killOnStart ? a.runner.pid : null
-      const asked = a === at && w.status === 'running' // the line above has it already
-      if (late && !asked && runnerIdentity(late) === 'unknown')
-        runners.push({ pid: late, log: a.log })
-    }
+    if (lateStartsMaybe)
+      for (const a of w.attempts) {
+        const late = a.runner?.killOnStart ? a.runner.pid : null
+        const asked = a === at && w.status === 'running' // the line above has it already
+        if (late && !asked && runnerIdentity(late) === 'unknown')
+          runners.push({ pid: late, log: a.log })
+      }
     // A check's runner after a restart: its spec path names the check's log the same way.
     const check = w.checkRunner
     // Any worker's: a cancelled one's check waits on this answer to be stopped (stopCheck).
@@ -309,8 +315,9 @@ export function checkRunners(): void {
     for (const r of w.staleChecks ?? [])
       if (r.pid && runnerIdentity(r.pid) === 'unknown') runners.push({ pid: r.pid, log: r.log })
   }
-  if (!runners.length) return
+  // Stamped with the walk, found or not: with no unknown runner the walk itself is what 5 s paces.
   runnerCheckAt = Date.now()
+  if (!runners.length) return
   runnerCheck = (async () => {
     // In-process first (win-process-table.ts): a few ms, and no PowerShell walking every process.
     const native = nativeCommandLines(runners.map((p) => p.pid))
@@ -395,7 +402,10 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
       const pids = readRunnerPids(runner.pidFile)
       if (!pids) {
         if (voidSpec(at.log)) removeRunnerFiles(at)
-        else runner.killOnStart = true
+        else {
+          runner.killOnStart = true
+          lateStartsMaybe = true
+        }
         continue
       }
       takeRunnerPids(at, runner, pids)
@@ -414,14 +424,18 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
   // checkRunners knows, instead of the stop being forgotten while the CLI runs on (re-review,
   // 2026-10-02). Marked now, so the caller's save keeps it.
   for (const { runner, pid } of kill)
-    if (runnerIdentity(pid) === 'unknown') runner.killOnStart = true
+    if (runnerIdentity(pid) === 'unknown') {
+      runner.killOnStart = true
+      lateStartsMaybe = true
+    }
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
  *  (killAttempts marks them killOnStart). Every attempt of every worker, whatever its status: after a
  *  cancel the worker is no longer 'running', so pollRunning never visits it, and after an urgent
  *  message a new attempt is already the worker's last. */
-export function killLateStarts(): void {
+export function killLateStarts(onSettled?: (w: CliMayteWorker, at: Attempt) => void): void {
+  if (!lateStartsMaybe) return
   for (const w of workers.values())
     for (const at of w.attempts) {
       const runner = at.runner
@@ -430,6 +444,8 @@ export function killLateStarts(): void {
       // A runner that already wrote its exit file has ended: its pid may be a stranger's by now.
       // Killed, ended on its own, or a runner that claimed its spec and died before writing a pid.
       const settle = () => {
+        // The exit receipt can prove EOF while the runner itself is still exiting.
+        onSettled?.(w, at)
         cleanUpRunner(w, at)
         delete runner.killOnStart
         changed(w)
@@ -445,6 +461,10 @@ export function killLateStarts(): void {
       )
         settle()
     }
+  // Read once the walk is done, so the flag matches what it left marked (a kill's settle lands later).
+  lateStartsMaybe = false
+  for (const w of workers.values())
+    for (const a of w.attempts) if (a.runner?.killOnStart) lateStartsMaybe = true
 }
 
 /** Kills started by killRunners, each with what runs once its trees are gone. The tick waits for them
@@ -500,7 +520,7 @@ const BOOTED_AT = Date.now()
 function readOf(at: CliMayteWorker['attempts'][number]): { r: LogRead; replay: boolean } {
   let r = reads.get(at.log)
   if (!r) {
-    r = freshRead()
+    r = freshRead(at.deliver ? createDeliveryEchoObserver(at) : undefined)
     reads.set(at.log, r)
   }
   return { r, replay: r.offset === 0 && at.startedAt < BOOTED_AT }

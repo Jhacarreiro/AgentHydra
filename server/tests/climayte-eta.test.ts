@@ -64,7 +64,12 @@ import {
   settledRow,
 } from '../src/climayte-eta-ledger'
 import { cliArgv } from '../src/climayte-launch'
-import { type CliMayteWorker, classifyAttempt, WORKER_BRIEF } from '../src/climayte-lib'
+import {
+  type CliMayteWorker,
+  classifyAttempt,
+  DRONE_BRIEF,
+  WORKER_BRIEF,
+} from '../src/climayte-lib'
 import { workerHooks } from '../src/climayte-signal'
 
 describe('parseEta', () => {
@@ -145,7 +150,7 @@ const sample = (kind: string | null, minutes: number, tookMin: number, doneAt: n
 })
 
 describe('etaSamples and etaCalibration', () => {
-  test('settled estimates only, the past ones too, newest first', () => {
+  test("settled estimates only, the past ones too, newest first; never a chat's (a seat's)", () => {
     const got = etaSamples([
       {
         id: 'a',
@@ -155,6 +160,7 @@ describe('etaSamples and etaCalibration', () => {
       },
       { id: 'b', eta: { minutes: 4, at: 0, attempt: 0 } }, // still running
       { id: 'c', kind: 'docs', eta: { minutes: 3, at: 0, attempt: 0, tookS: 90, doneAt: 20 } },
+      { id: 'd', chat: true, eta: { minutes: 8, at: 0, attempt: 0, tookS: 480, doneAt: 40 } },
     ])
     expect(got.map((s) => [s.id, s.doneAt])).toEqual([
       ['a', 30],
@@ -263,9 +269,11 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
 
     // The worker brief the next launch gets: plain while there are fewer than 5 samples.
     const launches = readFileSync(join(acct, 'fake-launches.jsonl'), 'utf8').trim().split('\n')
-    expect(JSON.parse(launches[0] ?? '{}').brief).toBe(WORKER_BRIEF)
+    expect(JSON.parse(launches[0] ?? '{}').brief).toBe(`${WORKER_BRIEF} ${DRONE_BRIEF}`)
     if (!rec) throw new Error('worker missing')
-    expect(cliArgv(rec, 'sid', false, 'hooks.json', null).at(-1)).toBe(WORKER_BRIEF)
+    expect(cliArgv(rec, 'sid', false, 'hooks.json', null).at(-1)).toBe(
+      `${WORKER_BRIEF} ${DRONE_BRIEF}`,
+    )
 
     // Five settled code estimates that each ran twice as long, plus the real one: the brief says by
     // how much.
@@ -279,7 +287,7 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
     const brief = cliArgv(rec, 'sid', false, 'hooks.json', null).at(-1) ?? ''
     expect(
       brief.startsWith(
-        `${WORKER_BRIEF} Calibrate your ETA by its size: first guesses under 10 min have run 2.0x`,
+        `${WORKER_BRIEF} ${DRONE_BRIEF} Calibrate your ETA by its size: first guesses under 10 min have run 2.0x`,
       ),
     ).toBe(true)
     expect(brief).toContain('scale your first guess by its band before you write it.')

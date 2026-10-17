@@ -4,7 +4,7 @@ import { connectorsForChat } from '../connectors/registry'
 import { coreModeOn } from './hydra-core-mode'
 
 const FIRST =
-  "You are running inside Hydra Desk, Jacob's own desktop for Claude Code."
+  "You are running inside Hydra Desk, the owner's own desktop for Claude Code."
 
 const DELEGATE = [
   'Sub-agents here are CliMayte workers, not the Agent tool: when you would start a sub-agent or hand off a piece of work,',

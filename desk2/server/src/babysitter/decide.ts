@@ -12,8 +12,16 @@
 // as soon as some signed-in account has room: the engine moves it there.
 //
 // HOW MANY TIMES. Each continue counts. A chat that then works and stops again well after (QUICK_MS) starts its count
-// again; one that stops at once after MAX_TRIES continues in a row is left to a person. A continue the chat has not
-// moved on from within SETTLE_MS counts as not taken and is sent again.
+// again; one that stops at once after MAX_TRIES continues in a row is left to a person.
+//
+// THE CHECK AFTER A CONTINUE (owner, 2026-10-17: "if it tells it to go and it doesn't, it should double-check it").
+// What the continue's route answered is kept (Receipt). A continue AgentHydra holds because the chat's app shows work
+// running in it is `held`, never `resumed`, and is not sent again while the hold lasts (HOLD_MS, which the hold is
+// given too, so it is dropped rather than sent late). Any other continue the chat has not moved on from within
+// SETTLE_MS is taken as not delivered. Either way a look is set for that moment; if the chat is still at its stop
+// then, it is continued again and the act says the last one had not moved it. That morning one chat stopped while
+// a background command still ran: AgentHydra held its continue, the page said "resumed" for 17 minutes, and a
+// second continue went into the same hold.
 
 import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol'
 import type { BabysitterChat, BabysitterChatState, BabysitterSource } from '@shared/babysitter'
@@ -28,12 +36,23 @@ export const RESET_BUFFER_MS = 60_000
 export const QUICK_MS = 10 * 60_000
 /** A continue that has not moved its chat within this long is taken as not delivered. */
 export const SETTLE_MS = 10 * 60_000
+/** How long a held continue is left to AgentHydra's hold before the chat is checked again. */
+export const HOLD_MS = 30 * 60_000
+/** The check after a hold waits this much past it, so the hold has dropped its copy before another is sent. */
+const HOLD_SLACK_MS = 60_000
 /** Continues in a row that each stopped again at once before the chat is left to a person. */
 export const MAX_TRIES = 3
 /** A chat with no stop and nothing sent for this long is forgotten. */
 export const FORGET_MS = 24 * 60 * 60_000
 /** An outside session whose last activity is this far past its stop has moved on. */
 const MOVED_ON_MS = 60_000
+
+/** What the last continue's route answered: the app started a turn on it, took it with no word of a turn yet (Desk's
+ *  send queue, or the app's answer came late), or AgentHydra holds it until the chat's app shows it idle. */
+export type Receipt = 'started' | 'sent' | 'held'
+
+/** How a continue went, as the plugin read its route's answer. */
+export type Outcome = Receipt | 'no-engine' | 'failed'
 
 /** One stopped chat as the babysitter remembers it between looks. */
 export interface Tracked {
@@ -48,6 +67,8 @@ export interface Tracked {
   resetsAt: number | null
   tries: number
   lastResumeAt: number | null
+  /** The last continue's receipt; absent in a memory saved before 2026-10-17, read as `sent`. */
+  receipt?: Receipt
   /** The stop it gave up on, so a later stop is looked at afresh. */
   gaveUpOn: number | null
   state: BabysitterChatState
@@ -66,7 +87,8 @@ export interface Look {
   now: number
 }
 
-export type Act = { id: string; kind: 'resume'; text: string } | { id: string; kind: 'give-up' }
+/** `recheck`: why a chat is continued again, when the check after its last continue found it had not moved. */
+export type Act = { id: string; kind: 'resume'; text: string; recheck: string | null } | { id: string; kind: 'give-up' }
 
 export interface Decision {
   memory: Memory
@@ -83,8 +105,7 @@ export function continueText(): string {
 const time = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 /** A Desk chat's account's reset: the later of its windows that are full, or null when none is. */
-function accountReset(accounts: readonly AccountInfo[] | null, id: string): number | null {
-  const a = accounts?.find((x) => x.id === id)
+function accountReset(a: AccountInfo | undefined): number | null {
   if (!a) return null
   const full = [
     (a.fiveHourPct ?? 0) >= 100 ? a.fiveHourResetsAt : null,
@@ -109,6 +130,10 @@ interface Stop {
 /** This look's stops. */
 function stopsOf(look: Look, memory: Memory): Stop[] {
   const stops: Stop[] = []
+  // The look's accounts are the same for every chat: index them and check for room once, not once per chat.
+  const accountById = new Map<string, AccountInfo>()
+  for (const a of look.accounts ?? []) if (!accountById.has(a.id)) accountById.set(a.id, a)
+  const roomAnywhere = someRoom(look.accounts)
   for (const c of look.own ?? []) {
     if (c.archived || c.status !== 'limited') continue
     // A Desk chat records no moment for its stop: the first look that saw it limited keeps the one it saw, unless the
@@ -126,10 +151,10 @@ function stopsOf(look: Look, memory: Memory): Stop[] {
         account: c.account.label,
         session: c.sessionId,
         notice: c.lastError,
-        resetsAt: c.limitResetsAt ?? accountReset(look.accounts, c.account.id),
+        resetsAt: c.limitResetsAt ?? accountReset(accountById.get(c.account.id)),
       },
       stoppedAt: known ?? c.updatedAt,
-      roomNow: c.accountAuto && someRoom(look.accounts),
+      roomNow: c.accountAuto && roomAnywhere,
     })
   }
   for (const s of look.outside ?? []) {
@@ -181,16 +206,35 @@ function judgeStop(stop: Stop, prior: Tracked | undefined, look: Look): { t: Tra
   const lastResumeAt = prior?.lastResumeAt ?? null
   // A new stop well after the last continue: the chat did real work in between, so its count starts again.
   if (prior?.stoppedAt !== stop.stoppedAt && lastResumeAt !== null && stop.stoppedAt - lastResumeAt >= QUICK_MS) tries = 0
-  const t: Tracked = { ...stop.base, stoppedAt: stop.stoppedAt, tries, lastResumeAt, gaveUpOn: prior?.gaveUpOn ?? null, state: 'waiting', reason: '' }
+  const t: Tracked = {
+    ...stop.base,
+    stoppedAt: stop.stoppedAt,
+    tries,
+    lastResumeAt,
+    ...(prior?.receipt ? { receipt: prior.receipt } : {}),
+    gaveUpOn: prior?.gaveUpOn ?? null,
+    state: 'waiting',
+    reason: '',
+  }
   const held = (act: Act | null = null, dueAt: number | null = null) => ({ t, act, dueAt })
 
   if (t.gaveUpOn === stop.stoppedAt) {
     Object.assign(t, { state: 'gave-up', reason: prior?.reason ?? `continued ${tries} times in a row and it stopped again each time: left to a person` })
     return held()
   }
-  if (lastResumeAt !== null && lastResumeAt >= stop.stoppedAt && now - lastResumeAt < SETTLE_MS) {
-    Object.assign(t, { state: 'resumed', reason: `continued at ${time(lastResumeAt)}; waiting for it to move` })
-    return held()
+  // The check after a continue to this stop: until its moment the chat is left to move (the reason carried() wrote
+  // stays); at it, a chat still at the stop is continued again below.
+  let recheck: string | null = null
+  if (lastResumeAt !== null && lastResumeAt >= stop.stoppedAt) {
+    const wasHeld = prior?.receipt === 'held'
+    const checkAt = checkAfter(lastResumeAt, prior?.receipt)
+    if (now < checkAt) {
+      Object.assign(t, { state: wasHeld ? 'held' : 'resumed', reason: prior?.reason || `continued at ${time(lastResumeAt)}; checked again at ${time(checkAt)}` })
+      return held(null, checkAt)
+    }
+    recheck = wasHeld
+      ? `the continue held at ${time(lastResumeAt)} had not gone out by ${time(checkAt)}`
+      : `the continue at ${time(lastResumeAt)} had not moved it by ${time(checkAt)}`
   }
   if (stop.base.source === 'cli') {
     Object.assign(t, { state: 'no-engine', reason: 'a terminal session: only its own terminal can continue it' })
@@ -209,12 +253,21 @@ function judgeStop(stop: Stop, prior: Tracked | undefined, look: Look): { t: Tra
     return held()
   }
   if (tries >= MAX_TRIES) {
-    Object.assign(t, { state: 'gave-up', gaveUpOn: stop.stoppedAt, reason: `continued ${tries} times in a row and it stopped again each time: left to a person` })
+    const reason =
+      prior?.receipt === 'held'
+        ? `continued ${tries} times in a row and its app still showed work running in it: left to a person`
+        : `continued ${tries} times in a row and it stopped again each time: left to a person`
+    Object.assign(t, { state: 'gave-up', gaveUpOn: stop.stoppedAt, reason })
     return held({ id: stop.id, kind: 'give-up' })
   }
   // Carried out by the plugin, which records how it went (carried()).
-  Object.assign(t, { reason: 'its limit has reset: continuing it' })
-  return held({ id: stop.id, kind: 'resume', text: continueText() })
+  Object.assign(t, { reason: recheck ? `${recheck}: continuing it again` : 'its limit has reset: continuing it' })
+  return held({ id: stop.id, kind: 'resume', text: continueText(), recheck })
+}
+
+/** When the check after a continue falls: a held one once its hold is over, any other once it has had SETTLE_MS. */
+function checkAfter(resumedAt: number, receipt: Receipt | undefined): number {
+  return resumedAt + (receipt === 'held' ? HOLD_MS + HOLD_SLACK_MS : SETTLE_MS)
 }
 
 /** A chat no longer at a stop. One a list that did not load would have held is kept as it was. One that moved on is
@@ -224,11 +277,19 @@ function keepOffList(id: string, t: Tracked, look: Look, next: Memory): void {
   else if (t.lastResumeAt !== null && look.now - t.lastResumeAt < FORGET_MS) next[id] = { ...t, stoppedAt: null, state: 'resumed', reason: 'moved on' }
 }
 
-/** The memory after one act was carried out: `ok`, or refused for want of anything running the chat, or failed. */
-export function carried(t: Tracked, outcome: 'ok' | 'no-engine' | 'failed', detail: string, now: number): Tracked {
-  if (outcome === 'ok') return { ...t, tries: t.tries + 1, lastResumeAt: now, state: 'resumed', reason: `continued at ${time(now)}; waiting for it to move` }
+/** The memory after one act was carried out: taken (with its receipt), refused for want of anything running the
+ *  chat, or failed. */
+export function carried(t: Tracked, outcome: Outcome, detail: string, now: number): Tracked {
   if (outcome === 'no-engine') return { ...t, state: 'no-engine', reason: `its limit has reset, but nothing runs it to take a message (${detail}); looked at again` }
-  return { ...t, tries: t.tries + 1, state: 'failed', reason: `the continue was refused: ${detail}` }
+  if (outcome === 'failed') return { ...t, tries: t.tries + 1, state: 'failed', reason: `the continue was refused: ${detail}` }
+  const checkAt = time(checkAfter(now, outcome))
+  const reason =
+    outcome === 'held'
+      ? `continued at ${time(now)}, but its app shows work still running in it: AgentHydra sends the continue once the chat is idle; checked again at ${checkAt}`
+      : outcome === 'started'
+        ? `continued at ${time(now)}; it started a turn (checked again at ${checkAt} if it has not moved)`
+        : `continued at ${time(now)}; checked again at ${checkAt} if it has not moved`
+  return { ...t, tries: t.tries + 1, lastResumeAt: now, receipt: outcome, state: outcome === 'held' ? 'held' : 'resumed', reason }
 }
 
 /** The stopped chats as GET /api/babysitter shows them, soonest reset first. */

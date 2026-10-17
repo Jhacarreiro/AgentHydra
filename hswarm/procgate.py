@@ -1,4 +1,4 @@
-"""The one gate every child process passes (owner, Michael, 2026-09-15: "make sure we don't end up
+"""The one gate every child process passes (owner, 2026-09-15: "make sure we don't end up
 spinning up a billion sub processes and murdering my cpu").
 
 Three rules, enforced here so no tool or backend has to remember them:

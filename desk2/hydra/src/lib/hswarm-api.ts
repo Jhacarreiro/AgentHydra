@@ -128,6 +128,8 @@ export interface HswarmAccountName {
   kind?: string
   /** Signed out or moved: named from what AgentHydra remembers, not from a current login. */
   former?: boolean
+  /** The main ~/.claude folder's login (now, or `former`): it has no instance number. */
+  main?: boolean
 }
 
 /** How one acct id reads in a table: former accounts say so, an id nobody knows stays raw with a hint.
@@ -140,6 +142,10 @@ export function accountDisplay(
 ): { text: string; muted: boolean; title?: string } {
   const n = names[id]
   if (!n) return { text: id, muted: false, title: t('swarmStats.accountUnknown') }
+  if (n.main) {
+    const text = n.former ? t('swarmStats.accountMainEarlier', { name: n.label }) : n.label
+    return { text, muted: !!n.former, title: t('swarmStats.accountMainTitle') }
+  }
   if (!n.former) return { text: `#${n.num} ${pii(n.label)}`, muted: false }
   const text =
     n.num != null
@@ -192,7 +198,7 @@ export async function fetchAccountNames(): Promise<Record<string, HswarmAccountN
 }
 
 /** The shared copy of fetchAccountNames, read by every page that names an HSwarm account. */
-const accountNames = ref<Record<string, HswarmAccountName>>({})
+const accountNames = shallowRef<Record<string, HswarmAccountName>>({})
 async function refreshAccountNames(): Promise<void> {
   const names = await fetchAccountNames()
   // An unreachable daemon answers {}: keep the names already known.
@@ -207,8 +213,8 @@ async function refresh() {
 }
 
 // The tree's two lists, one shared copy beside the state (null until first read).
-const clients = ref<{ client: string; registered: boolean | null }[] | null>(null)
-const jobs = ref<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
+const clients = shallowRef<{ client: string; registered: boolean | null }[] | null>(null)
+const jobs = shallowRef<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
 
 async function loadClients() {
   try {

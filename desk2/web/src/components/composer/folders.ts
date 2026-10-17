@@ -38,7 +38,9 @@ export function folderRows(paths: string[], current: string | null): FolderRow[]
   const byName = new Map<string, FolderRow[]>()
   for (const row of rows) {
     const key = row.name.toLowerCase()
-    byName.set(key, [...(byName.get(key) ?? []), row])
+    const group = byName.get(key)
+    if (group) group.push(row)
+    else byName.set(key, [row])
   }
   for (const group of byName.values()) {
     if (group.length < 2) continue

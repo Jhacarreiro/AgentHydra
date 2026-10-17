@@ -114,9 +114,11 @@ function judge(answers: Record<string, Answer> = {}, fallback: Answer = { verdic
 /** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
  *  each message handed to the send queue and not yet delivered (a test delivers them by emptying it). `onQueue` runs
  *  while the queue takes a message. */
-function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS, model = judge(), accounts?: AccountInfo[]): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
+const ROOMY: AccountInfo = { id: 'roomy', label: 'roomy', configDir: 'C:/Users/me/.claude-instances/roomy', email: null, plan: 'Pro', signedIn: true, fiveHourPct: 5, weeklyPct: 5, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false }
+
+function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS, model = judge(), accounts: AccountInfo[] = [ROOMY]): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
-  if (accounts) app.get('/api/accounts', (c) => c.json(accounts))
+  app.get('/api/accounts', (c) => c.json(accounts))
   const sent: string[] = []
   const queued: { chatId: string; text: string }[] = []
   app.use('*', async (c, next) => {
@@ -363,18 +365,17 @@ test('each open chat and outside session gets its one next move, most urgent fir
 })
 
 test("the judge signs in with the least used account that has room, one nobody is using first, and the next when a login is refused", async () => {
-  // Desk's default ~/.claude login's token expires: every judgment failed on it (2026-10-09). Any account with room
-  // will do, busy or not (owner, 2026-10-09): with every managed account busy, the default login stays last.
+  // Any account with room will do, busy or not (owner, 2026-10-09): with every account busy, the least used goes first.
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
   const account = (id: string, configDir: string | null, pct: number, inUse = false): AccountInfo => ({
     id, label: id, configDir, email: null, plan: 'Pro', signedIn: true, fiveHourPct: pct, weeklyPct: pct, fiveHourResetsAt: null, weeklyResetsAt: null, inUse
   })
   const dir = (id: string): string => `C:/Users/me/.claude-instances/${id}`
-  // With every managed account at or past the 85% line, no judgment runs, not even on the unread default login.
-  const unread: AccountInfo = { ...account('default', null, 0), fiveHourPct: null, weeklyPct: null }
+  // With every account at or past the 85% line, or unread, no judgment runs.
+  const unread: AccountInfo = { ...account('new', dir('new'), 0), fiveHourPct: null, weeklyPct: null }
   const cases: [AccountInfo[], string[], string[], string[]][] = [
-    [[account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)], [dir('a')], [dir('a'), dir('b')], ['error']],
-    [[account('default', null, 0), account('x', dir('x'), 30, true), account('y', dir('y'), 10, true), account('full', dir('full'), 100, true)], [dir('y')], [dir('y'), dir('x')], ['error']],
+    [[account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)], [dir('a')], [dir('a'), dir('b')], ['error']],
+    [[account('x', dir('x'), 30, true), account('y', dir('y'), 10, true), account('full', dir('full'), 100, true)], [dir('y')], [dir('y'), dir('x')], ['error']],
     [[unread, account('hot', dir('hot'), 85), account('full', dir('full'), 100)], [], [], []]
   ]
   for (const [accounts, refused, signedIn, sends] of cases) {
@@ -393,7 +394,7 @@ test('?ask=1 hands each waiting question and its choices to the CreAitor and sho
   const tool = join(dir, 'creaitor.js')
   // Reads its command line as strictly as the CreAitor's argparse (a choice that starts with a dash and is not passed
   // as --option=value is refused) and answers with the last choice, so the row shows the choices arrived intact.
-  const flags = { repo: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
+  const flags = { repo: 's', folder: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
   const options = Object.fromEntries(Object.entries(flags).map(([k, t]) => [k, { type: t === 'b' ? 'boolean' : 'string', multiple: t === 'm' }]))
   writeFileSync(tool, `const { values: v, positionals: p } = require('node:util').parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: ${JSON.stringify(options)} }); const o = v.option ?? []; console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: p[1], confidence: 0.9, basis: [v.session, v.via].filter(Boolean), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
   process.env.HYDRA_DESK_CREAITOR = tool

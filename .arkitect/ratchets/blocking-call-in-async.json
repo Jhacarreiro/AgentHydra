@@ -1,0 +1,362 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "blocking-call-in-async",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {
+    "desk2/server/src/async-file.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/bridge/seed-session.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/bridge/session-jsonl.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/browser/agent/exec.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/agent/session.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/browser/cdp.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/live/tools.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/peer-session.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/browser/profiles-adopt.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/profiles-scope.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/browser/profiles-write.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/store.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/browser/tab-sweep.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/changelog.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/chat-undo/plan.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/connectors/redesign-keys.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/devservers/client.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/devservers/company.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/devservers/registry.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/devservers/scan.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/devservers/stamp.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/engine/chat-items.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/engine/chat-manager.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/engine/claude-code-binary.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "desk2/server/src/engine/codex/exe.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/engine/cwd-move.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/engine/loop-stall.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/engine/store.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "desk2/server/src/folders/recent.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/free-instances/browser-pool.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/free-instances/storage.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/git/browse.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/git/git.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/host/launch.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/instance-manager/io.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/orchestrator/waiting-facts.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/plugins/60-update.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/projects/choices.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/projects/hydra.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/projects/icon-detect.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "desk2/server/src/projects/menu.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/projects/projects.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/routines/manager-central.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/routines/manager-settle.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "desk2/server/src/routines/manifest.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "scripts/upgrade-e2e-1x.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/agent-catalog.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    },
+    "server/src/box-doctor.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/chat-settings-carry.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/climayte-browser-tabs.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/climayte-core.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    },
+    "server/src/climayte-effort.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-journal.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-launch.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-lib.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    },
+    "server/src/climayte-memory.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-owner-sync.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-storage.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/climayte-tar.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-unsaved.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte-wave-ops.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/climayte.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/config.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/core/chat-store-scan.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/core/cli-instances.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/core/cli-login-move.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/core/cli-login-sync.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/codex-chat-list.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/core/codex-chat-move.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/codex-desktop.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/codex-instances.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/core/codex-transcript-lineage.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/core/crypto/keys.win.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/desktop-chat-local.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    },
+    "server/src/core/desktop-cli-feed.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/desktop-login-sync.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/dsh-instances.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    },
+    "server/src/core/instances.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/json-store.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/login-history.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/core/paths.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/core/process.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/dashboards.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/desktop-folder-move.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/dispatch.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/dsh-sessions.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/fleet.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/foreign-sessions.ts": {
+      "blocking-call-in-async/blocking-call": 8
+    },
+    "server/src/fourman.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/github-updater.ts": {
+      "blocking-call-in-async/blocking-call": 8
+    },
+    "server/src/hermes-sessions.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/hswarm-cost.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/hswarm-sessions.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/hydra-core/catalog.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/hydra-core/log.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/hydra-core/tree.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/hydra-family.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/kit/ingest-foreign.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/kit/ingest-hswarm.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/live-registry.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/log-file.mjs": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/manager-folders.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/mcp-register.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/move-retire-on-close.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/orchestrator.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/peer-message.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/people-store/this-pc.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/portable-window.mjs": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/relaunch-handoff.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/routes/desktop-sessions.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/routes/usage.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/session-keepalive.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/session-launch.ts": {
+      "blocking-call-in-async/blocking-call": 21
+    },
+    "server/src/sue-dredd-home.ts": {
+      "blocking-call-in-async/blocking-call": 1
+    },
+    "server/src/transcript.ts": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/ui-archive.ts": {
+      "blocking-call-in-async/blocking-call": 2
+    },
+    "server/src/updater-engine.mjs": {
+      "blocking-call-in-async/blocking-call": 3
+    },
+    "server/src/version-drift.ts": {
+      "blocking-call-in-async/blocking-call": 4
+    }
+  }
+}

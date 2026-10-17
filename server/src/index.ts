@@ -13,11 +13,13 @@ import {
   lastUpdateCheck,
   loadAutoUpdateSettings,
   recordUpdateCheck,
+  relaunchAfterUpdate,
   setAutoUpdateEnabled,
   setAutoUpdateHooks,
   setAutoUpdateIntervalSecs,
   startAutoUpdate,
   stopAutoUpdate,
+  watchPushes,
 } from './auto-update'
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
@@ -30,7 +32,9 @@ import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayt
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
+import { runnerHandoffsSettled } from './climayte-runner'
 import { flushCliMayteStore } from './climayte-store-writer'
+import { startCommandPacks } from './command-packs'
 import {
   APP_ROOT,
   appEnv,
@@ -64,12 +68,14 @@ import { createChatGptContextPack } from './context-pack'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
-import { reconcileCodexInstanceDirs } from './core/codex-instances'
+import { giveCodexInstancesOwnerAgents, reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
+import { setBeforeLaunchHook } from './core/instances'
+import { pruneBeforeLaunch } from './core/revoked-grants'
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
-import { serveDashboardSite, setDashboardSelfUrl } from './dashboards'
+import { serveDashboardSite, setDashboardSelfUrl, startDeclaredBackends } from './dashboards'
 import { getSetting, setSetting } from './db'
 import { desk2 } from './desk2'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
@@ -91,6 +97,9 @@ import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
+import { startFeedbackFold, stopFeedbackFold } from './hydra-core/feedback'
+import { packAnswer } from './hydra-core/pack'
+import { coreDir } from './hydra-core/paths'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
   clearInstanceInfo,
@@ -114,13 +123,11 @@ import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { startLoopDetector } from './loop-detector'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
-import { startManagerAnalytics } from './manager-analytics/collect'
-import { startManagerJudge } from './manager-analytics/judge'
-import { autoRsiTick, startTrialSettling } from './manager-analytics/rsi'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
+  TOOLS as MCP_TOOLS,
   UNLISTED_TOOLS as MCP_UNLISTED_TOOLS,
   toolsForCaller as mcpToolsForCaller,
   useOwnDaemon as mcpUseOwnDaemon,
@@ -130,6 +137,13 @@ import {
   withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
 import { DESK_CHAT_HEADER, withDeskChat } from './mcp-find'
+import {
+  adoptFreeBatches,
+  freeBatchPendingCount,
+  parkFreeBatches,
+  resumeFreeBatches,
+  saveFreeBatches,
+} from './mcp-free'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { reassertSharedMcp, sharedMcpServer } from './mcp-hub'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -151,7 +165,8 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
+import { adoptOrchestratorRuns, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
+import { getPeopleAddon, peopleAddon, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -164,14 +179,27 @@ import {
   sendTestNotification,
   startResetWatch,
 } from './reset-watch'
+import { restartRefusal } from './restart-refusal'
 import { jsonBody } from './route-helpers'
 import { openSearchIndex } from './search-index'
 import { warmSessionScanCache } from './sessions'
 import { peerDaemon, setPeerDaemon, sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, skipSingleInstanceGuard } from './single-instance'
-import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
+import {
+  heapSummary,
+  profileSinceStart,
+  startStallSentinel,
+  stopStallSentinel,
+} from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
+import { warmToolIntentInBackground } from './tool-intent'
+import {
+  PARK_WAIT_MS,
+  parkToolboxCalls,
+  resumeToolboxCalls,
+  toolboxCallGate,
+} from './toolbox-calls'
 import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -179,6 +207,7 @@ import { startTrayInvariant } from './tray-invariant'
 import { materializeTrayToolkit } from './tray-toolkit'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
+import { asReader, requestReader } from './usage-reader'
 import {
   getUsageSettings,
   keepaliveSettingsChanged,
@@ -251,6 +280,10 @@ process.on('exit', (code) => {
 // stall, and what was in flight, to daemon.log BEFORE that kill. First middleware on purpose, so
 // every request is on its in-flight list. See stall-sentinel.ts.
 app.use('*', startStallSentinel(logFilePath()))
+// A usage reading taken while a request runs records that request as its reader (usage-reader.ts).
+app.use('/api/*', (c, next) =>
+  asReader(requestReader(c.req.method, c.req.path, c.req.header('user-agent')), next),
+)
 
 // --- hide tray icon (server/src/db.ts settings table; read live by the tray host) ---
 function hideTrayIconEnabled(): boolean {
@@ -317,6 +350,9 @@ app.use('/api/*', apiBodyLimit())
 // A daemon with a relocated store stamps every answer with that store (side-run.ts), so no client
 // can mistake a scratch database for the fleet's.
 app.use('/api/*', sideRunHeader())
+// A chat move's calls (hydralib marks them) are held off while a restart hands over, so none is cut
+// half-way; the move itself runs on through the restart (toolbox-calls.ts).
+app.use('/api/*', toolboxCallGate())
 
 // --- health (also the single-instance probe: body.service must equal SERVICE_NAME) ---
 // `dataDir`/`dbPath` are here for one reason: a daemon started from a checkout and the installed
@@ -342,6 +378,7 @@ app.get('/api/health', (c) =>
     // Whether this daemon is serving older code than its checkout (a source install that was
     // committed to or pulled without a restart). The app header offers the restart when it is.
     runningCode: runningCode.status(),
+    freeBatchesPending: freeBatchPendingCount(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
       // `skipped`: this daemon is a side-run and left the machine-wide config alone on purpose.
@@ -358,6 +395,18 @@ app.get('/api/health', (c) =>
     ts: Date.now(),
   }),
 )
+
+// Where the daemon's JS time has gone since its sampler started (stall-sentinel.ts profileSinceStart):
+// `top` rows a list (0: all, so two reads can be subtracted), and `heap=1` adds the JSC heap by object type.
+app.get('/api/health/profile', (c) => {
+  const top = Number(c.req.query('top') ?? 40)
+  const limit = Number.isInteger(top) && top >= 0 ? top : 40
+  return c.json({
+    ...profileSinceStart(limit),
+    memory: process.memoryUsage(),
+    ...(c.req.query('heap') === '1' ? { heap: heapSummary(limit || 200) } : {}),
+  })
+})
 
 // --- MCP over HTTP (added 2026-09-06) ----------------------------------------------------------
 // One shared server for every client, instead of one stdio process per client. The whole rationale
@@ -415,6 +464,28 @@ app.post('/api/mcp', async (c) => {
 app.get('/api/mcp', (c) =>
   c.text('This MCP endpoint does not offer a server-initiated stream.', 405),
 )
+
+// The UserPromptSubmit hook asks for a pack here (hydra-core/pack.ts) and injects what comes back.
+app.post('/api/core/pack', async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  if (!body || typeof body !== 'object') return c.json({ error: 'a JSON object is required' }, 400)
+  const b = body as Record<string, unknown>
+  const req = {
+    chat: str(b.chat),
+    session: str(b.session),
+    cwd: str(b.cwd),
+    prompt: str(b.prompt),
+    full: b.full === true,
+  }
+  if (!req.chat || !req.session) return c.json({ error: 'chat and session are required' }, 400)
+  try {
+    // The lead pick is awaited before the build: the daemon keeps serving while the model answers.
+    return c.json(await packAnswer(coreDir(), { ...req, placement: b.placement }))
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
 
 // One shared stdio server (mcp-hub.ts) for every Claude session: each client gets its own answer, the child one.
 app.post('/api/mcp/shared/:name', async (c) => {
@@ -527,7 +598,10 @@ app.post('/api/update/apply', async (c) => {
   const refusal = IS_RELEASE ? null : restartRefusal(false)
   if (refusal)
     return c.json({ ...result, message: `${result.message} It was not restarted: ${refusal}` })
-  setTimeout(() => void relaunchDaemon(), 3000)
+  setTimeout(
+    () => void relaunchAfterUpdate(IS_RELEASE ? undefined : () => restartRefusal(false) === null),
+    3000,
+  )
   return c.json(
     IS_RELEASE
       ? result
@@ -537,16 +611,6 @@ app.post('/api/update/apply', async (c) => {
         },
   )
 })
-
-/** Why restarting now would lose work, or null: a CliMayte worker this daemon spawned itself (before runners,
- *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
- *  (orchestrator.ts). `force` restarts past both. */
-function restartRefusal(force: boolean): string | null {
-  const climayte = climayteRunningCount()
-  if (climayte > 0 && !force)
-    return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
-  return moveRestartRefusal(force)
-}
 
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
 //
@@ -569,9 +633,10 @@ app.post('/api/daemon/restart', async (c) => {
   const body = await jsonBody(c)
   // Only work a restart would LOSE says no here (owner, 2026-10-02: "I thought we were supposed to
   // have decoupling from tasks running and my ability to restart"). Dispatch runs, CliMayte workers
-  // and their checks all run under detached runners and are read on by the next daemon, so a person's
-  // click restarts past them; the unattended auto-update loop still waits for them
-  // (setAutoUpdateHooks.hasActiveRuns below), because there nobody decided. What is left is restartRefusal's.
+  // and their checks, and chat moves (since 2026-10-17) all run under detached runners and are read on
+  // by the next daemon, so a person's click restarts past them; the unattended auto-update loop still
+  // waits for dispatch runs and CliMayte workers (setAutoUpdateHooks.hasActiveRuns below), because
+  // there nobody decided. What is left is restartRefusal's (restart-refusal.ts).
   const active = activeCount() + climayteRunningCount()
   const refusal = restartRefusal(body.force === true)
   if (refusal) return c.json({ ok: false, error: refusal, activeRuns: active }, 409)
@@ -882,11 +947,13 @@ await import('./routes/session-message')
 await import('./routes/versions')
 await import('./routes/box-doctor')
 await import('./routes/climayte')
+await import('./routes/completions')
 await import('./routes/hswarm')
 await import('./routes/helpers')
 await import('./routes/routing')
 await import('./routes/dashboards')
 await import('./routes/fourman')
+await import('./routes/command-packs')
 
 // --- full-shutdown sentinel (web-UI "Shut down") -----------------------------
 // A marker file the PowerShell tray host polls (misc/Tray-Host.ps1 watch timer) so a user "Shut
@@ -928,7 +995,7 @@ async function flushConnectionsBeforeExit(): Promise<void> {
 
 /** Every graceful exit waits for the settings sync and for CliMayte's queued store writes. */
 async function flushBeforeExit(): Promise<void> {
-  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore()])
+  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore(), saveFreeBatches()])
 }
 
 app.post('/api/shutdown', (c) => {
@@ -1179,11 +1246,13 @@ function stopBackgroundTimers(): void {
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
+  stopFeedbackFold()
   stopIdleSweep()
   stopClaudeNativePrewarm()
   stopExtraUsageGuard()
   stopStallSentinel()
   stopCliMaytePing()
+  peopleAddon()?.stop?.()
 }
 
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
@@ -1328,7 +1397,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     // away, and a tick landing after clearInstanceInfo() would write the pointer back.
     clearInterval(pointerReassertTimer)
     stopBackgroundTimers()
-    await stopHSwarm()
+    await stopHSwarm({ leaveRunning: true }) // every chat's hswarm calls go on; the next daemon adopts it
     await flushBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
@@ -1369,7 +1438,18 @@ initConnections()
 // is waiting gets the same answer rather than spawning a second successor.
 let relaunchInFlight: Promise<boolean> | null = null
 function relaunchDaemon(): Promise<boolean> {
+  if (relaunchInFlight) return relaunchInFlight
   relaunchInFlight ??= (async () => {
+    // Free batches stop sending and are saved, so the successor carries them on; a tick under way
+    // is let finish first (bounded). Nothing waits for a batch to END.
+    await parkFreeBatches()
+    // A chat move runs on through the restart; only its calls into this daemon are held off, and one
+    // already under way is let finish (bounded), so no move step is cut half-way.
+    const cut = await parkToolboxCalls()
+    if (cut > 0)
+      console.error(
+        `[agenthydra] relaunch: ${cut} chat move call(s) still running after ${PARK_WAIT_MS / 1000} s; handing over anyway`,
+      )
     // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
     // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
     if (IS_RELEASE) {
@@ -1377,6 +1457,13 @@ function relaunchDaemon(): Promise<boolean> {
       if (r.ok) console.log('[agenthydra] relaunch: the launcher confirmed its runtime is on disk')
       else console.error(`[agenthydra] relaunch: launcher --ensure-bun failed: ${r.reason}`)
     }
+    // A runner hand-off (a move's, a CliMayte worker's) dies with this daemon while its powershell
+    // still runs, and its runner then never starts: let those under way finish (seconds, bounded).
+    const unstarted = await runnerHandoffsSettled(30_000)
+    if (unstarted > 0)
+      console.error(
+        `[agenthydra] relaunch: ${unstarted} runner hand-off(s) still under way after 30 s; handing over anyway`,
+      )
     return relaunchWithHandoff({
       spawnSuccessor: spawnRelaunchSuccessor,
       ackDir: POINTER_DIR,
@@ -1385,7 +1472,7 @@ function relaunchDaemon(): Promise<boolean> {
         // The successor is up and waiting for our port. The short delay only lets a
         // /api/daemon/restart response flush before the socket carrying it closes.
         setTimeout(async () => {
-          await stopHSwarm()
+          await stopHSwarm({ leaveRunning: true }) // the successor adopts it, calls in flight and all
           await flushBeforeExit()
           clearInstanceInfo()
           stopAutoUpdate()
@@ -1393,10 +1480,22 @@ function relaunchDaemon(): Promise<boolean> {
         }, 800)
       },
     })
-  })().then((handedOver) => {
-    if (!handedOver) relaunchInFlight = null
-    return handedOver
-  })
+  })().then(
+    (handedOver) => {
+      if (!handedOver) {
+        relaunchInFlight = null
+        resumeFreeBatches()
+        resumeToolboxCalls()
+      }
+      return handedOver
+    },
+    (error) => {
+      relaunchInFlight = null
+      resumeFreeBatches()
+      resumeToolboxCalls()
+      throw error
+    },
+  )
   return relaunchInFlight
 }
 
@@ -1456,7 +1555,7 @@ setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
-  relaunch: () => void relaunchDaemon(),
+  relaunch: () => relaunchDaemon(),
 })
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any
@@ -1512,6 +1611,8 @@ void Promise.race([
 })
 
 startAutoUpdate()
+// A push from this PC moves the ref live's git folder shares with the working checkout: take it at once.
+if (!IS_RELEASE) void watchPushes(APP_ROOT)
 
 // --- transient-overload retry sweep (ALWAYS ON; see server/src/dispatch.ts) --------------------
 // Re-fires runs that died on a 529 once their few-second backoff elapses. Not behind the scheduler
@@ -1589,12 +1690,21 @@ startKeepAwake()
 startUsageRefresh()
 // Daily safe limit-reset check per signed-in CLI account (core/cli-reset-sweep.ts).
 startCliResetSweep()
+// Hydra Core's learning fold (hydra-core/feedback.ts): log.jsonl into catalog/feedback.json shortly after boot, then
+// whenever it passes a day old. Off every request path; packs and finds only read the small file.
+startFeedbackFold()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
+// A profile's grants known revoked leave it before AgentHydra opens it (core/revoked-grants.ts).
+setBeforeLaunchHook(pruneBeforeLaunch, 'revoked-grants')
 startDesktopCliFeed()
 // The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
 // analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.
 startKitSweep()
+
+// Command packs: a team's slash commands and skills, pulled from git into every account every ten minutes
+// (server/src/command-packs.ts, docs/COMMAND-PACKS.md).
+startCommandPacks()
 
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).
@@ -1607,6 +1717,10 @@ startExtraUsageGuard()
   const migrated = migrateCliInstanceConfigDirs()
   if (migrated.length)
     console.log(`[cli-instances] repointed ${migrated.length} config dir(s) to ${CONFIG_DIR}`)
+}
+{
+  const given = giveCodexInstancesOwnerAgents()
+  if (given) console.log(`[codex-instances] gave ${given} instance(s) the owner's AGENTS.md`)
 }
 
 // --- registry health: say out loud what the disk and the registries disagree about --------------
@@ -1637,13 +1751,14 @@ for (const [label, report] of [
 // over — into a native OS notification. `recheck` is injected rather than imported so reset-watch
 // never imports usage-service (which imports back into the usage stack).
 startResetWatch({
-  recheck: async (key) => {
-    if (key.startsWith('desktop:')) {
-      await checkUsageForDesktop(key.slice('desktop:'.length))
-      return
-    }
-    if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
-  },
+  recheck: (key) =>
+    asReader('reset watch', async () => {
+      if (key.startsWith('desktop:')) {
+        await checkUsageForDesktop(key.slice('desktop:'.length))
+        return
+      }
+      if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
+    }),
 })
 
 // --- HydraSwarm sidecar (serves the HSwarm console API on /api/hswarm/*) -----
@@ -1658,28 +1773,21 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
-if (IS_PRIMARY_INSTALL) {
-  startManagerAnalytics((worker) =>
-    storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
-  )
-  startManagerJudge()
-  startTrialSettling()
-  setTimeout(
-    () =>
-      setInterval(() => {
-        autoRsiTick().catch((e) =>
-          console.error(`[manager-rsi] auto tick failed: ${(e as Error).message}`),
-        )
-      }, 60_000),
-    90_000,
-  )
-}
+// The people add-on (server/src/people-host.ts) starts its own timers, the Manager Hydra analytics among them.
+registerPeopleVerdicts((worker) =>
+  storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
+)
+if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
 // via main.ts's dynamic import (where the default export would be silently inert — verified: the
 // daemon "booted", logged its URL, and listened on nothing).
+// The chat moves the last daemon left run on under their runners; take them on before the first request,
+// so a poll of a move's id or a second move finds them. The port is free, so their daemon has exited.
+const movesAdopted = await adoptOrchestratorRuns()
+if (movesAdopted > 0)
+  console.log(`[agenthydra] took on ${movesAdopted} chat move(s) from the last daemon`)
 renewBootWatchdog('listen')
 const server = Bun.serve({
   port: boundPort,
@@ -1690,6 +1798,10 @@ const server = Bun.serve({
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
 desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
+// The Free batches the last daemon left are carried on from here: once this daemon holds the port, its
+// predecessor has exited, so no two daemons ever send the same batch.
+void adoptFreeBatches()
+void startDeclaredBackends()
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,
 // analytics) is a deliberate background continuation, not boot proper - see the comments below on
@@ -1736,6 +1848,9 @@ warmSessionMetaIndex()
   // is what the user is waiting for; racing them would slow the visible thing to speed up a tab
   // nobody has opened yet. Fire-and-forget by design (see warmAnalyticsInBackground).
   .finally(() => warmAnalyticsInBackground())
+// hydra_find's intent index: loads the embedding model and embeds every tool, so the first search ranks by meaning
+// instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
+warmToolIntentInBackground(MCP_TOOLS)
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`

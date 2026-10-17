@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -96,8 +97,8 @@ def test_totals_by_machine_and_shard_roundtrip(tmp_path):
     assert [row["row"] for row in lines] == ["profile", "utilization", "utilization", "utilization"]
     assert [row["seq"] for row in lines if row["row"] == "utilization"] == [1, 2, 3]  # the run numbers travel with the shard
 
-    other = [{"row": "utilization", "id": "other-1", "ts": "2026-09-14T00:00:00+00:00", "kind": "ask", "machine": "jacob-pc", "tasks": 1, "worker_usd": 0.002, "est_usd": 0.5, "saved_usd": 0.498, "saved_low_usd": 0.498, "est_model": "claude-sonnet-5"}]
-    (shards / "jacob-pc.jsonl").write_text("".join(json.dumps(o) + "\n" for o in other), encoding="utf-8")
+    other = [{"row": "utilization", "id": "other-1", "ts": "2026-09-14T00:00:00+00:00", "kind": "ask", "machine": "pc-two", "tasks": 1, "worker_usd": 0.002, "est_usd": 0.5, "saved_usd": 0.498, "saved_low_usd": 0.498, "est_model": "claude-sonnet-5"}]
+    (shards / "pc-two.jsonl").write_text("".join(json.dumps(o) + "\n" for o in other), encoding="utf-8")
     assert utilization.import_shards(c, shards) == 1
     assert utilization.import_shards(c, shards) == 1  # idempotent: upsert by id
 
@@ -114,7 +115,7 @@ def test_totals_by_machine_and_shard_roundtrip(tmp_path):
     t = utilization.totals(c)
     assert t["n"] == 4 and t["tasks"] == 7 and t["worker_usd"] == pytest.approx(0.032) and t["unpriced"] == 0
     assert t["claude_usd"] is None and t["share"] is None  # no Claude day measured yet: not measured, never zero
-    assert {m["machine"]: m["n"] for m in utilization.by_machine(c)} == {utilization.MACHINE: 3, "jacob-pc": 1}
+    assert {m["machine"]: m["n"] for m in utilization.by_machine(c)} == {utilization.MACHINE: 3, "pc-two": 1}
     c.close()
     # Claude's own usage on the days the swarm ran turns the saving into a share of the work done beside it.
     local_day = __import__("datetime").datetime.fromisoformat("2026-09-15T00:00:00+00:00").astimezone().date().isoformat()
@@ -127,7 +128,7 @@ def test_totals_by_machine_and_shard_roundtrip(tmp_path):
     shard = utilization.export_shard(c, shards).read_text(encoding="utf-8")
     assert '"row": "claude_day"' in shard and f'"day": "{local_day}"' in shard
     md = utilization.totals_markdown(c)
-    assert "jacob-pc" in md and "| **all** | 4 | 7 |" in md and "share" in md
+    assert "pc-two" in md and "| **all** | 4 | 7 |" in md and "share" in md
     c.close()
     s = utilization.summary(5)
     assert s["total"]["n"] == 4 and len(s["recent"]) == 4 and "running total" in utilization.render(s) and "% of the Claude work" in utilization.render(s)
@@ -235,21 +236,21 @@ def test_html_page_renders_the_db_and_escapes_what_it_shows(tmp_path):
     utilization.refresh_profile([_day([{"input": 10, "cache_read": 10_000, "cache_5m": 0, "cache_1h": 0, "output": 100, "requests": 2}] * 5)])
     utilization.record({"id": "j1", "ts": "2026-09-15T10:00:00+00:00", "kind": "run", "machine": utilization.MACHINE, "orchestrator_model": "claude-fable-5-1",
                         "tasks": 3, "worker_usd": 0.01, "label": "<b>x&y</b>", "caller_cwd": "D:/x/Proj"})
-    utilization.record({"id": "j2", "ts": "2026-09-14T10:00:00+00:00", "kind": "ask", "machine": "jacob-pc", "tasks": 1, "worker_usd": 0.0})
+    utilization.record({"id": "j2", "ts": "2026-09-14T10:00:00+00:00", "kind": "ask", "machine": "pc-two", "tasks": 1, "worker_usd": 0.0})
     utilization.record({"id": "j3", "ts": "2026-09-13T10:00:00+00:00", "kind": "run", "machine": utilization.MACHINE, "tasks": 1, "worker_usd": 9.0})  # a loss
     p = report_html.write(tmp_path / "out" / "page.html")
     page = p.read_text(encoding="utf-8")
     assert page.startswith("<!doctype html>") and "&lt;b&gt;x&amp;y&lt;/b&gt;" in page and "<b>x&y</b>" not in page
-    assert "jacob-pc" in page and ">fable-5-1<" in page and "<h2>Per day</h2>" in page and page.count("<tr>") >= 8  # model names lose the claude- prefix
+    assert "pc-two" in page and ">fable-5-1<" in page and "<h2>Per day</h2>" in page and page.count("<tr>") >= 8  # model names lose the claude- prefix
     assert "3 runs · 5 tasks" in page and "Click a header to sort" in page
-    assert "--bg:#0f1115" in page and "color-scheme' content='dark'" in page  # dark theme (Michael, 2026-09-16)
+    assert "--bg:#0f1115" in page and "color-scheme' content='dark'" in page  # dark theme (the other owner, 2026-09-16)
     # A saving is green with a +, a loss red with a -; the class now also carries the unit group the cell belongs to.
     assert 'class="n mu pos"' in page and 'class="n mu neg"' in page and "+$" in page and "-$" in page
     assert report_html.ratio(4.0, 0.01) == 400.0 and report_html.ratio_text(4321.9) == "4,322x" and report_html.ratio(None, 1) is None and report_html.ratio(1.0, 0.0) is None
     assert "cheaper by" in page and "Claude beside it" in page and "DeepSeek cost" in page and "<h2>Charts</h2>" in page and "<svg" in page
     assert "grid-template-columns:repeat(3,minmax(0,1fr))" in page  # three charts across, wrapping only on a narrow window
     assert report_html.days_note(1).startswith("<div class='note'>One day") and report_html.days_note(2) == ""
-    # Every time a human reads is the local clock, because the day buckets are local days (Michael, 2026-09-16).
+    # Every time a human reads is the local clock, because the day buckets are local days (the other owner, 2026-09-16).
     import datetime as _dt
     utc = "2026-09-16T01:18:52+00:00"
     want = _dt.datetime.fromisoformat(utc).astimezone().strftime("%Y-%m-%d %H:%M")
@@ -312,6 +313,34 @@ def test_decide_books_its_jev_spend_as_a_utilization(tmp_path, monkeypatch):
     assert rows[0]["worker_usd"] == pytest.approx(0.0001) and rows[0]["orchestrator_model"] == "claude-opus-5-5"
     ledger = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert [(r["job"], r["provider"], r["calls"]) for r in ledger] == [("decide", "typesafe", 3)]
+
+
+def test_booking_an_ask_leaves_the_event_loop_free(tmp_path, monkeypatch):
+    """The shared server booked every ask and decide on its event loop: the caller stamp, the account lookup behind
+    each ledger line (with an HTTP call to AgentHydra) and the ledger append, and a decide held GET /health for that
+    call (2026-10-16). Here the stamp finishes only once the loop has served another coroutine."""
+    from hswarm import booking
+    from hswarm.spec import Result
+
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    served = threading.Event()
+
+    def stamp(kind):
+        assert served.wait(2), "the event loop was held while the ask was booked"
+        return {"instance": "7"}
+
+    monkeypatch.setattr(booking, "detect_caller", stamp)
+
+    async def main():
+        booked = asyncio.create_task(booking.book_asks([Result(id="a", status="ok", model="deepseek-flash")], "ask"))
+        await asyncio.sleep(0)  # the booking starts first
+        served.set()
+        return await booked
+
+    assert "bookkeeping_error" not in asyncio.run(main())
+    ledger = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [(r["task"], r["caller_instance"]) for r in ledger] == [("a", "7")]
 
 
 def test_old_db_migrates_to_a_stored_day_and_readers_cover_unbackfilled_rows(tmp_path):

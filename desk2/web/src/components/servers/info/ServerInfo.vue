@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   Check,
   Copy,
@@ -172,7 +172,7 @@ const from = computed(() => clock.value - span.value)
 const cpuPoints = computed<ChartPoint[]>(() => (history.value?.points ?? []).map((x) => ({ t: x.t, v: x.cpu })))
 const memPoints = computed<ChartPoint[]>(() => (history.value?.points ?? []).map((x) => ({ t: x.t, v: x.memory })))
 const seenRules = memo<DevWebAlertRule[]>()
-const rules = ref<DevWebAlertRule[]>(seenRules.get(p.value.id) ?? [])
+const rules = shallowRef<DevWebAlertRule[]>(seenRules.get(p.value.id) ?? [])
 let rulesAt = 0
 async function loadRules() {
   if (Date.now() - rulesAt < 5000) return
@@ -183,10 +183,12 @@ async function loadRules() {
   seenRules.set(p.value.id, rules.value)
 }
 watch([servers.answered, serverTab], () => void loadRules(), { immediate: true })
-const limits = (metric: 'cpu' | 'memory') => rules.value.filter((r) => r.enabled && r.metric === metric).map((r) => r.threshold)
+// The charts get these as props, so each is one array that changes only when the rules do.
+const cpuLimits = computed(() => rules.value.filter((r) => r.enabled && r.metric === 'cpu').map((r) => r.threshold))
+const memLimits = computed(() => rules.value.filter((r) => r.enabled && r.metric === 'memory').map((r) => r.threshold))
 const peakOf = (pts: ChartPoint[]) => Math.max(0, ...pts.flatMap((x) => (x.v === null ? [] : [x.v])))
-const cpuMax = computed(() => Math.max(25, peakOf(cpuPoints.value) * 1.2, ...limits('cpu').map((n) => n * 1.15)))
-const memMax = computed(() => Math.max(64 * 1024 * 1024, peakOf(memPoints.value) * 1.25, ...limits('memory').map((n) => n * 1.15)))
+const cpuMax = computed(() => Math.max(25, peakOf(cpuPoints.value) * 1.2, ...cpuLimits.value.map((n) => n * 1.15)))
+const memMax = computed(() => Math.max(64 * 1024 * 1024, peakOf(memPoints.value) * 1.25, ...memLimits.value.map((n) => n * 1.15)))
 const chartState = computed<'live' | 'down' | 'off'>(() => (!monitoring.value ? 'off' : up.value ? 'live' : 'down'))
 
 // ---- tabs ----
@@ -263,23 +265,25 @@ const MENU_ITEM = 'text-ui'
           <ExternalLink class="size-3.5" />Open in browser
         </button>
         <button type="button" :class="BTN" :aria-label="`Edit ${p.name}`" @click="nav.open({ kind: 'edit-server', id: p.id })"><Pencil class="size-3.5" />Edit</button>
-        <DropdownMenu>
-          <Tip label="More">
-            <DropdownMenuTrigger as-child>
-              <button type="button" :class="ICON_BTN" aria-label="More actions"><MoreHorizontal class="size-4" /></button>
-            </DropdownMenuTrigger>
-          </Tip>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem :class="MENU_ITEM" @select="servers.star(p.id, !p.starred)">{{ p.starred ? 'Unstar' : 'Star' }}</DropdownMenuItem>
-            <DropdownMenuItem :class="MENU_ITEM" @select="attempt(() => setProcessEnabled(p.id, !p.enabled))">{{ p.enabled ? 'Turn autostart off' : 'Turn autostart on' }}</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem :class="MENU_ITEM" @select="copy('command', p.command)">Copy command</DropdownMenuItem>
-            <DropdownMenuItem v-if="address" :class="MENU_ITEM" @select="copy('address', address)">Copy address</DropdownMenuItem>
-            <DropdownMenuItem :class="MENU_ITEM" @select="reveal">Show folder</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem :class="[MENU_ITEM, 'text-danger-text']" @select="deleting = true">Delete server…</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Tip label="More">
+          <span class="inline-flex">
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <button type="button" :class="ICON_BTN" aria-label="More actions"><MoreHorizontal class="size-4" /></button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem :class="MENU_ITEM" @select="servers.star(p.id, !p.starred)">{{ p.starred ? 'Unstar' : 'Star' }}</DropdownMenuItem>
+                <DropdownMenuItem :class="MENU_ITEM" @select="attempt(() => setProcessEnabled(p.id, !p.enabled))">{{ p.enabled ? 'Turn autostart off' : 'Turn autostart on' }}</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem :class="MENU_ITEM" @select="copy('command', p.command)">Copy command</DropdownMenuItem>
+                <DropdownMenuItem v-if="address" :class="MENU_ITEM" @select="copy('address', address)">Copy address</DropdownMenuItem>
+                <DropdownMenuItem :class="MENU_ITEM" @select="reveal">Show folder</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem :class="[MENU_ITEM, 'text-danger-text']" @select="deleting = true">Delete server…</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </Tip>
         <span v-if="copied === 'command'" role="status" class="text-ui-sm text-text-muted">Copied the command.</span>
       </div>
     </header>
@@ -361,7 +365,7 @@ const MENU_ITEM = 'text-ui'
             :to="clock"
             :color="TONE_COLOR.accent"
             :max="cpuMax"
-            :thresholds="limits('cpu')"
+            :thresholds="cpuLimits"
             :format="cpu"
             :state="chartState"
             :busy="savingMonitor"
@@ -376,7 +380,7 @@ const MENU_ITEM = 'text-ui'
             :to="clock"
             color="#a78bfa"
             :max="memMax"
-            :thresholds="limits('memory')"
+            :thresholds="memLimits"
             :format="bytes"
             :state="chartState"
             :busy="savingMonitor"

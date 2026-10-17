@@ -26,8 +26,8 @@
 
 import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
-export type AppView = 'instances' | 'analytics' | 'hswarm'
-export const APP_VIEWS: readonly AppView[] = ['instances', 'analytics', 'hswarm']
+export type AppView = 'instances' | 'analytics' | 'hswarm' | 'tools'
+export const APP_VIEWS: readonly AppView[] = ['instances', 'analytics', 'hswarm', 'tools']
 
 /** Tabs that were folded into another one, and where they went. The Instances tab is one tab now
  *  (Desktop, CLI and Free are kind toggles in it, owner 2026-10-07), so every old Instances id lands
@@ -43,6 +43,8 @@ const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
   sessions: 'hswarm',
   // CliMayte moved into the HSwarm tab, a node of its tree (2026-10-05).
   climayte: 'hswarm',
+  // The Routines tab became Tools (2026-10-17): its managers and routines, one tab.
+  routines: 'tools',
 }
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for

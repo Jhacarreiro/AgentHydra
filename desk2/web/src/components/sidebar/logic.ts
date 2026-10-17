@@ -1,6 +1,7 @@
 // Pure sidebar logic (tested in web/test/shell). No Vue, no store.
 import type { ChatServiceInfo, ChatServiceKind, ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
 import { accountTitle } from '../accounts/format'
+import { sortRows, type RowFacts, type SidebarSort } from './sort'
 
 /** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
 export function folderLabel(cwd: string): string {
@@ -194,7 +195,7 @@ export function groupChats(
   }
   for (const g of groups) g.entries.sort(newestFirst)
   const archived = filter === 'all' ? archivedRows.sort(newestFirst) : []
-  // A saved order wins over activity, so sending a message moves nothing (Jacob, 2026-10-04). Groups are not saved: they are listed A-Z.
+  // A saved order wins over activity, so sending a message moves nothing (the owner, 2026-10-04). Groups are not saved: they are listed A-Z.
   const order = opts.order
   const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
   for (const g of groups) g.entries = rows(g.entries)
@@ -277,6 +278,36 @@ export function nestChildren(groups: SidebarGroups): SidebarGroups {
     pinned: kept(groups.pinned),
     folders: groups.folders.map(place).filter((g) => g.entries.length),
     archived: kept(groups.archived),
+    hiddenOut: groups.hiddenOut
+  }
+}
+
+/**
+ * The groups with their rows in the sort's order (sort.ts), after nestChildren: each top row is sorted, and its
+ * sub-chats follow it, sorted among themselves, so a nested row stays under its parent (owner, 2026-10-17). 'manual'
+ * returns them as they are: the saved order groupChats gave them. The groups keep their order.
+ */
+export function sortGroups(groups: SidebarGroups, mode: SidebarSort, facts: (e: SidebarEntry) => RowFacts): SidebarGroups {
+  if (mode === 'manual') return groups
+  const sortGroup = (g: ChatGroup): ChatGroup => {
+    const kids = new Map<string, SidebarEntry[]>()
+    for (const e of g.entries) {
+      if (!e.under) continue
+      const list = kids.get(e.under)
+      if (list) list.push(e)
+      else kids.set(e.under, [e])
+    }
+    const tops = sortRows(
+      g.entries.filter((e) => !e.under),
+      mode,
+      facts
+    )
+    return { ...g, entries: tops.flatMap((e) => [e, ...sortRows(kids.get(entryKey(e)) ?? [], mode, facts)]) }
+  }
+  return {
+    pinned: groups.pinned && sortGroup(groups.pinned),
+    folders: groups.folders.map(sortGroup),
+    archived: groups.archived && sortGroup(groups.archived),
     hiddenOut: groups.hiddenOut
   }
 }
@@ -420,10 +451,11 @@ export function recordCloudOrder(order: SidebarOrder, rows: readonly string[]): 
   }
 }
 
-/** Whether a row shows an attention dot: yellow (waiting on you) or green (done, unread). Running sub-tasks no longer count. */
+/** Whether a row shows an attention dot: yellow (waiting on you), orange (replied, its workers still run) or green (done,
+ *  unread): each is a reply or an ask to look at. Running sub-tasks of a row that has not replied do not count. */
 export function isOrange(e: SidebarEntry): boolean {
   const tone = (e.kind === 'chat' ? statusGlyph(e.chat) : externalGlyph(e.session)).tone
-  return tone === 'warning' || tone === 'success'
+  return tone === 'warning' || tone === 'workers' || tone === 'success'
 }
 
 /** Whether a row's turn runs now: a folded group's heading counts these (RunningBadge.vue). */
@@ -445,7 +477,7 @@ export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status
  */
 export function deskGlyphs(
   chats: Pick<ChatSummary, 'sessionId' | 'status' | 'unread'>[],
-  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source'>[]
+  external: Pick<ExternalSession, 'id' | 'status' | 'unread' | 'source' | 'backgroundActive'>[]
 ): Map<string, StatusGlyph> {
   const out = new Map<string, StatusGlyph>()
   for (const [id, g] of [
@@ -457,7 +489,7 @@ export function deskGlyphs(
 }
 
 /**
- * The row order after rows turned orange (Jacob, 2026-10-04: a chat that finishes and needs checking
+ * The row order after rows turned orange (the owner, 2026-10-04: a chat that finishes and needs checking
  * goes to the top of its project, the latest one first; nothing else moves). `wasOrange` is each row's
  * state last time; a row it does not know yet is not raised (it joins at the top anyway).
  */
@@ -502,8 +534,13 @@ export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], extern
   return [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
-/** The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. */
-export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
+/**
+ * The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. A turn
+ * that ended while its background tasks run is orange, as a Desk chat's (settledGlyph), never idle (owner, 2026-10-16:
+ * a chat whose background task had run 18 minutes was "labeled as not running, and it's a lighter gray").
+ */
+export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread' | 'backgroundActive'>): StatusGlyph {
+  if ((s.status === 'idle' || s.status === 'stale') && (s.backgroundActive ?? 0) > 0) return THREADS_RUNNING
   switch (s.status) {
     case 'working':
       return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Running elsewhere' }
@@ -526,15 +563,17 @@ export function sourceLabel(source: ExternalSession['source']): string {
 }
 
 /**
- * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow is
- * for what needs the owner: a question or permission (pulsing). A finished turn not looked at yet is
- * green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow ring (it waits
- * for the reset, not for you). Running sub-tasks look like running (THREADS_RUNNING), never like done.
+ * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow
+ * (`warning`) is only for what cannot go on until the owner acts: a question, a permission or a plan approval
+ * (pulsing; owner, 2026-10-17: "Yellow icons should only ever be yellow if they require input from me"). A finished
+ * turn not looked at yet is green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow
+ * ring (it waits for the reset, not for you). A chat that replied while its workers still run is solid orange
+ * (`workers`, THREADS_RUNNING), never yellow and never green: green is done with nothing left running.
  * Blue is HSwarm's alone: only a row that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
  */
 export interface StatusGlyph {
   shape: 'ring' | 'dot'
-  tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
+  tone: 'muted' | 'warning' | 'workers' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
   active: boolean // what Active only keeps (isActive): running, starting, background work still running, or waiting on you: a question, a reply not read yet, an error
   label: string // aria-label of the dot, in words
@@ -587,24 +626,27 @@ export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { wai
 /**
  * The dot of a row whose sub-tasks run while the row itself does not: its CliMayte tasks, its HSwarm jobs, its own
  * background tasks less the long-lived ones (a dev server never ends, so it does not count), its nested rows that run.
- * It looks as a running row does, the strobing outline (owner, 2026-10-10: "some of them have sub-tasks running, but
- * have no icon"; "never look done while its workers run", the rule Jacob's desk kept).
+ * Solid orange, read or not: the chat the owner talks to has finished its reply and only its workers run (owner,
+ * 2026-10-14: "when my point of contact is done speaking, it changes to orange if there is still drones or
+ * sub-personalities managed by my point of contact"; green only when nothing is left running). Its own orange, never
+ * the needs-you yellow: nothing here waits on him (owner, 2026-10-17: yellow "should be if it requires something from
+ * me to resume the chat"). It never looks idle or done while its workers run (owner, 2026-10-10).
  */
-export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' }
+export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'workers', motion: 'none', active: true, label: 'Replied, workers still running' }
 
 /**
  * A row's dot with its running sub-tasks counted (Sidebar.vue's runningThreads): a row whose own dot is not running,
- * waits on the owner or errs, but which has `running` sub-tasks, shows THREADS_RUNNING. Yellow (needs you) and red
- * (error) stay as they are, and so does a dot that already runs.
+ * waits on the owner or errs, but which has `running` sub-tasks, shows THREADS_RUNNING. Yellow (needs you), red
+ * (error) and the usage limit's pink ring stay as they are, and so does a dot that already runs.
  */
 export function withThreads(glyph: StatusGlyph, running: number): StatusGlyph {
-  if (!running || glyph.motion === 'blink' || glyph.tone === 'warning' || glyph.tone === 'danger') return glyph
+  if (!running || glyph.motion === 'blink' || glyph.tone === 'warning' || glyph.tone === 'danger' || glyph.tone === 'limited') return glyph
   return THREADS_RUNNING
 }
 
 /**
- * A chat that is not running. Its background work still running keeps it running, read or not: its CliMayte workers,
- * and its own background tasks less the long-lived ones. Done and not looked at is green.
+ * A chat that is not running. Its background work still running makes it orange, read or not: its CliMayte workers,
+ * and its own background tasks less the long-lived ones. Done with nothing running and not looked at is green.
  */
 function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, idle: string): StatusGlyph {
   const background = (chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0
@@ -675,6 +717,7 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
   const tone = {
     muted: 'bg-[var(--status-working)]',
     warning: 'bg-[var(--status-needs-you)]',
+    workers: 'bg-[var(--status-workers)]',
     success: 'bg-[var(--status-done)]',
     danger: 'bg-[var(--status-error)]',
     limited: 'bg-[var(--status-limited)]',
@@ -689,13 +732,14 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
  * going on has one (owner, 2026-10-10: "so I can still see which chats have activity, like which are active and which
  * are waiting on me"). A 1.5px gradient per dot state, fading from the dot's colour at 80% to 40% (owner, 2026-10-10:
  * "slightly more subtle" than the first 2px, full-strength ring): running (the dot's blinking gray, and an HSwarm job) is
- * the live blue, needs you the dot's yellow, done-unread its green, an error its red; a usage limit keeps the
+ * the live blue, needs you the dot's yellow, replied-while-workers-run its orange, done-unread its green, an error its red; a usage limit keeps the
  * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own.
  * Every class string is written out whole, so Tailwind sees each one.
  */
 const RING_GRADIENT = {
   muted: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
   warning: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-needs-you)_80%,transparent),color-mix(in_srgb,var(--status-needs-you)_40%,transparent))]',
+  workers: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-workers)_80%,transparent),color-mix(in_srgb,var(--status-workers)_40%,transparent))]',
   success: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-done)_80%,transparent),color-mix(in_srgb,var(--status-done)_40%,transparent))]',
   danger: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-error)_80%,transparent),color-mix(in_srgb,var(--status-error)_40%,transparent))]',
   swarm: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
@@ -716,6 +760,24 @@ export function elapsedLabel(startedAt: number | null, now: number = Date.now())
   if (m < 60) return `${m}m`
   const h = Math.floor(m / 60)
   return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+}
+
+const AGO_UNITS: [ms: number, unit: string][] = [
+  [365 * 86_400_000, 'year'],
+  [30.4375 * 86_400_000, 'month'],
+  [7 * 86_400_000, 'week'],
+  [86_400_000, 'day'],
+  [3_600_000, 'hour'],
+  [60_000, 'minute']
+]
+/** How long ago, in its largest whole unit: "just now", "5 minutes ago", "1 hour ago", "3 weeks ago", "4 months ago", "2 years ago". */
+export function timeAgo(at: number, now: number = Date.now()): string {
+  const ms = Math.max(0, now - at)
+  for (const [size, unit] of AGO_UNITS) {
+    const n = Math.floor(ms / size)
+    if (n >= 1) return `${n} ${unit}${n === 1 ? '' : 's'} ago`
+  }
+  return 'just now'
 }
 
 /** "14:05" (today) or "Mon 14:05", for a limited chat's reset time. */
@@ -773,6 +835,8 @@ export interface RowState {
   service?: ChatServiceKind
   /** The account the pinned service runs the chat on, as the window names it; null when not known yet. */
   serviceLabel?: string | null
+  /** When it last did something (a message sent, a reply, a tool call), epoch ms; null or left out when not known. */
+  lastActionAt?: number | null
 }
 export interface RowAccount {
   num: number | null
@@ -806,7 +870,8 @@ export function chatRow(chat: ChatSummary): RowState {
     movable: null,
     note: chat.note ?? null,
     service: chat.service ?? 'claude',
-    serviceLabel: chat.service ? (chat.serviceThreads?.[chat.service]?.label ?? null) : null
+    serviceLabel: chat.service ? (chat.serviceThreads?.[chat.service]?.label ?? null) : null,
+    lastActionAt: chat.lastActionAt ?? null
   }
 }
 
@@ -829,7 +894,8 @@ export function externalRow(s: ExternalSession): RowState {
     // A chat the chat sync brought from the other PC lives in that PC's apps: this PC's AgentHydra cannot move it.
     movable: s.fromPc ? null : claude ? 'desktop' : s.source === 'codex' ? 'codex' : null,
     note: s.note ?? null,
-    unassigned: s.unassigned === true
+    unassigned: s.unassigned === true,
+    lastActionAt: s.lastActivityAt
   }
 }
 
@@ -849,6 +915,8 @@ export type RowAction =
   | 'copyResume'
   | 'copySessionId'
   | 'copyId'
+  | 'lastAction'
+  | 'picked'
   | 'moveToAccount'
   | 'unassign'
   | 'duplicateToAccount'
@@ -883,6 +951,8 @@ export interface RowMenuItem {
   hint?: string
   /** The menu's first line, drawn as an id rather than a command. */
   identity?: boolean
+  /** The line under it: when the row last did something (epoch ms), drawn as how long ago, never a command. */
+  since?: number
 }
 export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (RowMenuItem | 'separator')[] }
 
@@ -910,6 +980,11 @@ function accountText(account: RowAccount | null, accounts: readonly AccountChoic
 export function rowIdentity(id: string, account: RowAccount | null, accounts: readonly AccountChoice[] | null = null): RowMenuItem {
   const hint = accountText(account, accounts)
   return { action: 'copyId', label: id.slice(0, 8), value: id, identity: true, ...(hint ? { hint } : {}), title: `${id}\nClick to copy the whole ID` }
+}
+
+/** The line under the first: how long ago the row last did something (owner, 2026-10-14: "show how long ago ... The Last Action was performed"). */
+export function lastActionLine(at: number): RowMenuItem {
+  return { action: 'lastAction', label: 'Last action', since: at }
 }
 
 /** The accounts of a Move to or Duplicate to submenu: those whose app runs first, then a rule, then the closed ones, each by number. */
@@ -1028,6 +1103,7 @@ export function rowMenu(
   const identity = rowIdentity(row.id, row.account, accounts)
   const out: RowMenuEntry[] = [
     row.unassigned ? { ...identity, hint: 'Unassigned' } : identity,
+    ...(row.lastActionAt != null ? [lastActionLine(row.lastActionAt)] : []),
     'separator',
     {
       label: 'Open in',
@@ -1046,16 +1122,16 @@ export function rowMenu(
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'note', label: row.note ? 'Edit note…' : 'Add note…', shortcut: 'N' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
-  if (row.service) out.push(serviceMenu(row.service, row.serviceLabel ?? null, services))
-  out.push('separator', { label: 'Move to group', items: moveTo })
   // An Unassigned chat is on no account: none is ticked, and Unassigned is. A Codex one still has the account it left
   // (archived there), which its copy cannot go to.
   const home = accountNum(row.account, accounts)
   const onAccount = row.unassigned ? null : home
-  if (row.movable) {
-    out.push(accountMenu(onAccount, accounts, row.movable, !!row.unassigned))
-    out.push(duplicateMenu(row.movable === 'codex' ? home : onAccount, accounts, row.movable))
-  }
+  // Duplicate to account sits with Fork, the other copy, never beside Move to account: both open the same account list,
+  // and a pointer that slid one row down from Move landed a copy (owner, 2026-10-14: a move "seems to duplicate it").
+  if (row.movable) out.push(duplicateMenu(row.movable === 'codex' ? home : onAccount, accounts, row.movable))
+  if (row.service) out.push(serviceMenu(row.service, row.serviceLabel ?? null, services))
+  out.push('separator', { label: 'Move to group', items: moveTo })
+  if (row.movable) out.push(accountMenu(onAccount, accounts, row.movable, !!row.unassigned))
   out.push('separator')
   out.push(
     row.archived
@@ -1063,6 +1139,48 @@ export function rowMenu(
       : { action: 'archive', label: 'Archive', shortcut: 'A', ...(row.outside ? { title: OUTSIDE_ARCHIVE } : {}) }
   )
   if (!row.outside) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })
+  return out
+}
+
+/**
+ * The menu of two or more rows picked together (Ctrl or Shift and a click, picked.ts): the row menu's items that make
+ * sense for many at once, each run on every picked row it fits. Its first line counts them. Pin, Mark as read and
+ * Archive go the way that changes a row (Pin while any is unpinned); Move to group ticks a group only when every row is
+ * in it; Move to account and Duplicate to account come only when every row can go to the same kind of account, ticking
+ * the account only when all are on it; Delete only when none runs outside.
+ */
+export function bulkMenu(
+  rows: readonly RowState[],
+  groups: string[] = [],
+  desktopAccounts: readonly AccountChoice[] | null = null,
+  codexAccounts: readonly AccountChoice[] | null = null
+): RowMenuEntry[] {
+  const out: RowMenuEntry[] = [{ action: 'picked', label: `${rows.length} selected` }, 'separator']
+  if (rows.some((r) => r.stoppable)) out.push({ action: 'stop', label: 'Stop' })
+  out.push(rows.some((r) => !r.pinned) ? { action: 'pin', label: 'Pin', shortcut: 'P' } : { action: 'unpin', label: 'Unpin', shortcut: 'P' })
+  out.push(rows.some((r) => r.unread) ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
+  out.push({ action: 'copySessionId', label: 'Copy session IDs', disabled: !rows.some((r) => r.sessionId) })
+
+  const kinds = new Set(rows.map((r) => r.movable))
+  const kind = kinds.size === 1 ? [...kinds][0] : null
+  const accounts = kind === 'codex' ? codexAccounts : desktopAccounts
+  const homes = new Set(rows.map((r) => accountNum(r.account, accounts)))
+  const home = homes.size === 1 ? [...homes][0] : null
+  const onAccount = rows.some((r) => r.unassigned) ? null : home
+  // Away from Move to account, as on one row's menu (rowMenu).
+  if (kind) out.push(duplicateMenu(kind === 'codex' ? home : onAccount, accounts, kind))
+
+  const places = new Set(rows.map((r) => (r.group ?? folderLabel(r.cwd)).toLowerCase()))
+  const shared = places.size === 1 ? [...places][0] : null
+  const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === shared }))
+  if (moveTo.length) moveTo.push('separator')
+  moveTo.push({ action: 'newGroup', label: 'New group…' })
+  if (rows.some((r) => r.group)) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
+  out.push('separator', { label: 'Move to group', items: moveTo })
+  if (kind) out.push(accountMenu(onAccount, accounts, kind, rows.every((r) => r.unassigned)))
+  out.push('separator')
+  out.push(rows.some((r) => !r.archived) ? { action: 'archive', label: 'Archive', shortcut: 'A' } : { action: 'unarchive', label: 'Unarchive', shortcut: 'A' })
+  if (rows.every((r) => !r.outside)) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })
   return out
 }
 

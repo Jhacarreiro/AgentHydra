@@ -201,7 +201,7 @@ describe('chat routes', () => {
     expect((await call(t.desk, 'GET', '/api/chats/nope')).status).toBe(404)
     // a chat with no prompt does not start a runtime
     const empty = await call<ChatSummary>(t.desk, 'POST', '/api/chats', { cwd: temp('desk-cwd-'), accountId: 'default' })
-    expect(empty.body).toMatchObject({ status: 'closed', title: 'New session', account: { id: 'default', configDir: null } })
+    expect(empty.body).toMatchObject({ status: 'closed', title: 'New session', account: { id: ACCOUNT_68.id, configDir: ACCOUNT_68.configDir } })
     expect(t.all).toHaveLength(0)
   })
 
@@ -378,7 +378,7 @@ describe('chat routes', () => {
       accountId: 'default',
     })
     expect(p.status).toBe(200)
-    expect(p.body).toMatchObject({ title: 'Renamed', pinned: true, model: 'claude-sonnet-5-5', effort: 'max', permissionMode: 'plan', account: { id: 'default' } })
+    expect(p.body).toMatchObject({ title: 'Renamed', pinned: true, model: 'claude-sonnet-5-5', effort: 'max', permissionMode: 'plan', account: { id: ACCOUNT_68.id } })
     expect(fake.calls.setModel).toEqual(['claude-sonnet-5-5'])
     expect(fake.calls.applyFlagSettings).toEqual([{ effortLevel: 'max' }])
     expect(fake.calls.setPermissionMode).toEqual(['plan'])
@@ -409,9 +409,9 @@ describe('chat routes', () => {
     const t = await boot()
     const { body: chat } = await call<ChatSummary>(t.desk, 'POST', '/api/chats', { cwd: temp('desk-cwd-'), accountId: ACCOUNT_68.id })
     expect(chat.account.id).toBe(ACCOUNT_68.id)
-    await call(t.desk, 'PATCH', `/api/chats/${chat.id}`, { accountId: 'default' })
+    await call(t.desk, 'PATCH', `/api/chats/${chat.id}`, { accountId: 'auto' })
     await call(t.desk, 'POST', `/api/chats/${chat.id}/messages`, { text: 'hi' })
-    expect('CLAUDE_CONFIG_DIR' in (t.last().options.env ?? {})).toBe(false)
+    expect(t.last().options.env?.CLAUDE_CONFIG_DIR).toBe('C:/fake/instances/68')
   })
 
   test('import adopts an outside session: closed, its history shown, the next send resumes it', async () => {

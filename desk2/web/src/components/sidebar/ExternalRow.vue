@@ -4,8 +4,7 @@ import { Cloud, StickyNote } from '@lucide/vue'
 import { isAddedRow, isTaskRow } from './tasks'
 import type { ExternalSession } from '@shared/protocol'
 import { shellGlyphs, shellIcons } from '@/lib/icons'
-import { ahSource, appLead, fromPcLabel } from '@/components/cloud/logic'
-import { appMark } from '@/components/cloud/appMarks'
+import { ahSource, fromPcLabel } from '@/components/cloud/logic'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -41,19 +40,30 @@ const props = withDefaults(
     compact?: boolean
     /** That project's icon, null for none. */
     icon?: string | null
+    /** While rows are picked together (picked.ts): whether this one is, drawn as selected in place of the open row; null while none are. */
+    picked?: boolean | null
   }>(),
   {
     selected: false,
     groups: () => [],
     compact: false,
-    icon: null
+    icon: null,
+    picked: null
   }
 )
-const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
+/** `select` carries the click or key press, whose Ctrl or Shift picks rows instead of opening this one. */
+const emit = defineEmits<{ select: [e: MouseEvent | KeyboardEvent]; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
+
+/** Drawn as selected: the picked rows while there are any, else the open row. */
+const lit = computed(() => props.picked ?? props.selected)
 
 const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
 const speaker = computed(() => isMuted(props.session.id) || isAudible(props.session.id))
+/** Room at the row's right end: for the three dots (and the speaker) on hover in compact mode; always otherwise, where the status dot sits. */
+const extrasPad = computed(() =>
+  speaker.value ? [menuOpen.value ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : props.compact ? ['pe-1 group-hover/row:pe-6', { 'pe-6': menuOpen.value }] : 'pe-6'
+)
 const menu = computed(() => props.entries ?? rowMenu({ ...externalRow(props.session), muted: isMuted(props.session.id) }, props.groups, accountChoices.value, codexAccountChoices.value))
 const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))
 const menuOpen = ref(false)
@@ -70,8 +80,6 @@ const tooltip = computed(() =>
     .filter(Boolean)
     .join('\n')
 )
-// A chat of another app on this PC the Apps scope shows has that app's muted mark beside its dot, as in the cloud list; an added row never does.
-const app = computed(() => (props.session.fromPc || isAddedRow(props.session.id) ? null : appLead(ahSource(props.session.source))))
 const dotClass = computed(() => glyphDotClass(glyph.value))
 // The account number (an instance named "#38") and the age since its last activity, as the cloud list draws them;
 // Clean sidebar (clean.ts) hides both (owner, 2026-10-07).
@@ -125,16 +133,21 @@ function onMenuClosed(e: Event) {
   <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
     <span class="block" v-on="listeners">
       <DefineBody>
-          <span class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" :selected="selected" />
-            <span v-else class="flex size-3.5 items-center justify-center">
-              <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
-            </span>
+          <!-- Compact: the project icon in its ring leads the row. Otherwise the status dot sits at the row's right end, where
+               the three dots come on hover and cover it (owner, 2026-10-14, as Claude's sidebar draws it). -->
+          <span v-if="compact" class="flex size-6 shrink-0 items-center justify-center">
+            <ProjectRing :glyph="glyph" :icon="icon" :selected="lit" />
+          </span>
+          <span v-else class="w-0.5 shrink-0" aria-hidden="true" />
+          <span
+            v-if="!compact && !renaming"
+            class="pointer-events-none absolute right-0.75 top-0.75 flex size-5 items-center justify-center transition-opacity duration-(--dur-fast) group-hover/row:opacity-0"
+            :class="menuOpen && 'opacity-0'"
+          >
+            <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
           <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
-          <!-- A chat of another app on this PC: its muted mark beside the dot, never in its place, so working and needs-you still show. -->
-          <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" class="size-3.5 shrink-0 text-text-muted" />
           <!-- A CliMayte task drawn as a row of its own (nothing says which chat started it): the CliMayte toggle's mark, so it never reads as a chat (owner, 2026-10-07). -->
           <component :is="shellIcons.climayte" v-if="isTaskRow(session.id)" role="img" aria-label="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
           <input
@@ -148,17 +161,20 @@ function onMenuClosed(e: Event) {
             @keydown.escape.stop="renaming = false"
             @blur="commitRename"
           />
-          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.title }}</span>
+          <!-- An Unassigned chat (on no account) starts its name with a star wherever it is listed (owner, 2026-10-14). -->
+          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.unassigned ? '*' : '' }}{{ session.title }}</span>
           <!-- A note on the chat (Add note…): its mark here, its text in the row's tooltip. -->
           <StickyNote v-if="!renaming && session.note" role="img" aria-label="Has a note" class="size-3 shrink-0 text-text-muted" />
 
           <!-- The account number, the sub-item badges (SubBadges.vue, when the sidebar shows them as counts) and the age; they
                make room for the three dots on hover, the age giving its place. -->
-          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ms-1 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ms-1 flex shrink-0 items-center gap-1 text-ui-sm leading-4" :class="extrasPad">
             <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ account }}</span>
             <slot />
-            <RowAge v-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="session.lastActivityAt" />
+            <RowAge v-if="aged" :class="compact && ['group-hover/row:hidden', { hidden: menuOpen }]" :at="session.lastActivityAt" />
           </span>
+          <!-- Nothing at the right end: the title still stops short of the status dot. -->
+          <span v-else-if="!compact && !renaming" class="w-5 shrink-0" aria-hidden="true" />
 
       </DefineBody>
       <ContextMenu v-if="seen">
@@ -167,15 +183,16 @@ function onMenuClosed(e: Event) {
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           :aria-description="`Runs in ${source}`"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
@@ -208,15 +225,16 @@ function onMenuClosed(e: Event) {
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           :aria-description="`Runs in ${source}`"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />

@@ -24,8 +24,10 @@ import {
 import {
   type FreeCommand,
   type FreeInstance,
+  type FreePromotion,
   type FreeProvider,
   isPaidPlan,
+  promotionFor,
 } from '@desk/shared/free-instances'
 import type { TokenParts } from '@agenthydra/server/types'
 import { computed, reactive, ref } from 'vue'
@@ -50,7 +52,7 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import type { UsageSnapshot } from '@/lib/api'
 import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
-import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
+import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freePlanLabel, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import { searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
@@ -58,8 +60,8 @@ import IconTooltip from '@/shell/IconTooltip.vue'
 
 // The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
 defineProps<{ columns: InstanceColumn[] }>()
-// Promote: InstancesView opens its New CLI (Claude) or New Codex (ChatGPT) dialog for the account to sign in there.
-const emit = defineEmits<{ promote: [provider: FreeProvider] }>()
+// Promote: InstancesView opens its New CLI, New Desktop or New Codex dialog for the account to sign in there.
+const emit = defineEmits<{ promote: [to: FreePromotion] }>()
 
 const { t } = useI18n()
 const { instances, tokens, health, jobs, errors, loaded, loadError, busy, run, logout, planSeen, remove, recover, refreshFree } =
@@ -84,16 +86,20 @@ function paidPlan(i: FreeInstance): string {
   const plan = planOf(i)
   return isPaidPlan(plan) ? planName(plan!) : ''
 }
-/** The row's mark for a move between free and paid, until it is dismissed. */
+/** What the account's plan can be promoted to (a ChatGPT plan above Go, any paid Claude plan), or null. */
+const promotion = (i: FreeInstance) => promotionFor(i.provider, planOf(i))
+const PROMOTE_LABEL: Record<FreePromotion, string> = { codex: 'freeInstances.promoteCodex', cli: 'freeInstances.promoteCli', desktop: 'freeInstances.promoteDesktop' }
+/** The row's mark for a move that changed what it can be promoted to, until it is dismissed. */
 function planChangeLabel(i: FreeInstance): string {
   const c = i.planChange
   if (!c) return ''
-  return isPaidPlan(c.to) ? t('freeInstances.planChangedPaid', { plan: planName(c.to) }) : t('freeInstances.planChangedFree')
+  return t(promotionFor(i.provider, c.to) ? 'freeInstances.planChangedPaid' : 'freeInstances.planChangedBack', { plan: planName(c.to) })
 }
 function planChangeHint(i: FreeInstance): string {
   const c = i.planChange
   if (!c) return ''
   const when = timeAgo(c.at)
+  if (!promotionFor(i.provider, c.to)) return t('freeInstances.planChangedBackHint', { when, from: planName(c.from ?? 'paid') })
   return c.from ? t('freeInstances.planChangedHint', { when, from: planName(c.from) }) : t('freeInstances.planFirstPaidHint', { when })
 }
 // The table's column mode and clock (composables/useUsageMode.ts), the desktop table's: one mode for
@@ -112,10 +118,12 @@ const runningOf = (i: FreeInstance, ...commands: FreeCommand[]) =>
 // refresh that brings the same reading back redraws nothing.
 const snapshotMemo = new Map<string, { key: string; snapshot: UsageSnapshot | null }>()
 function usageFor(i: FreeInstance): UsageSnapshot | null {
-  const key = JSON.stringify(i.usage)
+  // The minute is in the key: a Claude window whose reset passes while the table is open reads 0% from then on.
+  const at = now.value
+  const key = `${JSON.stringify(i.usage)}@${Math.floor(at.getTime() / 60_000)}`
   const memo = snapshotMemo.get(i.id)
   if (memo?.key === key) return memo.snapshot
-  const snapshot = freeUsageSnapshot(i.usage)
+  const snapshot = freeUsageSnapshot(i.usage, i.provider, at)
   snapshotMemo.set(i.id, { key, snapshot })
   return snapshot
 }
@@ -135,15 +143,18 @@ function tokensOf(i: FreeInstance): TokenParts {
 // persisted key the host sorts every kind by), under the same column keys (owner, 2026-10-07).
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
-// A Free login is never open or closed and has no plan the filter offers, so only its sign-in and
-// usage can set it aside (as on the CLI tab).
+// Every row type obeys every facet (owner, 2026-10-16: with only 20x plans shown, another kind's row still
+// showed). A Free login's plan is the one its site reports (freePlanLabel, "Free" on the Free plan), and it
+// counts as open while a chat or check of it is in flight, closed otherwise: it has no window of its own.
 const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (i: FreeInstance) => i.id,
   facts: (i: FreeInstance) => ({
     usage: usageFor(i),
     signedIn: i.loggedIn,
-    search: searchText(i.num, i.name, i.email, i.provider, 'free'),
+    plan: freePlanLabel(i),
+    open: busy(i.id),
+    search: searchText(i.num, i.name, i.email, i.provider, 'free', freePlanLabel(i)),
   }),
   persisted: { key: desktopSortKey, direction: desktopSortDirection },
   columns: [
@@ -228,16 +239,12 @@ function rowModel(i: FreeInstance): InstanceRowModel {
               : t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
           noQuotaLabel: t('freeInstances.unlimited'),
         }
-      : i.provider === 'claude' && i.usage && !usageFor(i)
-        ? // Claude answers a free account's usage with empty windows until it sends a message (seen
-          // 2026-10-06), which the cell used to call "Not checked yet.".
-          {
-            noQuota: t('freeInstances.noReadingHint'),
-            noQuotaLabel: t('freeInstances.noReading'),
-          }
-        : {
+      : {
           usage: {
-            snapshot: usageFor(i),
+            // A getter, as the last-used time is: only the cells that draw it follow the clock.
+            get snapshot() {
+              return usageFor(i)
+            },
             checking: runningOf(i, 'auth', 'usage'),
             key: `free:${i.id}`,
             onCheck: () => void run(i, 'usage'),
@@ -499,7 +506,8 @@ defineExpose({
     <InstanceRow
       v-for="inst in visibleRows"
       :key="inst.id"
-      :style="orderStyle(inst)"
+      class="order-(--row-order)"
+      :style="{ '--row-order': orderStyle(inst)?.order }"
       :columns="columns"
       :row="rowModels.get(inst.id)!"
     >
@@ -534,7 +542,8 @@ defineExpose({
             <Gift class="size-3.5 text-plan-free dark:text-plan-free-dark" />
           </span>
         </IconTooltip>
-        <!-- A move between free and paid, until dismissed in the menu (owner, 2026-10-09: "If they change to not free ... let me know"). -->
+        <!-- A move that changed what the account can be promoted to, until dismissed in the menu (owner, 2026-10-09:
+             "If they change to not free ... let me know"; 2026-10-14: never "Now on Go"). -->
         <IconTooltip v-if="inst.planChange" :label="planChangeLabel(inst)" :description="planChangeHint(inst)">
           <Badge size="sm" class="h-4">{{ planChangeLabel(inst) }}</Badge>
         </IconTooltip>
@@ -576,10 +585,10 @@ defineExpose({
         >
           <SearchCheck /> {{ $t('freeInstances.recover') }}
         </DropdownMenuItem>
-        <!-- A paid account can do more as a CLI, Desktop or Codex instance: Promote opens that kind's New dialog. -->
-        <DropdownMenuItem v-if="paidPlan(inst)" @click="emit('promote', inst.provider)">
+        <!-- An account above Go can do more as a CLI, Desktop or Codex instance: Promote opens that kind's New dialog. -->
+        <DropdownMenuItem v-if="promotion(inst)" @click="emit('promote', promotion(inst)!)">
           <ArrowUpRight />
-          {{ $t(inst.provider === 'claude' ? 'freeInstances.promoteCli' : 'freeInstances.promoteCodex') }}
+          {{ $t(PROMOTE_LABEL[promotion(inst)!]) }}
         </DropdownMenuItem>
         <DropdownMenuItem v-if="inst.planChange" @click="planSeen(inst)">
           <BellOff /> {{ $t('freeInstances.planDismiss') }}
@@ -600,14 +609,12 @@ defineExpose({
   <DeleteInstanceDialog
     v-model:open="deleteOpen"
     namespace="freeInstances"
-    :instance-name="deleteTarget?.name ?? null"
     :submitting="deleting"
     :error-message="deleteError"
     @confirm="onDeleteConfirm"
   />
   <CliInstanceNameDialog
     v-model:open="renameOpen"
-    mode="rename"
     namespace="freeInstances"
     :current-name="renameTarget?.name ?? null"
     :submitting="renaming"

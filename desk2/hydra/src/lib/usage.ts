@@ -17,6 +17,7 @@ export type UsageReason =
   | 'check_failed'
   | 'stale_token_app_closed'
   | 'rate_limited'
+  | 'token_revoked'
   | 'unknown'
 
 /** The binding weekly-all-models percentage used for pacing decisions. Null when the
@@ -184,6 +185,8 @@ export function usageReasonMessageKey(reason: UsageReason | undefined): string |
       return 'instances.usageReasonAppClosed'
     case 'rate_limited':
       return 'instances.usageReasonRateLimited'
+    case 'token_revoked':
+      return 'instances.usageReasonRevoked'
     case 'ok':
       return null
     default:
@@ -205,15 +208,6 @@ export function windowLengthMs(kind: WindowKind): number {
 /** The reset instant (ms) of a window, or null when `resetsAt` is missing or unparseable. */
 export function windowResetMs(resetsAt: string | null | undefined): number | null {
   return msUntilReset({ pct: 0, resets: '', resetsAt }, new Date(0))
-}
-
-/** When the window began: its reset instant minus its length; null without a usable reset. */
-export function windowStartMs(
-  resetsAt: string | null | undefined,
-  kind: WindowKind,
-): number | null {
-  const reset = windowResetMs(resetsAt)
-  return reset === null ? null : reset - windowLengthMs(kind)
 }
 
 /** True when the reset instant has passed (at or before `nowMs`); false when it is missing. */

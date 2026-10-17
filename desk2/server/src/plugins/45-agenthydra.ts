@@ -9,10 +9,11 @@
 // headers: to AgentHydra it is a local client, the same as Desk's own bridge calls.
 // /oauth/* (AgentHydra's sign-in pages) is sent to AgentHydra itself: a sign-in is a page of its own.
 
-import { statSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import type { Hono } from 'hono'
 import { bridge } from '../bridge'
+import { notOwnPage } from '../own-page'
 import { indexReader } from '../static-index'
 import { cacheControl } from '../static-cache'
 
@@ -21,27 +22,9 @@ const readIndex = indexReader(join(DIST, 'index.html'))
 const BASE = '/ah'
 const NOT_PASSED_ON = ['origin', 'referer', 'cookie', 'host', 'connection', 'accept-encoding', 'content-length']
 
-/** Why a request is not from Desk 2's own page, or null: an Origin must be this server's, and a browser's
- *  Sec-Fetch-Site must say same-origin (or none, typed into the address bar). */
-function notOwnPage(headers: Headers): string | null {
-  const origin = headers.get('origin')
-  if (origin !== null) {
-    let host: string | null = null
-    try {
-      host = new URL(origin).host
-    } catch {
-      // floor-ok: an Origin that is not a URL is refused below like any other
-    }
-    if (host === null || host !== headers.get('host')) return `AgentHydra's API is only for Desk 2's own page, not ${origin}`
-  }
-  const site = headers.get('sec-fetch-site')
-  if (site !== null && site !== 'same-origin' && site !== 'none') return `AgentHydra's API is only for Desk 2's own page (${site})`
-  return null
-}
-
 export default function plugin(app: Hono): void {
   app.all(`${BASE}/api/*`, async (c) => {
-    const why = notOwnPage(c.req.raw.headers)
+    const why = notOwnPage(c.req.raw.headers, "AgentHydra's API")
     if (why) return c.json({ error: why }, 403)
     const url = new URL(c.req.url)
     const target = `${bridge().url}${url.pathname.slice(BASE.length)}${url.search}`
@@ -79,7 +62,7 @@ export default function plugin(app: Hono): void {
   app.get(`${BASE}/*`, async (c) => {
     const path = decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)
     const file = resolve(DIST, `.${path}`)
-    if (file.startsWith(DIST + sep) && statSync(file, { throwIfNoEntry: false })?.isFile()) {
+    if (file.startsWith(DIST + sep) && (await stat(file).catch(() => null))?.isFile()) {
       return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
     }
     // Only the fall-back needs index.html, so a file that is there costs one stat.

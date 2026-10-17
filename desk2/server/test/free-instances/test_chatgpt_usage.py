@@ -209,5 +209,33 @@ class StreamErrorTest(unittest.TestCase):
         self.assertIn("event keys: error, type, v", str(bare.exception))
 
 
+class _Refused:
+    status_code = 404
+
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        return json.loads(self._body)
+
+    def close(self):
+        pass
+
+
+class RefusedCallTest(unittest.TestCase):
+    # 2026-10-15: every send failed with a bare 404 {"detail":"Model not found"}, and the error named no call at all.
+    def test_a_refused_call_names_its_method_path_and_chatgpts_detail(self):
+        http = object.__new__(ChatGPTHttp)
+        http.timeout = 5
+        http.session = Mock()
+        http.session.request.return_value = _Refused(b'{"detail":"Model not found"}')
+        with self.assertRaises(ClaudeError) as refused:
+            http._request("POST", "/backend-api/f/conversation?history=off", json={})
+        self.assertEqual(refused.exception.status, 404)
+        self.assertIn("Failed call: POST /backend-api/f/conversation.", str(refused.exception))
+        self.assertIn("ChatGPT said: Model not found.", str(refused.exception))
+        self.assertNotIn("history=off", str(refused.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

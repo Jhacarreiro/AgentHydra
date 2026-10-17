@@ -45,7 +45,7 @@
 
 import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CliMayteStatus } from './climayte-lib'
+import { type CliMayteStatus, tooBigOf, verdictCoversNewestWork } from './climayte-lib'
 import { appendInOrder } from './core/append-in-order'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { deliverPeerMessage } from './peer-message'
@@ -114,6 +114,9 @@ export interface PingWorker {
   verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string; at?: number }>
   error: string | null
   origin?: CliMayteOrigin
+  /** One of the owner's own chats (climayte_run chat: true): the owner reads it in the window, so no
+   *  chat is pinged about it. */
+  chat?: boolean
   /** The wave it belongs to and its kind: a wave task has no origin, its question goes to its manager's. */
   wave?: string | null
   kind?: string | null
@@ -121,11 +124,15 @@ export interface PingWorker {
   question?: { text: string; options?: string[]; at: number }
   /** When its origin chat last read it or cancelled it itself (climayte.ts climayteSeen). */
   seenAt?: number
+  /** Its report, each turn's (the last one is read for a TOO BIG: line). */
+  results?: string[]
+  result?: string | null
 }
 
 export type PingKind =
   | 'finished' // its check passed
   | 'needs-verdict' // done, with no check to judge it
+  | 'too-big' // done, its report says TOO BIG: the summoner takes the job back and re-splits it (ROLES.md)
   | 'check-failed' // its check failed; sent back one rung
   | 'failed' // includes a notConverging stop
   | 'cancelled'
@@ -134,6 +141,7 @@ export type PingKind =
   | 'limited-moved' // information only: hit a 5-hour or weekly limit, resumed on another account
   | 'stuck' // information only: waiting longer than STUCK_AFTER_MS
   | 'swarm-job' // an HSwarm job that outlived the call that started it has finished (swarm-job-ping.ts)
+  | 'finished-later' // registered work a chat waited on has finished (completions.ts); the line is AgentHydra's
 
 const INFO_KINDS: ReadonlySet<PingKind> = new Set(['limited-moved', 'stuck'])
 /** Results the chat can read on its next look: held while the same origin still has live workers. */
@@ -144,6 +152,7 @@ const OUTCOME_KINDS: ReadonlySet<PingKind> = new Set([
   'check-failed',
   'finished',
   'needs-verdict',
+  'too-big',
   'failed',
   'cancelled',
 ])
@@ -206,17 +215,6 @@ export function snapshotOf(w: PingWorker, prev: PingSnapshot | null, now: number
   }
 }
 
-/** A verdict covers the worker's newest work: the last verdict is stamped and no attempt started
- *  after it. A follow-up or a sent-back fail makes the worker unjudged again. climayte_status's
- *  `judged` is this and "not live". */
-export function verdictCoversNewestWork(w: {
-  verdicts?: Array<{ at?: number }>
-  attempts: Array<{ startedAt: number }>
-}): boolean {
-  const at = w.verdicts?.at(-1)?.at
-  return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
-}
-
 /** A sent-back line is history once the same worker has a newer outcome waiting behind it. */
 function sentBackSuperseded(e: QueuedPing, queued: QueuedPing[]): boolean {
   return (
@@ -240,6 +238,7 @@ function groupReported(e: QueuedPing, queued: QueuedPing[], group: PingWorker[])
 /** A worker line the worker's own state has answered since it was queued. */
 const WORKER_ANSWERED: Partial<Record<PingKind, (w: PingWorker) => boolean>> = {
   'needs-verdict': (w) => w.status === 'done' && verdictCoversNewestWork(w),
+  'too-big': (w) => w.status === 'done' && verdictCoversNewestWork(w),
   // Its own check's verdict is why it was sent: only a later one counts.
   finished: (w) =>
     w.status === 'done' &&
@@ -313,24 +312,21 @@ function limitStop(a: PingAttempt): string | null {
   return null
 }
 
-/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
- *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
-export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number): PingEvent[] {
-  const p = prev ?? NEW_WORKER
-  const n = w.attempts.length
-  const who = `${w.id} "${cut(w.title, TITLE_MAX)}"`
-  const out: PingEvent[] = []
-  const add = (kind: PingKind, line: string, index = n) =>
-    out.push({
-      key: `${w.id}:${kind}:${index}`,
-      kind,
-      workerId: w.id,
-      group: w.group,
-      at: now,
-      line,
-    })
+/** A ping event of this worker, keyed by the attempt it is about (the newest one by default). */
+function eventOf(
+  w: PingWorker,
+  now: number,
+  kind: PingKind,
+  line: string,
+  index = w.attempts.length,
+): PingEvent {
+  return { key: `${w.id}:${kind}:${index}`, kind, workerId: w.id, group: w.group, at: now, line }
+}
 
-  for (let i = Math.max(1, p.attempts); i < n; i++) {
+/** Each attempt since the last look that ended at a usage limit and resumed on another account. */
+function limitMoves(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent[] {
+  const out: PingEvent[] = []
+  for (let i = Math.max(1, p.attempts); i < w.attempts.length; i++) {
     const before = w.attempts[i - 1]
     const after = w.attempts[i]
     if (before.account.id === after.account.id) continue
@@ -340,48 +336,117 @@ export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number
       0,
       Math.round((after.startedAt - (before.endedAt ?? after.startedAt)) / 1000),
     )
-    add(
-      'limited-moved',
-      `${who}: ${accountLabel(before)} ${stop}; resumed on ${accountLabel(after)} after ${gap}s.`,
-      i + 1,
+    out.push(
+      eventOf(
+        w,
+        now,
+        'limited-moved',
+        `${who}: ${accountLabel(before)} ${stop}; resumed on ${accountLabel(after)} after ${gap}s.`,
+        i + 1,
+      ),
     )
-  }
-
-  const judged = (w.verdicts ?? []).slice(p.verdicts).filter((v) => v.by === 'check')
-  const check = judged.at(-1)?.verdict ?? null
-  const last = w.attempts.at(-1)
-  const entered = w.status !== p.status
-  if (check === 'fail') {
-    const back = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
-    add('check-failed', `${who}: check failed, ${back ? 'sent back' : 'not sent back'}.`)
-  }
-  if (w.question && w.question.at !== p.question) {
-    const opts = w.question.options?.length ? ` Options: ${w.question.options.join(' | ')}.` : ''
-    add(
-      'asking',
-      `${who}: asks: ${cut(w.question.text.replace(/\s+/g, ' '), QUESTION_MAX)}${opts}`,
-      w.question.at,
-    )
-  }
-  // A worker that asked ended its turn on purpose: that is no finish until it is answered.
-  const asking = !!w.question
-  if (w.status === 'done' && check === 'pass' && !asking)
-    add('finished', `${who}: done on ${accountLabel(last)}, check passed.`)
-  else if (w.status === 'done' && entered && !asking)
-    add('needs-verdict', `${who}: done on ${accountLabel(last)}, needs your verdict.`)
-  if (w.status === 'failed' && entered)
-    add('failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
-  if (w.status === 'cancelled' && entered) add('cancelled', `${who}: cancelled.`)
-  if (
-    w.status === 'waiting' &&
-    p.status === 'waiting' &&
-    p.waitingSince != null &&
-    now - p.waitingSince > STUCK_AFTER_MS
-  ) {
-    const mins = Math.round((now - p.waitingSince) / 60_000)
-    add('stuck', `${who}: waiting ${mins} min: ${reason(w.error, 'no account is free')}.`)
   }
   return out
+}
+
+function checkFailedEvent(
+  w: PingWorker,
+  now: number,
+  who: string,
+  check: 'pass' | 'fail' | null,
+): PingEvent | null {
+  if (check !== 'fail') return null
+  const back = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  return eventOf(
+    w,
+    now,
+    'check-failed',
+    `${who}: check failed, ${back ? 'sent back' : 'not sent back'}.`,
+  )
+}
+
+function questionEvent(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent | null {
+  const q = w.question
+  if (!q || q.at === p.question) return null
+  const opts = q.options?.length ? ` Options: ${q.options.join(' | ')}.` : ''
+  return eventOf(
+    w,
+    now,
+    'asking',
+    `${who}: asks: ${cut(q.text.replace(/\s+/g, ' '), QUESTION_MAX)}${opts}`,
+    q.at,
+  )
+}
+
+/** A worker that ended its work on this look: too big to finish here, passed its check, or waiting
+ *  for a verdict. A worker that asked ended its turn on purpose: that is no finish until it is
+ *  answered. */
+function endedEvent(
+  w: PingWorker,
+  now: number,
+  who: string,
+  check: 'pass' | 'fail' | null,
+  entered: boolean,
+): PingEvent | null {
+  if (w.status !== 'done' || w.question) return null
+  const lastAccount = accountLabel(w.attempts.at(-1))
+  const tooBig = entered ? tooBigOf(w.results?.at(-1) ?? w.result) : null
+  if (tooBig)
+    return eventOf(
+      w,
+      now,
+      'too-big',
+      `${tooBig} (${who}, done on ${lastAccount}: take the job back and re-split it.)`,
+    )
+  if (check === 'pass')
+    return eventOf(w, now, 'finished', `${who}: done on ${lastAccount}, check passed.`)
+  if (entered)
+    return eventOf(w, now, 'needs-verdict', `${who}: done on ${lastAccount}, needs your verdict.`)
+  return null
+}
+
+/** A worker that has waited longer than STUCK_AFTER_MS, since it was first seen waiting. */
+function stuckEvent(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent | null {
+  const since = p.waitingSince
+  const stuck =
+    w.status === 'waiting' &&
+    p.status === 'waiting' &&
+    since != null &&
+    now - since > STUCK_AFTER_MS
+  if (!stuck || since == null) return null
+  const mins = Math.round((now - since) / 60_000)
+  return eventOf(
+    w,
+    now,
+    'stuck',
+    `${who}: waiting ${mins} min: ${reason(w.error, 'no account is free')}.`,
+  )
+}
+
+/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
+ *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
+/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
+ *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
+export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number): PingEvent[] {
+  const p = prev ?? NEW_WORKER
+  const who = `${w.id} "${cut(w.title, TITLE_MAX)}"`
+  const judged = (w.verdicts ?? []).slice(p.verdicts).filter((v) => v.by === 'check')
+  const check = judged.at(-1)?.verdict ?? null
+  const entered = w.status !== p.status
+  const events = limitMoves(w, p, now, who)
+  for (const e of [
+    checkFailedEvent(w, now, who, check),
+    questionEvent(w, p, now, who),
+    endedEvent(w, now, who, check, entered),
+    entered && w.status === 'failed'
+      ? eventOf(w, now, 'failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
+      : null,
+    entered && w.status === 'cancelled' ? eventOf(w, now, 'cancelled', `${who}: cancelled.`) : null,
+    stuckEvent(w, p, now, who),
+  ]) {
+    if (e) events.push(e)
+  }
+  return events
 }
 
 /** Local wall-clock time, HH:MM. */
@@ -409,13 +474,20 @@ export function pingMessage(
   const n = events.length
   const lines = [
     `${PING_HEADER} Ping ${lo === hi ? lo : `${lo}-${hi}`}, ${n} update${n === 1 ? '' : 's'} since ${hhmm(Math.min(...events.map((e) => e.at)))}:`,
-    ...events.slice(0, MAX_BULLETS).map((e) => `• ${e.line}`),
+    // A TOO BIG line leads: its job is not done, and the summoner must re-split it.
+    ...[
+      ...events.filter((e) => e.kind === 'too-big'),
+      ...events.filter((e) => e.kind !== 'too-big'),
+    ]
+      .slice(0, MAX_BULLETS)
+      .map((e) => `• ${e.line}`),
   ]
   if (n > MAX_BULLETS) lines.push(`+${n - MAX_BULLETS} more`)
-  // An HSwarm job's line stands alone: it has no group, no verdict to give.
-  const jobsOnly = events.every((e) => e.kind === 'swarm-job')
+  // An HSwarm job's or a registered wait's line stands alone: it has no group, no verdict to give.
+  const standalone = (k: PingKind | undefined) => k === 'swarm-job' || k === 'finished-later'
+  const jobsOnly = events.every((e) => standalone(e.kind))
   if (jobsOnly) return lines.join('\n')
-  const groups = [...new Set(events.filter((e) => e.kind !== 'swarm-job').map((e) => e.group))]
+  const groups = [...new Set(events.filter((e) => !standalone(e.kind)).map((e) => e.group))]
   for (const g of groups) {
     const ws = workers.filter((w) => w.group === g)
     const count = (...s: CliMayteStatus[]) => ws.filter((w) => s.includes(w.status)).length
@@ -499,6 +571,8 @@ export interface CliMaytePingDeps {
   dir: string
   /** Every worker now. */
   workers(): PingWorker[]
+  /** One worker by id, without copying the store (workers() copies every worker the daemon ever ran). */
+  workerById?(id: string): PingWorker | undefined
   /** Calls `cb` on every worker change (onCliMayteChange); returns the unsubscribe. */
   subscribe(cb: (w: PingWorker) => void): () => void
   /** A non-urgent message to a manager worker (climayteSend). */
@@ -528,7 +602,7 @@ export interface CliMaytePingDeps {
     send(
       sessionId: string,
       text: string,
-    ): Promise<{ ok: boolean; reason: string; notDesk?: boolean }>
+    ): Promise<{ ok: boolean; reason: string; notDesk?: boolean; uncertain?: boolean }>
   }
   /** The app's native send (tryNativeSend), tried for a chat Desk 2 does not run, before the peer pipe.
    *  `unavailable`: nothing reached the app, so the pipe may go; false: the app was sent it and refused or
@@ -567,6 +641,16 @@ const originKey = (o: CliMayteOrigin): string =>
 
 const sameOrigin = (a: CliMayteOrigin | undefined, b: CliMayteOrigin): boolean =>
   !!a && originKey(a) === originKey(b)
+
+/** Whether `w`'s news goes to origin `o`. Never a worker's own (a chat that adopted its own group heard of
+ *  its own every turn end), and never an owner's chat's: the owner reads that in the window. Both woke the
+ *  Desk chat that had adopted group hydra-desk each time any Desk chat ended a turn, itself included: 2,485
+ *  turns of "the same automatic ping, nothing to judge" (2026-10-16). */
+export const reportsTo = (
+  w: Pick<PingWorker, 'id' | 'origin' | 'chat'>,
+  o: CliMayteOrigin,
+): boolean =>
+  sameOrigin(w.origin, o) && w.chat !== true && !(o.kind === 'worker' && o.workerId === w.id)
 
 const seqRange = (batch: QueuedPing[]): string => {
   const s = batch.map((e) => e.seq)
@@ -635,7 +719,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   const workersOf = (o: CliMayteOrigin, latest?: PingWorker): PingWorker[] => {
     const all = deps.workers().map((x) => (latest && x.id === latest.id ? latest : x))
     if (latest && !all.some((x) => x.id === latest.id)) all.push(latest)
-    return all.filter((x) => sameOrigin(x.origin, o))
+    return all.filter((x) => reportsTo(x, o))
   }
 
   const boxFor = (o: CliMayteOrigin): OriginBox => {
@@ -682,7 +766,15 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       (w.wave && w.kind !== 'manage' && events.some((e) => e.kind === 'asking')
         ? deps.workers().find((m) => m.kind === 'manage' && m.wave === w.wave)?.origin
         : undefined)
-    if (!origin || !events.length || pingOff()) return
+    // Worker text may be packed behind enumerable getters. Ownership needs only these
+    // three fields; spreading a history worker unpacks its reports on every heartbeat.
+    if (
+      !origin ||
+      !events.length ||
+      !reportsTo({ id: w.id, chat: w.chat, origin }, origin) ||
+      pingOff()
+    )
+      return
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {
       const group = workersOf(origin, w).filter((x) => x.group === w.group)
@@ -724,9 +816,13 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
    *  delivers a line without checking it again (2026-10-13), so each waits for the turn's end. */
   const sendable = (box: OriginBox): QueuedPing[] => {
     const o = box.origin
-    const busy =
-      o.kind === 'worker' &&
-      deps.workers().some((x) => x.id === o.workerId && x.status === 'running')
+    const w =
+      o.kind === 'worker'
+        ? deps.workerById
+          ? deps.workerById(o.workerId)
+          : deps.workers().find((x) => x.id === o.workerId)
+        : undefined
+    const busy = w?.status === 'running'
     return busy ? [] : box.pending
   }
 
@@ -800,9 +896,13 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     if (deps.desk) {
       const d = await deps.desk
         .send(o.sessionId, text)
-        .catch((err) => ({ ok: false, reason: String(err), notDesk: false }))
+        .catch((err) => ({ ok: false, reason: String(err), notDesk: false, uncertain: false }))
       if (d.ok) return settle(box, batch)
       if (!d.notDesk) fail(box, batch, 'desk', d.reason)
+      // Desk 2 may have started the turn before its answer was lost (a resume outlasts the 5 s wait, or a
+      // 5xx after the send): never sent again another way, as for the native send below (2026-10-16).
+      if (d.uncertain)
+        return giveUp(box, batch, text, "did not confirm Desk 2's send, which is never repeated")
     }
     // Any other chat: the app's native send starts its turn. Only a refusal before dispatch goes on to
     // the pipe; a send the app took is never sent again another way (the runbook's rule).

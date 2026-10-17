@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { Check, ClipboardList, Clock, PencilLine } from '@lucide/vue'
 import type { PermissionMode, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
+import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { useTranscript } from '../context'
 import MarkdownBlock from './MarkdownBlock.vue'
 
@@ -10,6 +11,7 @@ import MarkdownBlock from './MarkdownBlock.vue'
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'plan' }>; docked?: boolean }>()
 
 const ctx = useTranscript()
+const lockedTitle = computed(() => (ctx.readOnly.value ? LOCKED_TITLE : undefined))
 const desk = useDesk()
 const busy = ref(false)
 const err = ref<string | null>(null)
@@ -48,7 +50,7 @@ async function respond(approve: boolean, mode?: PermissionMode) {
       @click="ctx.toggle(openKey)"
     >
       <Check v-if="item.state === 'approved'" class="size-4 shrink-0 text-success-text" />
-      <PencilLine v-else-if="item.state === 'rejected'" class="size-4 shrink-0 text-warning-text" />
+      <PencilLine v-else-if="item.state === 'rejected'" class="size-4 shrink-0 text-text-muted" />
       <Clock v-else class="size-4 shrink-0 text-text-muted" />
       <span class="shrink-0">{{ item.state === 'approved' ? 'Plan approved' : item.state === 'rejected' ? 'Kept planning' : 'Plan expired' }}</span>
       <span class="min-w-0 truncate text-text">{{ title }}</span>
@@ -72,11 +74,11 @@ async function respond(approve: boolean, mode?: PermissionMode) {
     <div class="max-h-[50vh] overflow-auto px-4 py-2 text-ui-lg">
       <MarkdownBlock :text="item.plan" />
     </div>
-    <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
+    <div class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
       <template v-if="!revising">
-        <button type="button" class="tx-btn tx-btn-primary" :disabled="busy" @click="respond(true)">Approve plan</button>
-        <button type="button" class="tx-btn" :disabled="busy" @click="respond(true, 'default')">Approve, review each edit</button>
-        <button type="button" class="tx-btn" :disabled="busy" @click="revising = true">Keep planning</button>
+        <button type="button" class="tx-btn tx-btn-primary" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="respond(true)">Approve plan</button>
+        <button type="button" class="tx-btn" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="respond(true, 'default')">Approve, review each edit</button>
+        <button type="button" class="tx-btn" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="revising = true">Keep planning</button>
       </template>
       <template v-else>
         <input
@@ -86,8 +88,8 @@ async function respond(approve: boolean, mode?: PermissionMode) {
           @keydown.enter="respond(false)"
           @keydown.esc="revising = false"
         />
-        <button type="button" class="tx-btn tx-btn-primary" :disabled="busy" @click="respond(false)">Send</button>
-        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="revising = false">Cancel</button>
+        <button type="button" class="tx-btn tx-btn-primary" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="respond(false)">Send</button>
+        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="revising = false">Cancel</button>
       </template>
       <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>

@@ -27,7 +27,7 @@ const sid = (row: Pick<AhSessionRow, 'session_id'>) => encodeURIComponent(row.se
 export const ah = {
   /** The session's row; no source finds the newest session with that id. */
   session: (id: string, source?: string) => call<AhSessionRow>(`/sessions/${encodeURIComponent(id)}${source ? `?source=${encodeURIComponent(source)}` : ''}`),
-  usage: (row: AhSessionRow) => call<AhUsage>(`/sessions/${sid(row)}/usage${where(row)}`),
+  usage: (row: Pick<AhSessionRow, 'session_id' | 'source' | 'locator'>) => call<AhUsage>(`/sessions/${sid(row)}/usage${where(row)}`),
   secrets: (row: AhSessionRow) => call<AhSecrets>(`/sessions/${sid(row)}/secrets${where(row)}`),
   fileLocation: (row: AhSessionRow) => call<{ path: string }>(`/sessions/${sid(row)}/file-location${where(row)}`),
   /** Opens the transcript with the PC's own program for it. */
@@ -37,6 +37,8 @@ export const ah = {
   /** Opens a terminal on `claude --resume <id>`; the command comes back either way. */
   resumeInTerminal: (row: AhSessionRow) => call<{ ok: boolean; command: string; reason?: string }>(`/sessions/${sid(row)}/resume-terminal${where(row)}`, { method: 'POST' }),
   instances: () => call<AhInstance[]>('/instances'),
+  /** The whole fleet's numbering, each with the account it is signed into: the names /instances leaves out. */
+  instanceNumbers: () => call<{ kind: string; handle: string; name: string | null; email: string | null }[]>('/instance-numbers'),
   /** The account an instance is signed into, from what is on disk (no sign-in request). */
   instanceAccount: (dir: string) => call<AhInstance['account']>(`/instances/${encodeURIComponent(dir)}/account?noNetwork=1`),
   focusInstance: (dir: string) => call<{ ok: boolean; message?: string }>(`/instances/${encodeURIComponent(dir)}/focus`, { method: 'POST' }),
@@ -79,7 +81,15 @@ export const ah = {
 /** A Codex move's answer: the copy's new id, and the background commands archiving the original stopped. */
 type CodexLanding = { ok: boolean; error?: string; destinationThreadId?: string; stoppedCommands?: string[] }
 
-type Landing = { ok: boolean; error?: string; sourceStillShown?: string[] }
+type Landing = { ok: boolean; error?: string; sourceStillShown?: string[]; settingsInApp?: { ok: boolean; effort: string; ultracode: boolean; permissionMode: string | null; reason?: string; bypassRefused?: string } }
+
+/** The sentence a move adds when the running app did not take Bypass and its effort, or took Auto in place of Bypass; '' when it took both, or the app was closed. */
+export function settingsMissed(x: { settingsInApp?: Landing['settingsInApp'] }): string {
+  const s = x.settingsInApp
+  if (s?.ok && s.permissionMode === 'auto') return ` That app would not take Bypass${s.bypassRefused ? ` (${s.bypassRefused})` : ''}, so the chat is on Auto.`
+  if (!s || s.ok) return ''
+  return ` Bypass and its effort did not take in that app${s.reason ? ` (${s.reason})` : ''}; they apply when the app restarts.`
+}
 
 /** AgentHydra's migrate: lands the chat in the account's desktop app and retires its old copies; `title` is the required title decision. */
 function land(sessionId: string, instanceRef: string, title: { confirm_title: string } | { title: string }): Promise<Landing> {
@@ -112,6 +122,9 @@ export async function unassignSession(sessionId: string, instanceRef: string | n
   return archiveVerdict(status, body)
 }
 
+/** A duplicate's title, so it is told apart from the chat it copies: "<title> (copy)". */
+export const copyTitle = (title: string | null | undefined) => (title?.trim() ? `${title.trim().slice(0, 200)} (copy)` : 'Copy')
+
 /**
  * Duplicate to account: AgentHydra copies the whole chat under a new id, then lands the copy on the account like a move
  * does. The original is not touched. A copy that could not land is on no account: `copyId` names it.
@@ -119,7 +132,7 @@ export async function unassignSession(sessionId: string, instanceRef: string | n
 export async function duplicateSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string; copyId?: string; title?: string }> {
   const row = await ah.session(sessionId, 'claude')
   const made = await ah.copy(row)
-  const title = row.title?.trim() ? `${row.title.trim().slice(0, 200)} (copy)` : 'Copy'
+  const title = copyTitle(row.title)
   try {
     const x = await land(made.session_id, instanceRef, { title })
     return x.ok ? { ok: true, copyId: made.session_id, title } : { ok: false, error: x.error ?? 'AgentHydra did not say why', copyId: made.session_id }

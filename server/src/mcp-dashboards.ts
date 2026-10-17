@@ -29,7 +29,7 @@ async function callingChat(deskChat: unknown): Promise<DeskChat | null> {
 const NO_FOLDER =
   'no folder to use: pass cwd, the working folder you are in (any folder inside the project); this process is not a Desk chat, so none is known'
 
-async function folderOf(
+export async function folderOf(
   a: Record<string, unknown>,
 ): Promise<{ cwd: string; chat: DeskChat | null }> {
   const chat = await callingChat(a.deskChat)
@@ -38,7 +38,7 @@ async function folderOf(
   return { cwd, chat }
 }
 
-const CWD = {
+export const CWD = {
   type: 'string',
   description:
     'Any folder inside the project (the checkout is found from it). Omit it inside a Desk chat.',
@@ -50,7 +50,7 @@ export const DASHBOARD_TOOLS: HydraTool[] = [
     callerChat: 'deskChat',
     listed: true,
     description:
-      "Reads the project's dashboard, a small website the owner opens in AgentHydra. It returns url (open it with a browser tool to see it), folder (where a local AI may edit files directly), and entries (path, bytes, updatedAt). Pass path to also get that file's content. With nothing written yet, files is 0: start with dashboard_write and an index.html. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. A page can show its project's live to-do list by including <div data-hydra-todo></div> and <script src=\"/_hydra/todo.js\"></script>, or by fetching /_hydra/todo.json. Read-only.",
+      "Reads the project's dashboard, a small website the owner opens in AgentHydra. It returns url (open it with a browser tool to see it), folder (where a local AI may edit files directly), and entries (path, bytes, updatedAt). Pass path to also get that file's content. With nothing written yet, files is 0: start with dashboard_write and an index.html. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. A page can show its project's live to-do list by including <div data-hydra-todo></div> and <script src=\"/_hydra/todo.js\"></script>, or by fetching /_hydra/todo.json. backend is the declared backend, or null. AgentHydra also has a built-in dashboard template: a spec at .agenthydra/dashboard.json in the checkout names its sections (stats, list, errors, breakdown) and the MCP tool or HTTP endpoint that fills each (the contract: desk2/shared in the AgentHydra repo); with a spec, the template is what the owner sees. Read-only.",
     inputSchema: S({
       cwd: CWD,
       path: {
@@ -71,10 +71,22 @@ export const DASHBOARD_TOOLS: HydraTool[] = [
     callerChat: 'deskChat',
     listed: true,
     description:
-      "MUTATES: writes the project's dashboard, a small website the owner opens in AgentHydra, which you control fully. Write anything: HTML and CSS, JavaScript, charts, images, a data.json the page fetches, or a whole built dist folder via from. index.html is the entry. Operations apply in order and all-or-nothing: clear; from (an absolute folder to publish); files [{path, content, encoding utf8 or base64}]; edits [{path, old, new}], where old must occur exactly once (prefer edits when another chat also writes the page); and remove (paths). Paths are relative, with forward slashes, letters, digits, dot, underscore and dash, up to 8 deep. A file may be 5 MB, a site 50 MB and 1000 files. The answer gives url (open it with a browser tool to check your work) and folder. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. The optional by argument names who writes, up to 60 characters; omitted, it is the calling chat's title. A page can show its project's live to-do list by including <div data-hydra-todo></div> and <script src=\"/_hydra/todo.js\"></script>, or by fetching /_hydra/todo.json; the _hydra folder is reserved for those feeds.",
+      "MUTATES: writes the project's dashboard, a small website the owner opens in AgentHydra, which you control fully. Write anything: HTML and CSS, JavaScript, charts, images, a data.json the page fetches, or a whole built dist folder via from. index.html is the entry. Operations apply in order and all-or-nothing: clear; from (an absolute folder to publish); files [{path, content, encoding utf8 or base64}]; edits [{path, old, new}], where old must occur exactly once (prefer edits when another chat also writes the page); and remove (paths). Paths are relative, with forward slashes, letters, digits, dot, underscore and dash, up to 8 deep. A file may be 5 MB, a site 50 MB and 1000 files. The answer gives url (open it with a browser tool to check your work) and folder. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. The optional by argument names who writes, up to 60 characters; omitted, it is the calling chat's title. A page can show its project's live to-do list by including <div data-hydra-todo></div> and <script src=\"/_hydra/todo.js\"></script>, or by fetching /_hydra/todo.json; the _hydra folder is reserved for those feeds. backend {command, cwd, port, health} declares a small program in the project that the page calls at /_hydra/api/<path> (AgentHydra starts it hidden and keeps it running); null removes it. For numbers a data source can answer, use the dashboard template instead (see dashboard_read): a site is for a page the template cannot draw.",
     inputSchema: S({
       cwd: CWD,
       by: { type: 'string', description: 'Who writes, up to 60 characters.' },
+      backend: {
+        type: ['object', 'null'],
+        description:
+          'The project program behind the page: command is argv with the program first (an absolute path, or a path relative to cwd); cwd is an absolute folder inside the project; port is the 127.0.0.1 port it listens on; health is a GET path that answers 200 when it is up. null removes it.',
+        properties: {
+          command: { type: 'array', items: { type: 'string' } },
+          cwd: { type: 'string' },
+          port: { type: 'integer' },
+          health: { type: 'string' },
+        },
+        required: ['command', 'cwd', 'port', 'health'],
+      },
       clear: { type: 'boolean', description: 'true empties the site first.' },
       from: {
         type: 'string',
@@ -124,6 +136,7 @@ export const DASHBOARD_TOOLS: HydraTool[] = [
           files: a.files,
           edits: a.edits,
           remove: a.remove,
+          backend: a.backend,
         }),
       })
     },

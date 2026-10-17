@@ -13,6 +13,7 @@
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +35,15 @@ const CHECK_FILES = readdirSync(CHECKS_DIR)
 // Assembled at runtime, never written as a contiguous literal in this file's source: see the
 // wmi-commandline-query-self-match fixtures below for why.
 const CMD_LINE = 'Command' + 'Line'
+
+// raw-control-bytes-in-source.mjs scans this file as well, so its fixtures build the bytes at runtime
+// and take the escaped spelling as String.raw, which no shell or editor can turn into the byte.
+const BACKSPACE = String.fromCharCode(0x08)
+const SOH = String.fromCharCode(0x01)
+const asksPermission = (boundary: string) =>
+  `export const ASKS = /${boundary}(?:with|need) your (?:permission|approval)${boundary}/i\n`
+const dedupKey = (sep: string) =>
+  `const hex = await sha256Hex(\`\${scope}${sep}\${key}${sep}\${normalized}\`)\n`
 
 // Bespoke broken / fixed text for each check that exports findViolations, written from the real bug
 // each check's own header comment documents, not a synthetic near-miss. A check that exports
@@ -78,6 +88,24 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       app.post('/api/cli-instances/:id/launch', (c) => c.json(launchCliInstance(c.req.param('id'))))
       // app.post('/api/instances/:dir/open', async (c) => openInstance(c.req.param('dir')))
       `,
+    ],
+  },
+  'raw-control-bytes-in-source.mjs': {
+    broken: [
+      // pushback.ts's 'asks permission' regex as it stood from d5e3904b to 2026-10-16: backspace
+      // bytes where the word boundary was meant, so the pattern could only match a backspace.
+      asksPermission(BACKSPACE),
+      // incidents.ts's dedup key: SOH bytes as separators inside a template literal. Harmless at
+      // runtime, invisible in an editor, and the same class of byte.
+      dedupKey(SOH),
+      // ESC is no exception: no tracked file needs it raw.
+      `console.log('${String.fromCharCode(0x1b)}[31mred')\n`,
+    ],
+    fixed: [
+      asksPermission(String.raw`\b`),
+      dedupKey(String.raw`\x01`),
+      // TAB, CRLF line endings and non-ASCII text are all ordinary source.
+      'function f() {\r\n\treturn "café — ok"\r\n}\r\n',
     ],
   },
   'ps1-read-as-ansi.mjs': {
@@ -212,6 +240,24 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       const { app: shared } = await import('../src/http-app')
       test('x', async () => { expect((await shared.request('/api/queue')).status).toBe(200) })
       `,
+      // Rule E, desk2 people-setup.test.ts until 2026-10-15: home redirected at module scope, the folder
+      // removed in afterAll and the variables never put back, so every later headless Chrome failed.
+      `
+      import { afterAll, expect, test } from 'bun:test'
+      const home = mkdtempSync(join(tmpdir(), 'people-'))
+      process.env.HOME = home
+      process.env.USERPROFILE = home
+      afterAll(() => rmSync(home, { recursive: true, force: true }))
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      // Rule E in a before hook, with only one of the two variables put back.
+      `
+      import { afterAll, beforeAll, expect, test } from 'bun:test'
+      const savedHome = process.env.HOME
+      beforeAll(() => { process.env.HOME = '/tmp/x'; process.env.USERPROFILE = '/tmp/x' })
+      afterAll(() => { process.env.HOME = savedHome })
+      test('x', () => { expect(1).toBe(1) })
+      `,
     ],
     fixed: [
       // Rule D's fixed shape (queue-patch-guard.test.ts): requests go through a copy with its own router.
@@ -291,6 +337,40 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
         release()
         expect(1).toBe(1)
       })
+      `,
+      // Rule E's fixed shapes: people-addon-gate.test.ts's put-back by key, a named put-back and delete,
+      // and a redirect inside the test body with try/finally, which is that test's own business.
+      `
+      import { afterAll, beforeAll, expect, test } from 'bun:test'
+      const KEYS = ['HOME', 'USERPROFILE'] as const
+      const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
+      beforeAll(() => { process.env.HOME = '/tmp/x'; process.env.USERPROFILE = '/tmp/x' })
+      afterAll(() => { for (const k of KEYS) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] })
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      `
+      import { afterAll, expect, test } from 'bun:test'
+      const savedHome = process.env.HOME
+      process.env.HOME = '/tmp/x'
+      process.env.TEMP = '/tmp/t'
+      afterAll(() => { process.env.HOME = savedHome; delete process.env.TEMP })
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      `
+      import { expect, test } from 'bun:test'
+      test('x', () => {
+        const saved = process.env.USERPROFILE
+        process.env.USERPROFILE = '/tmp/x'
+        try { expect(1).toBe(1) } finally { process.env.USERPROFILE = saved }
+      })
+      `,
+      // A redirect kept on purpose says so (desktop-cli-pairing.test.ts keeps APPDATA off the real folder).
+      `
+      import { expect, test } from 'bun:test'
+      const appData = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
+      // kept for the run: the files after this one must not reach the real install folder.
+      process.env.APPDATA = appData
+      test('x', () => { expect(1).toBe(1) })
       `,
       // A never-settling promise with no orchestrator run behind it parks no lock at all.
       `
@@ -454,6 +534,64 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
          const ps = readFileSync(CREATE_SHORTCUT, 'utf8')
          expect(ps).toContain("execFileSync('cscript', ['//NoLogo'])")
        })`,
+    ],
+  },
+  'reversed-copy-to-search.mjs': {
+    broken: [
+      // climayte-queue-sync.ts as it stood after c8adea42 fixed the same line in climayte-lib.ts only.
+      `const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account`,
+      // The Desk orchestrator's waitingQuestion: a whole transcript copied per chat on every plan read.
+      `const call = card ? undefined : [...items].reverse().find((i) => i.kind === 'tool_use' && i.status === 'running')`,
+      `const at = rows.slice().reverse().findIndex((r) => r.done)`,
+      `if (list.toReversed().some((x) => x.bad)) return`,
+    ],
+    fixed: [
+      `const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account`,
+      // A reversed copy that is kept or iterated needs the order: not a search.
+      `const verdictsNewestFirst = computed(() => [...verdicts.value].reverse())`,
+      `for (const r of [...(w.reports ?? [])].reverse()) out.push(r)`,
+      // Named in a comment or a string, never called.
+      `// was: [...w.attempts].reverse().find((a) => a.model)
+       const hint = 'use findLast, not [...xs].reverse().find(p)'`,
+      `/* [...xs].reverse().find(p) */ const x = xs.findLast(p)`,
+    ],
+  },
+  'fs-fanout-unbounded.mjs': {
+    broken: [
+      // desk2 engine/queue.ts readBack as e5382243 put it back, two days after 44429d00 took it out.
+      `import { readFileSync, renameSync } from 'node:fs'
+       import { readFile } from 'node:fs/promises'
+       return Promise.all(images.map(async (img, i) => ({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })))`,
+      // The bridge's codexTurns before 49487e5a: a stat per recent chat, all in flight.
+      `import { stat } from 'node:fs/promises'
+       await Promise.all(
+         recent.map(async (c) => {
+           const st = await stat(path)
+         }),
+       )`,
+      `import * as fsp from 'node:fs/promises'
+       const all = await Promise.allSettled(dirs.map((d) => fsp.readdir(d)))`,
+      `const texts = await Promise.all(files.map((f) => Bun.file(f).text()))`,
+    ],
+    fixed: [
+      // One at a time, or one slot each from the shared ceiling.
+      `import { readFile } from 'node:fs/promises'
+       for (const [i, img] of images.entries()) out.push({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })`,
+      `import { stat } from 'node:fs/promises'
+       const stats = await Promise.all(paths.map((p) => fsSlot(() => stat(p))))`,
+      // A fixed list is bounded by the code, not the data.
+      `import { readFile, stat } from 'node:fs/promises'
+       const [a, b] = await Promise.all([readFile(one), stat(two)])`,
+      // Not an fs call: a fetch per item is not the I/O pool.
+      `import { readFile } from 'node:fs/promises'
+       const answers = await Promise.all(urls.map((u) => fetch(u)))`,
+      // Bounded by construction, and said so.
+      `import { readFile } from 'node:fs/promises'
+       // fanout-ok: the two halves of one record
+       const [head, tail] = await Promise.all(halves.map((h) => readFile(h)))`,
+      // Named in a comment, never called.
+      `// was: Promise.all(xs.map((x) => readFile(x)))
+       const x = 1`,
     ],
   },
   'timer-callback-can-kill-the-daemon.mjs': {
@@ -1008,6 +1146,18 @@ test('at least one check was actually discovered and exercised above', () => {
   expect(CHECK_FILES.length).toBeGreaterThan(0)
 })
 
+test('CI runs every check, so every land runs it too', () => {
+  // This file proves each check clean only when the whole suite runs. CI's own step per check is what the owner's land
+  // tool reads to choose the guardrails it runs on every land, so a check missing from ci.yml gates no land: the
+  // credential-writer ratchet sat outside it from 2026-10-10 until a land turned it red on main (2026-10-16), and the
+  // efficiency audit's two checks (c13c33ee) the same day.
+  const ci = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const run = new Set(
+    [...ci.matchAll(/^\s*run:\s*bun\s+scripts\/checks\/([\w.-]+\.mjs)\s*$/gm)].map((m) => m[1]),
+  )
+  expect(CHECK_FILES.filter((f) => !run.has(f))).toEqual([])
+})
+
 // ── CASE-INSENSITIVE SELF-EXCLUSION ────────────────────────────────────────────────────────────
 // The net above runs every audit against REPO_ROOT, which is derived from import.meta.dir — the
 // SAME canonical spelling a check's own `import.meta.url` resolves to. So the two always agreed,
@@ -1095,4 +1245,65 @@ db.close()
 `
     expect(findViolations(readonly)).toHaveLength(0)
   })
+})
+
+// raw-control-bytes-in-source.mjs, fired at a PLANTED git repo: a tracked file carrying pushback.ts's
+// backspace where the regex word boundary was meant must fail the run and name its file and line, the
+// same file written with the escape passes, and an untracked file is never read (the check judges what
+// git tracks, so scratch files and node_modules stay out of it). A root it cannot list fails too.
+describe('raw-control-bytes-in-source.mjs — planted backspace', () => {
+  let root = ''
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+    root = ''
+  })
+  const write = (files: Record<string, string>) => {
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(root, rel, '..'), { recursive: true })
+      writeFileSync(join(root, rel), text)
+    }
+  }
+  const plant = (tracked: Record<string, string>, untracked: Record<string, string> = {}) => {
+    root = mkdtempSync(join(tmpdir(), 'raw-control-bytes-'))
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: root, stdio: 'ignore', windowsHide: true })
+    git('init', '-q')
+    write(tracked)
+    git('add', '--', ...Object.keys(tracked))
+    write(untracked)
+  }
+  const load = async () =>
+    import(pathToFileURL(join(CHECKS_DIR, 'raw-control-bytes-in-source.mjs')).href)
+
+  test('fails on a tracked file holding a raw backspace, naming the file and line', async () => {
+    plant({
+      'src/engine/pushback.ts': `// phrases\n${asksPermission(BACKSPACE)}`,
+      'src/clean.ts': 'export const x = 1\n',
+    })
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(true)
+    expect(
+      result.findings.map((f: { file: string; line: number }) => `${f.file}:${f.line}`),
+    ).toEqual(['src/engine/pushback.ts:2'])
+    expect(result.report).toContain('src/engine/pushback.ts:2')
+    expect(result.report).toContain('0x08 backspace')
+  }, 30_000)
+
+  test('passes once the byte is the escape, and never reads an untracked file', async () => {
+    plant(
+      { 'src/engine/pushback.ts': `// phrases\n${asksPermission(String.raw`\b`)}` },
+      { 'scratch/notes.ts': asksPermission(BACKSPACE) },
+    )
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(false)
+    expect(result.report).toContain('1 tracked source file(s)')
+  }, 30_000)
+
+  test('a root with no tracked source file fails rather than passing on nothing read', async () => {
+    root = mkdtempSync(join(tmpdir(), 'raw-control-bytes-'))
+    write({ 'src/clean.ts': 'export const x = 1\n' })
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(true)
+    expect(result.findings).toHaveLength(1)
+  }, 30_000)
 })

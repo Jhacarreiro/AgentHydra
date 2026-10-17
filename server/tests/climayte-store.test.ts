@@ -14,6 +14,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
@@ -243,6 +244,37 @@ test('a load while done/ is still being read takes the work in flight now and ev
   expect(booted).toBe(5)
 }, 60_000)
 
+test('a done/ that cannot be listed is a read still owed: a later load takes its workers without a restart', async () => {
+  const { home, corch } = install('unlistable')
+  writeFileSync(
+    join(corch, 'workers.json'),
+    JSON.stringify({ workers: [worker('w-hot', 'waiting', home)], perAccount: {} }),
+  )
+  // done/ is a link to itself: listing it fails with a loop error, not ENOENT (no folder, no workers).
+  const done = join(corch, 'done')
+  symlinkSync(done, done, 'junction')
+  const real = join(root, 'unlistable-done')
+  mkdirSync(real)
+  writeFileSync(join(real, 'w-old.json'), JSON.stringify(worker('w-old', 'done', home)))
+  const seen = (await start(
+    home,
+    `const fs = await import('node:fs')
+     const first = c.climayteList().map((w) => w.id)
+     try { fs.unlinkSync(args.done) } catch { fs.rmdirSync(args.done) }
+     fs.symlinkSync(args.real, args.done, 'junction')
+     const soon = c.climayteList().map((w) => w.id)
+     const realNow = Date.now
+     Date.now = () => realNow() + 31_000
+     const later = c.climayteList().map((w) => w.id)
+     return { first, soon, later }`,
+    { done, real },
+  )) as { first: string[]; soon: string[]; later: string[] }
+  expect(seen.first).toEqual(['w-hot'])
+  // Asked again at most every 30 s, and then done/'s workers join the store.
+  expect(seen.soon).toEqual(['w-hot'])
+  expect([...seen.later].sort()).toEqual(['w-hot', 'w-old'])
+}, 60_000)
+
 test('a finished worker held packed reads, takes a write and saves back exactly as its file had it', async () => {
   const { home, corch } = install('packed')
   mkdirSync(join(corch, 'done'), { recursive: true })
@@ -300,14 +332,19 @@ test('a finished worker held packed reads, takes a write and saves back exactly 
     results: done.results,
     reports,
   })
-  // Byte for byte what an unpacked worker writes: every field, in the file's own key order.
+  // Byte for byte what an unpacked worker writes: every field, in the file's own key order, then the
+  // stateAt that changed() stamps on a worker whose file had none (climayte-core.ts).
   const changedAt = JSON.parse(seen.afterChange).updatedAt
   expect(seen.afterChange).toBe(
-    JSON.stringify({ ...done, error: 'judged', updatedAt: changedAt }, null, 2),
+    JSON.stringify(
+      { ...done, error: 'judged', updatedAt: changedAt, stateAt: { key: 'done', at: changedAt } },
+      null,
+      2,
+    ),
   )
   const written = JSON.parse(seen.afterWrite)
   expect(written.results).toEqual(['one', 'two', 'three'])
-  expect(Object.keys(written)).toEqual(Object.keys(done))
+  expect(Object.keys(written)).toEqual([...Object.keys(done), 'stateAt'])
   expect(written.prompt).toBe(prompt)
 }, 60_000)
 

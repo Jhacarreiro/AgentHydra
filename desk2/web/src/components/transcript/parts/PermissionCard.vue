@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Ban, Check, CheckCheck, Clock, ShieldQuestion } from '@lucide/vue'
 import type { PermissionDecision, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
+import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { keyArgument, toolLabel } from '../lib/tools'
 import { toolDiff } from '../lib/diff'
 import { keyBefore } from '../lib/key-clock'
@@ -15,6 +16,7 @@ import OutputBlock from './OutputBlock.vue'
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'permission' }>; docked?: boolean }>()
 
 const ctx = useTranscript()
+const lockedTitle = computed(() => (ctx.readOnly.value ? LOCKED_TITLE : undefined))
 const desk = useDesk()
 const busy = ref(false)
 const err = ref<string | null>(null)
@@ -125,21 +127,21 @@ function startDeny() {
       <DiffView v-else-if="diff" :id="`${item.id}:diff`" :diff="diff" :max-lines="24" />
       <OutputBlock v-else :id="`${item.id}:in`" :text="inputJson" :max-lines="12" />
     </div>
-    <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-2 px-3 py-2.5">
+    <div class="flex flex-wrap items-center gap-2 px-3 py-2.5">
       <template v-if="!denying">
         <!-- defaultToNo: the SDK wants no one-key approve, so Allow is neither the default nor on a key, and nor are 2 and 3 -->
-        <button type="button" class="tx-btn" :class="!item.defaultToNo && 'tx-btn-primary'" :disabled="busy" @click="decide('allow')">
+        <button type="button" class="tx-btn" :class="!item.defaultToNo && 'tx-btn-primary'" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="decide('allow')">
           Allow<span v-if="!item.defaultToNo" class="tx-kbd">1</span>
         </button>
         <template v-if="item.canAlwaysAllow">
-          <button type="button" class="tx-btn" :disabled="busy" @click="decide('session')">
+          <button type="button" class="tx-btn" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="decide('session')">
             Allow for this session<span v-if="!item.defaultToNo" class="tx-kbd">2</span>
           </button>
-          <button type="button" class="tx-btn" :disabled="busy" @click="decide('always')">
+          <button type="button" class="tx-btn" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="decide('always')">
             Always allow<span v-if="!item.defaultToNo" class="tx-kbd">3</span>
           </button>
         </template>
-        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="startDeny">
+        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="startDeny">
           Deny<span class="tx-kbd">Esc</span>
         </button>
       </template>
@@ -152,14 +154,13 @@ function startDeny() {
           @keydown.enter="decide('deny')"
           @keydown.esc="denying = false"
         />
-        <button type="button" class="tx-btn tx-btn-danger" :disabled="busy" @click="decide('deny')">Deny</button>
-        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="denying = false">Cancel</button>
+        <button type="button" class="tx-btn tx-btn-danger" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="decide('deny')">Deny</button>
+        <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="denying = false">Cancel</button>
       </template>
       <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
     <p v-if="!ctx.readOnly.value && !denying && item.canAlwaysAllow && item.alwaysRules?.length" class="-mt-1 px-3 pb-2.5 text-ui-sm text-text-muted">
       Always allow saves <span class="font-mono">{{ item.alwaysRules.join('; ') }}</span>
     </p>
-    <div v-if="ctx.readOnly.value" class="px-3 py-2 text-ui-sm text-text-muted">Waiting for an answer</div>
   </div>
 </template>

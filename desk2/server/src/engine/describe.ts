@@ -9,7 +9,7 @@ export function cut(text: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…'
 }
 
-function str(v: unknown): string {
+export function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
 }
 

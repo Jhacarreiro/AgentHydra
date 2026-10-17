@@ -1,7 +1,7 @@
 // plugins/59-repoyeti-git.ts against a fake RepoYeti on a random port: the state read, commit, undo with RepoYeti's own
 // preview as the guard, Create PR (branch, commit, push, compare page) and the refusals.
 
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -118,6 +118,25 @@ test('the state names the branches, the default branch, the GitHub remote and wh
     undo: 'commit: add b',
     redo: null
   })
+})
+
+test('five state reads of one folder start git at most once per fact (root, default branch, remote)', async () => {
+  const fake = fakeRepoYeti()
+  const s = await desk(running(fake))
+  const url = `http://127.0.0.1:${s.port}${REPOYETI_GIT}/state?cwd=${encodeURIComponent(repo)}`
+  const starts: string[] = []
+  const real = Bun.spawn
+  const spy = spyOn(Bun, 'spawn').mockImplementation(((cmd: string[], opts?: unknown) => {
+    if (cmd[0] === 'git') starts.push(cmd.slice(3).join(' '))
+    return real(cmd, opts as Parameters<typeof Bun.spawn>[1])
+  }) as typeof Bun.spawn)
+  try {
+    for (let i = 0; i < 5; i++) expect((await fetch(url)).status).toBe(200)
+  } finally {
+    spy.mockRestore()
+  }
+  expect(starts.filter((x) => x.startsWith('rev-parse')).length).toBeLessThanOrEqual(1)
+  expect(starts.length).toBeLessThanOrEqual(3)
 })
 
 test('a refused undo shows RepoYeti reason and the commit needs a message', async () => {

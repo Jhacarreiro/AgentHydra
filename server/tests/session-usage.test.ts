@@ -2,6 +2,7 @@
 // kit (server/src/session-usage.ts). Fixtures are events in an in-memory KitStore.
 
 import { afterAll, describe, expect, test } from 'bun:test'
+import type { CliMayteWorker } from '../src/climayte-lib'
 import { KitStore, type UsageEventInput } from '../src/kit/store'
 import { runCost, sessionUsage } from '../src/session-usage'
 import type { TranscriptFile } from '../src/transcript'
@@ -128,5 +129,89 @@ describe('runCost', () => {
 
   test('a run with no start has no window', () => {
     expect(runCost(item(null, null), opts).status_reason).toBe('no-window')
+  })
+})
+
+describe('delegated work', () => {
+  // A thread that called HSwarm and CliMayte, beside another thread's work that must not count. HSwarm's ledger
+  // names a caller by the first 8 characters of its session id (a newer line by the whole id); a CliMayte worker
+  // names its chat by its ping origin, or only by its trace when HSwarm routed the task to CliMayte.
+  const THREAD = 'a1b2c3d4-0000-4000-8000-000000000001'
+  const OTHER = 'f0f0f0f0-0000-4000-8000-000000000002'
+  const kit = new KitStore(':memory:')
+  afterAll(() => kit.close())
+  const worker = (id: string, w: Partial<CliMayteWorker>) =>
+    ({ id, group: 'g-example', ...w }) as CliMayteWorker
+  const workers = [
+    worker('w-direct', {
+      origin: {
+        kind: 'chat',
+        sessionId: THREAD,
+        home: 'C:/Users/me/.claude',
+        transcript: null,
+        how: 'test',
+      },
+      sessionId: 'sess-direct',
+      sessions: ['sess-direct-0'],
+    }),
+    worker('w-routed', {
+      trace: { sessionId: THREAD, label: 'HSwarm job example' },
+      sessionId: 'sess-routed',
+    }),
+    worker('w-nested', {
+      origin: { kind: 'worker', workerId: 'w-direct' },
+      sessionId: 'sess-nested',
+    }),
+    worker('w-other', {
+      origin: {
+        kind: 'chat',
+        sessionId: OTHER,
+        home: 'C:/Users/me/.claude',
+        transcript: null,
+        how: 'test',
+      },
+      sessionId: 'sess-other',
+    }),
+    worker('w-traced-other', { trace: { sessionId: OTHER }, sessionId: 'sess-traced-other' }),
+  ]
+  const hswarm = (session: string, provider: string, e: Partial<UsageEventInput>) =>
+    call(session, { source: 'hswarm', provider, model: 'example-model', ...e })
+  kit.upsertEvents([
+    call(THREAD, { source: 'desktop', input: 100, output: 10, list_usd: 1 }),
+    call('sess-direct', { source: 'climayte', input: 1000, list_usd: 2 }),
+    call('sess-direct-0', { source: 'climayte', output: 500, list_usd: 1 }),
+    call('sess-routed', { source: 'climayte', cache_read: 2000, list_usd: 0.5 }),
+    call('sess-nested', { source: 'climayte', input: 300, list_usd: 0.25 }),
+    call('sess-other', { source: 'climayte', input: 99_999, list_usd: 9 }),
+    call('sess-traced-other', { source: 'climayte', input: 77_777, list_usd: 7 }),
+    hswarm('a1b2c3d4', 'baseten', { input: 400, output: 40, list_usd: 0.1 }),
+    hswarm(THREAD, 'openai', { input: 60, list_usd: 0.05 }),
+    // HSwarm's line for a task it routed to CliMayte: that work is w-routed's session, counted under CliMayte
+    hswarm('a1b2c3d4', 'climayte', { input: 5000, list_usd: 0 }),
+    // a worker's own HSwarm call, keyed by its session's first 8 characters
+    hswarm('sess-dir', 'deepseek', { input: 7, list_usd: 0.01 }),
+    hswarm('f0f0f0f0', 'baseten', { input: 12_345, list_usd: 3 }),
+  ])
+
+  test('the total total is the thread, its HSwarm calls and every CliMayte worker it started, each once', () => {
+    const u = sessionUsage(tf(THREAD), { store: kit, workers })
+    expect(u.tokens.total).toBe(110)
+    expect(u.delegated.climayte.workers).toBe(3)
+    expect(u.delegated.climayte.tokens).toBe(1000 + 500 + 2000 + 300)
+    expect(u.delegated.climayte.costUsd).toBeCloseTo(3.75, 10)
+    expect(u.delegated.hswarm.calls).toBe(3)
+    expect(u.delegated.hswarm.tokens).toBe(440 + 60 + 7)
+    expect(u.delegated.hswarm.costUsd).toBeCloseTo(0.16, 10)
+    expect(u.grand.tokens).toBe(110 + 3800 + 507)
+    expect(u.grand.costUsd).toBeCloseTo(1 + 3.75 + 0.16, 10)
+  })
+
+  test('a thread that handed nothing off totals its own tokens', () => {
+    const u = sessionUsage(tf('s-alone-0000'), { store: kit, workers })
+    expect(u.delegated).toEqual({
+      hswarm: { tokens: 0, costUsd: null, calls: 0 },
+      climayte: { tokens: 0, costUsd: null, workers: 0 },
+    })
+    expect(u.grand).toEqual({ tokens: 0, costUsd: null })
   })
 })

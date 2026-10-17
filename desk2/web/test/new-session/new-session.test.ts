@@ -23,23 +23,23 @@ const MODELS = [
 
 describe('account labels', () => {
   it('names an account by number and plan once, never by email', () => {
-    expect(accountTitle({ id: '128', label: '#128 jacob@example.com (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
-    expect(accountTitle({ id: '128', label: '#128 <jacob@example.com> (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 alex@example.com (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 <alex@example.com> (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
     expect(accountTitle({ id: '68', label: '#68 eek (Max 20x)', plan: 'Max 20x' })).toBe('#68 eek · Max 20x')
-    expect(accountTitle({ id: 'default', label: 'jacob@example.com', plan: null })).toBe('Default login')
+    expect(accountTitle({ id: 'default', label: 'alex@example.com', plan: null })).toBe('Default login')
   })
 
   it('reads the plan from the label of a bare AccountRef (a chat account)', () => {
-    expect(accountTitle({ id: '128', label: '#128 jacob@example.com (Pro) (Pro)' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 alex@example.com (Pro) (Pro)' })).toBe('#128 · Pro')
     expect(accountTitle({ id: '7', label: '#7' })).toBe('#7')
   })
 
   it('drops a doubled trailing plan from the short label', () => {
-    expect(accountLabel('#128 jacob@example.com (Pro) (Pro)', 'Pro', '128')).toBe('#128')
+    expect(accountLabel('#128 alex@example.com (Pro) (Pro)', 'Pro', '128')).toBe('#128')
   })
 
   it('keeps emails out of the chat row tooltip', () => {
-    const chat = { title: 'T', status: 'idle', activity: null, climayteActive: 0, account: { id: '128', label: '#128 jacob@example.com (Pro) (Pro)', configDir: null } } as unknown as ChatSummary
+    const chat = { title: 'T', status: 'idle', activity: null, climayteActive: 0, account: { id: '128', label: '#128 alex@example.com (Pro) (Pro)', configDir: null } } as unknown as ChatSummary
     const tip = rowTooltip(chat)
     expect(tip).not.toMatch(EMAIL)
     expect(tip.endsWith('#128 · Pro')).toBe(true)
@@ -62,11 +62,12 @@ describe('account labels', () => {
 })
 
 describe('model and effort triggers', () => {
-  it('always names a model', () => {
+  // A chat that names no model runs Opus 5.5 (owner, 2026-10-15: "it should default to Opus 5.5, not show Sonnet 5.5").
+  it('always names the model that runs', () => {
     expect(modelTriggerLabel('claude-opus-5-5', MODELS)).toBe('Opus 5.5')
-    expect(modelTriggerLabel(null, MODELS)).toBe('Sonnet 5.5')
-    expect(modelTriggerLabel(null, [{ value: 'default', label: 'Default (Opus 5.5)' }, ...MODELS])).toBe('Opus 5.5')
-    expect(modelTriggerLabel(null, [])).toBe('Sonnet')
+    expect(modelTriggerLabel(null, MODELS)).toBe('Opus 5.5')
+    expect(modelTriggerLabel(null, [{ value: 'default', label: 'Default (Sonnet 5.5)' }, ...MODELS])).toBe('Opus 5.5')
+    expect(modelTriggerLabel(null, [])).toBe('Opus 5.5')
     expect(modelTriggerLabel(null, MODELS)).not.toMatch(/default/i)
   })
 
@@ -143,8 +144,8 @@ describe('stats card', () => {
       agentMinutes: 86_936,
       heat: [],
       sources: [
-        { key: 'desktop', label: 'Claude desktop', sessions: 311, messages: 224_761, tokens: 61_746_567_890, costUsd: 21_376.3 },
-        { key: 'opencode', label: 'OpenCode', sessions: 4, messages: 4, tokens: 999_950, costUsd: null }
+        { key: 'desktop', label: 'Claude desktop', sessions: 311, messages: 224_761, tokens: 61_746_567_890, costUsd: 21_376.3, since: '2026-06-30' },
+        { key: 'opencode', label: 'OpenCode', sessions: 4, messages: 4, tokens: 999_950, costUsd: null, since: '2026-02-06' }
       ],
       models: [
         { key: 'claude-opus-5-5', sessions: 40 },
@@ -168,7 +169,12 @@ describe('stats card', () => {
       ['HSwarm tasks', '–'],
       ['Cost at API rates', '$257,672']
     ])
-    expect(tiles[2]!.title).toBe('Input 2,000,000,000\nCache read 480,000,000,000\nCache write 5,000,000,000\nOutput 600,000,000')
+    // All time says where each source's record begins, oldest first: older use was never kept.
+    expect(tiles[2]!.title).toBe(
+      'Input 2,000,000,000\nCache read 480,000,000,000\nCache write 5,000,000,000\nOutput 600,000,000\nRecorded since: OpenCode Feb 6, 2026 · Claude desktop Jun 30, 2026'
+    )
+    expect(homeTiles({ ...home, range: '30d' })[2]!.title).not.toContain('Recorded since')
+    expect(homeSources(home)[0]!.title).toBe('Claude desktop: 311 sessions, 224,761 messages, 61,746,567,890 tokens, recorded since Jun 30, 2026')
     expect(tiles[3]!.title).toBe('1,449 hours of agent time')
     expect(tiles[6]!.title).toBe('37 runs stopped at a usage limit\n$3,788 at API rates')
     expect(tiles[7]!.title).toBe('HSwarm did not answer (502)')

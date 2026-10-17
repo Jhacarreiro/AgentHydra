@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER } from '@shared/protocol'
+import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopSettingRequest, type DesktopSettingResult, type DesktopStopResult, type Effort, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER, OLDER_END_HEADER } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -52,10 +52,55 @@ async function desktopMessage(c: Context, b: Bridge): Promise<Response> {
     const id = c.req.param('id') ?? ''
     const r = await b.client.sendToDesktopChat(id, text.trim(), holdSecs)
     if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
-    return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
+    return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, started: r.confirmed === true, held: r.held === true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
   } catch (err) {
     return fail(c, b, err)
   }
+}
+
+// Claude Desktop's own Stop for a working chat, through AgentHydra's native stop. Only a verified stop answers 200.
+async function desktopStop(c: Context, b: Bridge): Promise<Response> {
+  const id = c.req.param('id') ?? ''
+  try {
+    const r = await b.client.stopDesktopChat(id)
+    if (!r.ok || r.verified !== true) return c.json({ error: `AgentHydra did not stop ${id}` }, 422)
+    return c.json({ ok: true } satisfies DesktopStopResult)
+  } catch (err) {
+    return daemonFail(c, b, err)
+  }
+}
+
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+// A working Claude Desktop chat's model and effort, set in the app as its own pickers set them (the daemon's native
+// setting). Only a change the app shows answers 200; otherwise the error says what it kept.
+async function desktopSetting(c: Context, b: Bridge): Promise<Response> {
+  let req: Partial<DesktopSettingRequest> | null
+  try {
+    req = (await c.req.json()) as Partial<DesktopSettingRequest> | null
+  } catch {
+    return c.json({ error: 'the body must be JSON: { "model"?: "...", "effort"?: "..." }' }, 400)
+  }
+  const model = typeof req?.model === 'string' && req.model.trim() ? req.model.trim() : undefined
+  const effort = EFFORTS.find((e) => e === req?.effort)
+  if (!model && !effort) return c.json({ error: 'model or effort is required' }, 400)
+  const id = c.req.param('id') ?? ''
+  try {
+    const r = await b.client.setDesktopChatSetting(id, { ...(model ? { model } : {}), ...(effort ? { effort } : {}) })
+    if (!r.ok || r.verified !== true) return c.json({ error: `Claude Desktop kept ${r.model ?? 'its model'} at ${r.effort ?? 'its effort'}` }, 422)
+    return c.json({ ok: true } satisfies DesktopSettingResult)
+  } catch (err) {
+    return daemonFail(c, b, err)
+  }
+}
+
+/** The daemon's plain reason, not the wrapped message fail() keeps for the other routes. */
+function daemonFail(c: Context, b: Bridge, err: unknown): Response {
+  if (err instanceof BridgeError && err.kind === 'http' && err.reason) {
+    const status = err.status && err.status >= 400 && err.status < 500 ? err.status : 502
+    return c.json({ error: err.reason }, status as ContentfulStatusCode)
+  }
+  return fail(c, b, err)
 }
 
 // "Copy up to here into a new chat" on a Claude Code session's reply: AgentHydra writes the copy beside it.
@@ -172,12 +217,34 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const before = Number(c.req.query('before'))
       if (!Number.isSafeInteger(before) || before < 0) return c.json({ error: 'before must be the byte offset the items header gave' }, 400)
       const from = Date.now()
+      const limitQ = c.req.query('limit')
+      if (limitQ !== undefined) {
+        const limit = Number(limitQ)
+        const endQ = c.req.query('end')
+        const end = endQ === undefined ? undefined : Number(endQ)
+        if (!Number.isSafeInteger(limit) || limit < 1) return c.json({ error: 'limit must be a positive whole number' }, 400)
+        if (end !== undefined && (!Number.isSafeInteger(end) || end < 0)) return c.json({ error: 'end must be the count the last page header gave' }, 400)
+        const page = await b.externalOlderPage(c.req.param('id'), before, c.req.query('cwd') || null, limit, end)
+        timings.span({ stage: 'external_older', ms: Date.now() - from, chatId: c.req.param('id'), n: page.items.length })
+        c.header(OLDER_END_HEADER, String(page.above))
+        return c.json(page.items)
+      }
       const items = await b.externalOlder(c.req.param('id'), before, c.req.query('cwd') || null)
       timings.span({ stage: 'external_older', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length })
       return c.json(items)
     }),
   )
+  app.get('/api/external/sessions/:id/index', (c) => guarded(c, b, async () => c.json(await b.externalIndex(c.req.param('id'), c.req.query('cwd') || null))))
+  app.get('/api/external/sessions/:id/search', (c) => guarded(c, b, async () => c.json(await b.externalSearch(c.req.param('id'), c.req.query('q') ?? '', c.req.query('cwd') || null))))
+  app.get('/api/external/sessions/:id/items/:itemId', (c) =>
+    guarded(c, b, async () => {
+      const item = await b.externalItem(c.req.param('id'), c.req.param('itemId'), c.req.query('cwd') || null)
+      return item ? c.json(item) : c.json({ error: 'no such item' }, 404)
+    }),
+  )
   app.post('/api/external/sessions/:id/message', (c) => desktopMessage(c, b))
+  app.post('/api/external/sessions/:id/stop', (c) => desktopStop(c, b))
+  app.post('/api/external/sessions/:id/setting', (c) => desktopSetting(c, b))
   app.post('/api/external/sessions/:id/branch', (c) => branchSession(c, b))
   app.get('/api/search', (c) => search(c, b))
   app.get('/api/climayte/workers', (c) => {

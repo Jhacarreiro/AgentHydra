@@ -1,6 +1,6 @@
 """Offline: the cached verdict the agent_routing_gate hook reads - can this machine's swarm take work at all?
 
-2026-09-21, Jacob's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s, and the routing gate kept
+2026-09-21, the owner's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s, and the routing gate kept
 sending every session there, because nothing it could read said the swarm was dead. The verdict is that thing:
 ~/.hswarm/verdict.json, written by `doctor`, the server's start, and a job that ends in NoUsableKey. It judges the
 AUTO routes (what a plain hswarm_run uses), not the DeepSeek key alone: a machine with no DeepSeek key but a free

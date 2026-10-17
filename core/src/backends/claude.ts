@@ -19,6 +19,14 @@ const LIMIT_HOLD_MS = 5 * 60 * 60 * 1000
 /** Each chat's turns in flight, so release() can abort them. */
 const running = new Map<string, Set<AbortController>>()
 
+type Normalizer = ReturnType<typeof createNormalizer>
+
+/** What one turn learns from its messages as they arrive. */
+interface TurnState {
+  threadId: string | null
+  resetAt: number | null
+}
+
 export function claudeBackend(): Backend {
   return {
     service: 'claude',
@@ -64,6 +72,64 @@ function userMessage(task: Task): SDKUserMessage {
   }
 }
 
+/** The SDK options for one turn: the account's config home, the task's model, effort and thread, and the binary. */
+function queryOptions(task: Task, account: Account, abort: AbortController): Options {
+  const binary = claudeCodeBinaryFor(account.home).path()
+  return {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: account.home },
+    cwd: task.cwd,
+    persistSession: true,
+    abortController: abort,
+    permissionMode: task.permissionMode as PermissionMode,
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.effort ? { effort: task.effort as Options['effort'] } : {}),
+    ...(task.thread ? { resume: task.thread.threadId } : {}),
+    ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
+  }
+}
+
+/** Reports a thread id the first time the SDK names one that differs from the turn's. */
+function observeThread(msg: SDKMessage, turn: TurnState, account: Account, sink: TurnSink): void {
+  const sid = (msg as { session_id?: string }).session_id
+  if (!sid || sid === turn.threadId) return
+  turn.threadId = sid
+  sink.thread({ accountId: account.id, label: account.label, threadId: sid })
+}
+
+/** Forwards the message's items to the sink, with the activity line a thinking block or a running tool shows. */
+function forwardItems(normalizer: Normalizer, msg: SDKMessage, sink: TurnSink): void {
+  for (const e of normalizer.handle(msg)) {
+    if (e.type !== 'upsert' || e.item.kind === 'user' || e.item.kind === 'result') continue
+    sink.item(e.item)
+    if (e.item.kind === 'thinking') sink.activity('Thinking')
+    else if (e.item.kind === 'tool_use' && e.item.status === 'running')
+      sink.activity(`Running ${e.item.name}`)
+  }
+}
+
+/** Keeps the reset time of a rate limit the SDK has rejected. */
+function noteRateLimit(msg: SDKMessage, turn: TurnState): void {
+  if (msg.type !== 'rate_limit_event') return
+  const info = (msg as { rate_limit_info?: { status?: string; resetsAt?: number } }).rate_limit_info
+  if (info?.status === 'rejected') turn.resetAt = resetsAtMs(info.resetsAt)
+}
+
+/** The end of a turn whose SDK result arrived: a success, an interrupt, or the error the SDK reported. */
+function resultEnd(
+  msg: SDKMessage,
+  stopped: () => boolean,
+  resetAt: number | null,
+): Omit<TurnEnd, 'durationMs'> {
+  const r = msg as { subtype: string; is_error?: boolean; errors?: string[]; result?: string }
+  if (r.subtype === 'success' && !r.is_error) return { ok: true }
+  if (stopped()) return { ok: false, error: 'Interrupted' }
+  const error = (r.errors?.length ? r.errors.join('\n') : r.result) || r.subtype
+  // A usage limit holds the account until its reset, so the message can go on another one.
+  if (isUsageLimitText(error))
+    return { ok: false, error, limitedUntil: resetAt ?? Date.now() + LIMIT_HOLD_MS }
+  return { ok: false, error }
+}
+
 async function run(
   task: Task,
   account: Account,
@@ -81,51 +147,17 @@ async function run(
     title: () => task.title,
     accountLabel: () => account.label,
   })
-  const binary = claudeCodeBinaryFor(account.home).path()
-  const options: Options = {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: account.home },
-    cwd: task.cwd,
-    persistSession: true,
-    abortController: abort,
-    permissionMode: task.permissionMode as PermissionMode,
-    ...(task.model ? { model: task.model } : {}),
-    ...(task.thread ? { resume: task.thread.threadId } : {}),
-    ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
-  }
+  const options = queryOptions(task, account, abort)
   const prompt = (async function* () {
     yield userMessage(task)
   })()
-  let threadId = task.thread?.threadId ?? null
-  let resetAt: number | null = null
+  const turn: TurnState = { threadId: task.thread?.threadId ?? null, resetAt: null }
   try {
     for await (const msg of sdkQuery({ prompt, options }) as AsyncIterable<SDKMessage>) {
-      const sid = (msg as { session_id?: string }).session_id
-      if (sid && sid !== threadId) {
-        threadId = sid
-        sink.thread({ accountId: account.id, label: account.label, threadId: sid })
-      }
-      for (const e of normalizer.handle(msg)) {
-        if (e.type !== 'upsert' || e.item.kind === 'user' || e.item.kind === 'result') continue
-        sink.item(e.item)
-        if (e.item.kind === 'thinking') sink.activity('Thinking')
-        else if (e.item.kind === 'tool_use' && e.item.status === 'running')
-          sink.activity(`Running ${e.item.name}`)
-      }
-      if (msg.type === 'rate_limit_event') {
-        const info = (msg as { rate_limit_info?: { status?: string; resetsAt?: number } })
-          .rate_limit_info
-        if (info?.status === 'rejected') resetAt = resetsAtMs(info.resetsAt)
-      }
-      if (msg.type === 'result') {
-        const r = msg as { subtype: string; is_error?: boolean; errors?: string[]; result?: string }
-        if (r.subtype === 'success' && !r.is_error) return finish({ ok: true })
-        if (stopped()) return finish({ ok: false, error: 'Interrupted' })
-        const error = (r.errors?.length ? r.errors.join('\n') : r.result) || r.subtype
-        // A usage limit holds the account until its reset, so the message can go on another one.
-        if (isUsageLimitText(error))
-          return finish({ ok: false, error, limitedUntil: resetAt ?? Date.now() + LIMIT_HOLD_MS })
-        return finish({ ok: false, error })
-      }
+      observeThread(msg, turn, account, sink)
+      forwardItems(normalizer, msg, sink)
+      noteRateLimit(msg, turn)
+      if (msg.type === 'result') return finish(resultEnd(msg, stopped, turn.resetAt))
     }
     if (stopped()) return finish({ ok: false, error: 'Interrupted' })
     return finish({ ok: false, error: 'The turn ended without a result' })

@@ -16,10 +16,11 @@ const factory: ConnectorFactory = ({ home }) => {
     info: {
       id: 'devwebui',
       name: 'Dev servers',
-      blurb: "Built into AgentHydra: runs each folder's dev servers once for every chat, and gives chats tools to use a running one instead of starting another.",
+      blurb: "Runs each folder's dev servers once for every chat, and gives chats tools to use a running one instead of starting another.",
       homepage: 'https://github.com/LunarWerxs/AgentHydra',
       installable: false,
-      pane: true
+      pane: true,
+      builtIn: true
     },
     async detect() {
       // Usable always: a service that is not running starts on demand. `running` carries no address (it is no page).

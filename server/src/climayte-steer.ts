@@ -265,7 +265,7 @@ export function verdictRecord(
   const previous = w.verdicts?.at(-1)
   const since = previous?.at ?? 0
   const ran = w.attempts.filter((a) => a.startedAt >= since)
-  const reported = [...ran].reverse().find((a) => a.model)?.model ?? null
+  const reported = ran.findLast((a) => a.model)?.model ?? null
   // No attempt since the previous verdict: this one judges the same work and replaces it in the
   // scorecard (scoreRows), so it keeps what that work cost.
   const span = w.attempts.at(-1)?.startedAt

@@ -7,7 +7,7 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'managers' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'people' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'packs' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 // Ids a saved or linked section used before a rename. CliMayte is part of HSwarm (owner, 2026-10-10).
 export const LEGACY_SECTION: Record<string, SettingsSection> = { climayte: 'hswarm' }
@@ -20,11 +20,12 @@ export function sectionFor(id: string): SettingsSection | null {
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
-  { id: 'managers', label: 'Managers', caption: 'Settings' },
+  { id: 'people', label: 'Your people', caption: 'Settings' },
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
   { id: 'hswarm', label: 'HSwarm', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
   { id: 'connectors', label: 'Connectors', caption: 'Settings' },
+  { id: 'packs', label: 'Command packs', caption: 'Settings' },
   { id: 'devservers', label: 'Dev servers', caption: 'Settings' },
   { id: 'diagnostics', label: 'Diagnostics', caption: 'This computer' },
   { id: 'updates', label: 'Updates', caption: 'This computer' },
@@ -34,6 +35,23 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: s
   { id: 'free', label: 'Free', caption: 'Instances' }
 ]
 
+/** A nav row that opens another place instead of a page. Managers opens AgentHydra's Tools tab, where the Babysitter,
+ *  the Orchestrator, the Instance manager and the routines are switched on and off (owner, 2026-10-17: "the managers
+ *  setting just literally takes you to the tools tab now ... put one of those tiny arrows on it that indicates it's
+ *  taking you somewhere else, and then just delete the managers tab in the settings"). */
+export interface SettingsNavLink {
+  id: 'managers'
+  label: string
+  caption: string
+  opens: 'tools'
+}
+export type SettingsNavItem = (typeof SETTINGS_SECTIONS)[number] | SettingsNavLink
+
+const MANAGERS_LINK: SettingsNavLink = { id: 'managers', label: 'Managers', caption: 'Settings', opens: 'tools' }
+/** The nav's rows in order: the pages, with the Managers link where its page was, under General. */
+export const SETTINGS_NAV: SettingsNavItem[] = SETTINGS_SECTIONS.flatMap((s) => (s.id === 'general' ? [s, MANAGERS_LINK] : [s]))
+export const isNavLink = (s: SettingsNavItem): s is SettingsNavLink => 'opens' in s
+
 export type SettingsRowId =
   | 'coreEngine'
   | 'model'
@@ -42,10 +60,6 @@ export type SettingsRowId =
   | 'notifications'
   | 'idle'
   | 'collapseMode'
-  | 'babysitter'
-  | 'orchestrator'
-  | 'orchestratorModel'
-  | 'routines'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -131,6 +145,16 @@ export const SETTINGS_ROWS: SettingsRow[] = [
   { id: 'model', section: 'general', group: 'New chats', label: 'Default model', description: 'Used when a new chat starts.' },
   { id: 'effort', section: 'general', group: 'New chats', label: 'Effort', description: 'How hard the model thinks. Default leaves it to the model.' },
   { id: 'permission', section: 'general', group: 'New chats', label: 'Permission mode', description: 'What a new chat may do without asking.' },
+  // The new core (core/README.md) behind the window: owner, 2026-10-14, "switch it over behind the toggle with the old
+  // engine kept for rollback". On General since the Managers page went to AgentHydra's Tools tab (owner, 2026-10-17).
+  {
+    id: 'coreEngine',
+    section: 'general',
+    group: 'New chats',
+    label: 'New core',
+    description:
+      'New chats run on the new core, which gives each message to an account with room. Chats you already have stay where they are. Turn it off and new chats start on the old engine again.'
+  },
   {
     id: 'notifications',
     section: 'general',
@@ -166,49 +190,6 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Privacy mode',
     description:
       'For screenshots and screen-shares: masks account addresses, handles and profile names on the AgentHydra pages. Copy still copies the real address.'
-  },
-  // Two watchers side by side (owner, 2026-10-09: "two toggles ... integrated into the same area ... easy to turn on").
-  {
-    id: 'babysitter',
-    section: 'managers',
-    group: 'Watching chats',
-    label: 'Babysitter',
-    description:
-      'When a usage limit stops a chat (here or in Claude Desktop), continue it once the limit resets. It checks every 5 minutes; no model is asked.'
-  },
-  {
-    id: 'orchestrator',
-    section: 'managers',
-    group: 'Watching chats',
-    label: 'Orchestrator',
-    description:
-      'A foreman for running chats: every 10 minutes a model peeks in and judges whether it is moving; it nudges one that is going nowhere. It also continues a chat an error stopped. What it judged and did: Diagnostics > Orchestrator.'
-  },
-  {
-    id: 'orchestratorModel',
-    section: 'managers',
-    group: 'Watching chats',
-    label: 'Orchestrator model',
-    description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
-  },
-  // The new core (core/README.md) behind the window: owner, 2026-10-14, "switch it over behind the toggle with the old
-  // engine kept for rollback".
-  {
-    id: 'coreEngine',
-    section: 'managers',
-    group: 'Chat engine',
-    label: 'New core',
-    description:
-      'New chats run on the new core, which gives each message to an account with room. Chats you already have stay where they are. Turn it off and new chats start on the old engine again.'
-  },
-  // The routine manager (shared/routines.ts): the routines run on this PC on their schedule, through AgentHydra's own CLI and accounts.
-  {
-    id: 'routines',
-    section: 'managers',
-    group: 'Routines',
-    label: 'Routines',
-    description:
-      'A routine is a command, an AI prompt that runs as a chat you can open, or a Windows scheduled task. Each one says who asked for it. An AI can only propose a routine, and it runs once you approve it here. No keys leave this PC.'
   },
   {
     id: 'ahAlerts',

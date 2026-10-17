@@ -5,7 +5,10 @@
 // row whose long title still fades; a click on an avatar opens the manager's card (name, title, one-line description, Change photo)
 // just below it and leaves the row unselected; Change photo with a PNG replaces the file and every row of Ada shows the new version; a
 // file the server refuses shows its sentence in the card. Prints PASS/FAIL per check, exits 1 on any FAIL, and saves a screenshot of
-// the open card over the rows to %TEMP%\manager-avatar\card.png. Prints aria-labels only, never a row's text.
+// the open card over the rows to %TEMP%\manager-avatar\card.png. A chat's Hydra Core lead who is no manager (Cy, from a scratch
+// AGENTHYDRA_CORE_DIR whose catalog's persona has a photo in a portraits folder beside its file) shows 'Lead: …' with that photo,
+// served by GET /api/personas/cy-layout/avatar, and its card offers no Change photo; its row is saved to
+// %TEMP%\manager-avatar\lead-face.jpg (and to E2E_LEAD_SHOT when set). Prints aria-labels only, never a row's text.
 
 import { deflateSync } from 'node:zlib'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -66,9 +69,16 @@ writeFileSync(NEW_PHOTO, face([64, 120, 132], [236, 220, 200]))
 // Named .png and picked as one, but not a PNG inside: the server's magic-number check refuses it.
 const NOT_PNG = join(files, 'not-really.png')
 writeFileSync(NOT_PNG, 'this is text, not a picture')
+// Hydra Core's scratch folder: one catalog persona, Cy, whose portrait sits in the portraits folder beside her persona file.
+const core = join(SCRATCH, 'core')
+for (const dir of [join(core, 'catalog'), join(core, 'personas', 'seats'), join(core, 'personas', 'portraits')]) mkdirSync(dir, { recursive: true })
+writeFileSync(join(core, 'personas', 'seats', 'cy-layout.md'), 'Cy: an invented layout designer.\n')
+writeFileSync(join(core, 'personas', 'portraits', 'cy-layout.png'), face([92, 74, 140], [238, 206, 178]))
+writeFileSync(join(core, 'catalog', 'hand-e2e.json'), JSON.stringify([{ id: 'person:cy-layout', kind: 'person', name: 'Cy', title: 'Layout designer', tier: 'employee', family: 'expert', modes: ['consult', 'become'],
+  when: 'Designs dashboard layouts and styling', tags: ['layout'], cost: 'low', how: 'ask her', load: { type: 'file', path: join(core, 'personas', 'seats', 'cy-layout.md') } }]))
 
 const server = Bun.spawn([process.execPath, 'server/src/index.ts'], {
-  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: home, AGENTHYDRA_MANAGERS_DIR: managers },
+  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: home, AGENTHYDRA_MANAGERS_DIR: managers, AGENTHYDRA_CORE_DIR: core },
   stdout: 'ignore', stderr: 'ignore', windowsHide: true,
 })
 const shotDir = join(tmpdir(), 'manager-avatar')
@@ -146,7 +156,20 @@ try {
     rowH: number; dotR: number; titleL: number; titleMask: string; titleCut: boolean }[]
   const ada = avatars.filter((a) => a.label === 'Manager: Ada, Head of Design')
   const bo = avatars.filter((a) => a.label === 'Manager: Bo, Backend Engineer')
-  check('every managed row draws an avatar, and unmanaged rows none', avatars.length === 4 && ada.length === 2 && bo.length === 2, avatars.map((a) => a.label))
+  const cy = avatars.filter((a) => a.label === 'Lead: Cy, Layout designer')
+  check('every managed or led row draws an avatar, and the others none', avatars.length === 5 && ada.length === 2 && bo.length === 2 && cy.length === 1, avatars.map((a) => a.label))
+  check("the Hydra Core lead's row shows her photo, served by the personas route", cy.every((a) => a.loaded && a.src === '/api/personas/cy-layout/avatar?v=1760000000500'), cy)
+  const portrait = await fetch(`http://127.0.0.1:${PORT}/api/personas/cy-layout/avatar`)
+  check('GET /api/personas/:slug/avatar answers the portrait beside the persona', portrait.ok && portrait.headers.get('content-type') === 'image/png', portrait.status)
+  if (cy[0]) {
+    const lead = cy[0]
+    const clip = { x: 0, y: Math.max(0, lead.y - 40), width: Math.min(1300, lead.l + 300), height: 80, scale: 3 }
+    const shot = Buffer.from((await send('Page.captureScreenshot', { format: 'jpeg', quality: 92, clip })).data, 'base64')
+    for (const file of [join(shotDir, 'lead-face.jpg'), ...(process.env.E2E_LEAD_SHOT ? [process.env.E2E_LEAD_SHOT] : [])]) {
+      writeFileSync(file, shot)
+      console.log(`     screenshot ${file}`)
+    }
+  }
   check('Ada\'s rows show her photo, served by the managers route', ada.every((a) => a.loaded && a.src === '/api/managers/ada-design/avatar?v=1760000000000'), ada)
   check('Bo\'s rows show his initial', bo.every((a) => a.src === null && a.initial === 'B'), bo)
   check('the avatar is a 16px circle between the status dot and the title, in a 26px row',
@@ -202,6 +225,17 @@ try {
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   check('Escape closes the card', !!(await until(`!document.querySelector('[data-testid="manager-card"]')`, 30)))
+
+  // The lead's card: her name and title, and no Change photo, since her photo is not Desk's to change.
+  const leadAt = ((await ev(AVATARS)) as typeof avatars).find((a) => a.label === 'Lead: Cy, Layout designer')
+  if (leadAt) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: leadAt.x, y: leadAt.y })
+    await sleep(300)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: leadAt.x, y: leadAt.y, button: 'left', clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: leadAt.x, y: leadAt.y, button: 'left', clickCount: 1 })
+  }
+  const leadCard = (await until(CARD, 30)) as { text: string; img: boolean; button: boolean } | null
+  check("the lead's card names her and offers no Change photo", !!leadCard && leadCard.img && leadCard.text.includes('Cy') && leadCard.text.includes('Layout designer') && !leadCard.button, leadCard)
 } catch (e) {
   failed++
   console.log(`FAIL ${(e as Error).message}`)

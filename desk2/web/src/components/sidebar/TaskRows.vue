@@ -30,11 +30,12 @@ const ownSession = (w: CliMayteWorker) => (w.pc ? null : w.sessionId)
 const RunDot: FunctionalComponent = () => h('span', { class: 'flex items-center justify-center', 'aria-hidden': 'true' }, [h('span', { class: 'size-1.5 rounded-full bg-current' })])
 // A task that runs, here or on another PC, pulses gray as a working chat's dot does, and one running its check
 // pulses its mark the same way: blue is HSwarm's alone and nothing in the sidebar spins (owner, 2026-10-05: "Only
-// the HSwarm items should have blue"). Finished, failed, waiting and queued marks hold still.
+// the HSwarm items should have blue"). Finished, failed, waiting and queued marks hold still; waiting (for an account
+// with room) wears the usage-limit pink, since yellow is only what waits on the owner (owner, 2026-10-17).
 const STATUS: Record<string, { icon: Component; tone: string; label: string }> = {
   queued: { icon: Clock, tone: 'text-text-muted', label: 'Queued' },
   running: { icon: RunDot, tone: runPulse('gray'), label: 'Running' },
-  waiting: { icon: Hourglass, tone: 'text-warning-text', label: 'Waiting' },
+  waiting: { icon: Hourglass, tone: 'text-[var(--status-limited-text)]', label: 'Waiting' },
   checking: { icon: ListChecks, tone: runPulse('gray'), label: 'Running its check' },
   done: { icon: CircleCheck, tone: 'text-success-text', label: 'Done' },
   failed: { icon: CircleX, tone: 'text-danger-text', label: 'Failed' }
@@ -66,16 +67,18 @@ const lines = computed(() =>
     const key = keyOf(n.worker)
     const status = statusOf(n.worker)
     const own = ownSession(n.worker)
-    return { n, key, status, own, base: tip(n.worker, status, null) }
+    return { n, key, status, own, base: tip(n.worker, status, null), tone: accountTone(n.worker.account) }
   })
 )
+// The HSwarm jobs' tooltips, worked out once per change of the jobs rather than on every render.
+const jobLines = computed(() => (props.jobs ?? []).map((j) => ({ j, tooltip: jobTip(j) })))
 const hot = ref<string | null>(null)
 </script>
 
 <template>
   <TransitionGroup tag="div" class="ms-2.75 flex flex-col gap-px border-s border-border py-px" role="group" aria-label="CliMayte tasks and HSwarm jobs" :css="false" @leave="rowLeave">
     <button
-      v-for="{ n, key, status, own, base } in lines"
+      v-for="{ n, key, status, own, base, tone } in lines"
       :key="key"
       type="button"
       :title="hot === key ? tip(n.worker, status, now) : base"
@@ -104,15 +107,15 @@ const hot = ref<string | null>(null)
         </span>
       </Tip>
       <!-- Its account, in that account's colour (account-tone.ts). -->
-      <span v-if="n.worker.account" class="shrink-0 text-2xs tnum" :style="{ color: accountTone(n.worker.account) ?? undefined }">{{ n.worker.account }}</span>
+      <span v-if="n.worker.account" class="shrink-0 text-2xs tnum" :style="{ color: tone ?? undefined }">{{ n.worker.account }}</span>
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-2xs text-text-muted">{{ modelName(n.worker.model) }}</span>
       <span class="shrink-0 text-2xs text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
     </button>
     <button
-      v-for="j in props.jobs ?? []"
+      v-for="{ j, tooltip } in jobLines"
       :key="`swarm:${j.id}`"
       type="button"
-      :title="jobTip(j)"
+      :title="tooltip"
       class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) ps-1 pe-1 text-start text-ui-sm leading-4 text-text-2 transition-colors duration-(--dur-fast) hover:bg-fill-hover"
       @click="emit('open-job', j)"
     >

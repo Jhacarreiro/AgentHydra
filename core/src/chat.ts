@@ -5,7 +5,8 @@ import { statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { titleFromPrompt } from '../../desk2/server/src/engine/describe'
 import { ANSWER_NOW, buildHandoff, PINNED } from '../../desk2/server/src/engine/handoff'
-import type { ServerEvent } from '../../desk2/shared/protocol'
+import type { Effort, PermissionMode, ServerEvent } from '../../desk2/shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '../../desk2/shared/protocol'
 import type { Store } from './store'
 import type {
   Account,
@@ -52,6 +53,22 @@ const THROTTLE_RETRY_MS = 15_000
 const THROTTLE_WAIT_MS = 4 * 60_000
 const SELF = `http://127.0.0.1:${process.env.CORE_PORT ?? 7789}/api`
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+const PATCH_KEYS = [
+  'title',
+  'group',
+  'service',
+  'model',
+  'effort',
+  'permissionMode',
+  'accountId',
+  'accountPinned',
+  'unread',
+  'pinned',
+  'archived',
+]
+const MARKS = ['unread', 'pinned', 'archived'] as const
 
 /** A message waiting for its turn. `item` is what the transcript shows (queued until it goes). */
 interface Queued {
@@ -69,6 +86,8 @@ interface Entry {
   queue: Queued[]
   running?: Running
   interrupted: boolean
+  /** The owner put the chat on another account: its next Claude turn starts a new session there that reads the chat. */
+  carry?: boolean
 }
 
 export interface ChatDeps {
@@ -112,19 +131,33 @@ export class Chats {
     return this.d.store.items(id)
   }
 
-  create(body: Json): ChatSummary {
+  /** A new chat with the window's choices (model, effort, mode, account and its Auto switch); its prompt, when there is
+   *  one, is its first message (Desk's CreateChatRequest). */
+  async create(body: Json): Promise<ChatSummary> {
     const cwd = checkCwd(body.cwd)
     const title = body.title === undefined ? '' : str(body.title, 'title').trim()
-    const chat = fresh({ title: title || NEW_TITLE, cwd })
-    this.add({ chat, queue: [], interrupted: false })
-    return chat
+    const prompt = body.prompt === undefined ? '' : str(body.prompt, 'prompt')
+    const e: Entry = {
+      chat: fresh({ title: title || NEW_TITLE, cwd }),
+      queue: [],
+      interrupted: false,
+    }
+    const apply = await this.setting(e, body)
+    apply()
+    this.add(e)
+    if (prompt.trim() || images(body.images).length)
+      this.send(e.chat.id, { text: prompt, images: body.images })
+    return e.chat
   }
 
-  patch(id: string, body: Json): ChatSummary {
+  async patch(id: string, body: Json): Promise<ChatSummary> {
     const e = this.entry(id)
     for (const key of Object.keys(body)) {
-      if (!['title', 'group', 'service'].includes(key))
-        throw new ChatError(400, `${key} cannot be changed`)
+      if (!PATCH_KEYS.includes(key)) throw new ChatError(400, `${key} cannot be changed`)
+    }
+    for (const k of MARKS) {
+      if (k in body && typeof body[k] !== 'boolean')
+        throw new ChatError(400, `${k} must be true or false`)
     }
     const title = 'title' in body ? str(body.title, 'title').trim() : undefined
     if (title === '') throw new ChatError(400, 'title cannot be empty')
@@ -139,11 +172,42 @@ export class Chats {
     ) {
       throw new ChatError(400, 'service must be codex, chatgpt or null')
     }
+    const apply = await this.setting(e, body)
+    if (!this.alive(e)) throw new ChatError(404, `no chat ${id}`)
+    const was = e.chat.account.id
+    apply()
+    if (e.chat.account.id !== was) {
+      this.line(
+        e,
+        'info',
+        e.carry
+          ? `This chat now runs on ${e.chat.account.label}. Its next reply starts a new session there that reads this chat first.`
+          : `This chat now runs on ${e.chat.account.label}.`,
+      )
+    }
     if (title !== undefined) e.chat.title = title
     if ('group' in body) e.chat.group = group
+    for (const k of MARKS) if (k in body) e.chat[k] = body[k] as boolean
     if ('service' in body) this.pin(e, (body.service as 'codex' | 'chatgpt' | null) ?? null)
     this.save(e)
     return e.chat
+  }
+
+  /**
+   * The chat's own setting from a create or patch body, checked in full before anything changes; the answer applies it.
+   * A model or effort it does not name runs DEFAULT_MODEL and DEFAULT_EFFORT. `accountId` names a signed-in Claude login
+   * (the owner's pin, never moved by the picker while it has room) or 'auto'; `accountPinned` is the Auto switch off: the
+   * chat then waits for its own account's reset instead of moving on.
+   */
+  private async setting(e: Entry, body: Json): Promise<() => void> {
+    const model = modelOf(body)
+    checkSetting(body)
+    const accountId = 'accountId' in body ? str(body.accountId, 'accountId').trim() : undefined
+    const named =
+      accountId && accountId !== 'auto' ? await this.d.accounts.find('claude', accountId) : null
+    if (accountId && accountId !== 'auto' && !named)
+      throw new ChatError(400, `No signed-in Claude account ${accountId}.`)
+    return () => applySetting(e, body, { model, accountId, named })
   }
 
   async remove(id: string): Promise<void> {
@@ -340,71 +404,188 @@ export class Chats {
     const service = running.service
     const backend = this.backend.get(service)
     if (!backend) return { ok: false, error: `No ${LABEL[service]} backend in this core` }
-    let lead = this.leadFor(e, service, sentId)
-    e.chat.serviceRanOn = service === 'claude' ? undefined : service
+    let lead = this.openingLead(e, service, sentId)
     let thread = this.boundThread(e, service)
     const avoid = new Set<string>()
     /** Logins that throttled this message: tried again once the rest are spent, for up to THROTTLE_WAIT_MS. */
     const throttled = new Set<string>()
     for (;;) {
-      const picked = await this.accountFor(service, thread, avoid)
+      const picked = await this.accountFor(e, service, thread, avoid)
       if (!this.alive(e)) return { ok: false }
       if ('why' in picked) {
-        if (!throttled.size || Date.now() - started > THROTTLE_WAIT_MS)
-          return { ok: false, error: picked.why }
-        // Every login with room is throttling: a 429 passes, so the message waits and tries them again (2026-10-14,
-        // probe round 5: two logins answering 429 and two at their limit, and three chats gave up at once).
-        if (!(await this.backOff(e, service))) return { ok: false }
-        for (const id of throttled) avoid.delete(id)
-        throttled.clear()
-        continue
+        const after = await this.noAccount(e, service, picked, started, throttled, avoid)
+        if (after === 'retry') continue
+        return after
       }
       if (e.interrupted) return { ok: false }
-      this.bindAccount(e, service, picked)
-      // The turn before this one may still hold the thread: its backend lets go only after it has ended (Codex's
-      // unsubscribe), so a queued message waits for that here instead of resuming the thread under it.
-      await backend.release(e.chat.id)
-      if (!this.alive(e)) return { ok: false }
-      if (e.interrupted) return { ok: false }
-      const task: Task = {
-        chatId: e.chat.id,
-        cwd: e.chat.cwd,
-        title: e.chat.title,
-        text: lead ? `${lead}${ANSWER_NOW}${text}` : text,
-        images: imgs,
+      if (this.leavesThread(thread, picked)) {
+        // The thread's login cannot take it now (signed out, or held by a limit): a new thread here reads the chat first.
+        thread = undefined
+        lead = this.handoff(e, 0, sentId, { why: 'the account it ran on is not available' })
+      }
+      const turn = await this.startTurn(e, running, backend, picked, {
         thread,
-        permissionMode: e.chat.permissionMode,
-        model: e.chat.model,
-      }
-      const turn = backend.start(task, picked, this.sink(e, service))
-      running.turn = turn
-      e.chat.status = 'working'
-      this.save(e)
+        text: this.leadText(lead, text),
+        images: imgs,
+      })
+      if (!turn) return { ok: false }
       const end = await turn.done
-      if (!this.alive(e) || e.interrupted || (end.limitedUntil === undefined && !end.throttled))
-        return end
-      if (end.throttled && thread && Date.now() - started < THROTTLE_WAIT_MS) {
-        // A thread lives on its login: a throttle there is waited out on the same thread, not moved.
-        console.warn(
-          `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} throttled; waiting`,
-        )
-        if (!(await this.backOff(e, service))) return { ok: false }
-        continue
+      if (this.endsHere(e, end)) return end
+      const after = await this.afterLimit(e, service, picked, end, {
+        thread,
+        started,
+        throttled,
+        avoid,
+      })
+      switch (after) {
+        case 'retry':
+          continue
+        case 'next':
+          break
+        default:
+          return after
       }
-      if (end.limitedUntil !== undefined) this.d.accounts.hold(picked.id, end.limitedUntil)
-      else throttled.add(picked.id)
-      avoid.add(picked.id)
-      console.warn(
-        `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} ${end.limitedUntil === undefined ? 'throttled' : `held until ${new Date(end.limitedUntil).toISOString()}`}: ${end.error ?? ''}`,
-      )
       // The next account starts a new thread, which knows nothing yet: it reads the whole chat first, the moved turn's
       // own words included (2026-10-14, round 6: read from this turn's start only, a throttle move dropped the catch-up
       // from Claude, and Codex answered 'Unknown' for the code word).
       thread = undefined
-      lead = this.handoff(e, 0, sentId, {
-        why: end.throttled ? 'the provider throttled the account' : 'usage limit',
-      })
+      lead = this.handoff(e, 0, sentId, { why: this.moveWhy(end) })
     }
+  }
+
+  /** The lead for the first account: a chat the owner moved reads the whole chat; the rest read what their service missed. */
+  private openingLead(e: Entry, service: Service, sentId: string): string | null {
+    const carried = service === 'claude' && e.carry === true
+    e.carry = undefined
+    const lead = carried
+      ? this.handoff(e, 0, sentId, { why: 'the owner moved it to another account' })
+      : this.leadFor(e, service, sentId)
+    e.chat.serviceRanOn = service === 'claude' ? undefined : service
+    return lead
+  }
+
+  /** True when the thread's login is not the one that takes the message: a new thread there reads the chat first. */
+  private leavesThread(thread: ServiceThread | undefined, picked: { id: string }): boolean {
+    return !!thread && picked.id !== thread.accountId
+  }
+
+  /** The message text, with the catch-up lead in front of it when there is one. */
+  private leadText(lead: string | null, text: string): string {
+    return lead ? `${lead}${ANSWER_NOW}${text}` : text
+  }
+
+  /** Whether the turn ends here: the chat is gone, the owner interrupted it, or no limit or throttle moved it. */
+  private endsHere(e: Entry, end: TurnEnd): boolean {
+    if (!this.alive(e) || e.interrupted) return true
+    return end.limitedUntil === undefined && !end.throttled
+  }
+
+  /** Why a message moves to the next account: a provider throttle, or a usage limit. */
+  private moveWhy(end: TurnEnd): string {
+    return end.throttled ? 'the provider throttled the account' : 'usage limit'
+  }
+
+  /** No login can take the message now: a limit ends the turn, and throttled logins wait for the chance to try again. */
+  private async noAccount(
+    e: Entry,
+    service: Service,
+    picked: { why: string; until?: number },
+    started: number,
+    throttled: Set<string>,
+    avoid: Set<string>,
+  ): Promise<TurnEnd | 'retry'> {
+    if (picked.until !== undefined)
+      return { ok: false, error: picked.why, limitedUntil: picked.until }
+    if (!throttled.size || Date.now() - started > THROTTLE_WAIT_MS)
+      return { ok: false, error: picked.why }
+    // Every login with room is throttling: a 429 passes, so the message waits and tries them again (2026-10-14,
+    // probe round 5: two logins answering 429 and two at their limit, and three chats gave up at once).
+    if (!(await this.backOff(e, service))) return { ok: false }
+    for (const id of throttled) avoid.delete(id)
+    throttled.clear()
+    return 'retry'
+  }
+
+  /** Starts the turn on the picked login once the chat's previous turn has let go of its thread; undefined when the chat stopped. */
+  private async startTurn(
+    e: Entry,
+    running: Running,
+    backend: Backend,
+    picked: Account,
+    ask: Pick<Task, 'thread' | 'text' | 'images'>,
+  ): Promise<Turn | undefined> {
+    const service = running.service
+    this.bindAccount(e, service, picked)
+    // The turn before this one may still hold the thread: its backend lets go only after it has ended (Codex's
+    // unsubscribe), so a queued message waits for that here instead of resuming the thread under it.
+    await backend.release(e.chat.id)
+    if (!this.alive(e)) return undefined
+    if (e.interrupted) return undefined
+    const task: Task = {
+      chatId: e.chat.id,
+      cwd: e.chat.cwd,
+      title: e.chat.title,
+      text: ask.text,
+      images: ask.images,
+      thread: ask.thread,
+      permissionMode: e.chat.permissionMode,
+      model: service === 'claude' ? (e.chat.model ?? DEFAULT_MODEL) : e.chat.model,
+      effort: service === 'claude' ? (e.chat.effort ?? DEFAULT_EFFORT) : e.chat.effort,
+    }
+    const turn = backend.start(task, picked, this.sink(e, service))
+    running.turn = turn
+    e.chat.status = 'working'
+    this.save(e)
+    return turn
+  }
+
+  /**
+   * A turn ended in a limit or a throttle: a throttle on a thread's login, or with Auto off, waits on the same login;
+   * otherwise the login is held or marked throttled and the turn moves on ('next').
+   */
+  private async afterLimit(
+    e: Entry,
+    service: Service,
+    picked: Account,
+    end: TurnEnd,
+    state: {
+      thread: ServiceThread | undefined
+      started: number
+      throttled: Set<string>
+      avoid: Set<string>
+    },
+  ): Promise<TurnEnd | 'retry' | 'next'> {
+    if (this.waitsOnLogin(e, state.thread, state.started, end)) {
+      // A thread lives on its login: a throttle there is waited out on the same thread, not moved.
+      console.warn(
+        `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} throttled; waiting`,
+      )
+      if (!(await this.backOff(e, service))) return { ok: false }
+      return 'retry'
+    }
+    if (end.limitedUntil !== undefined) this.d.accounts.hold(picked.id, end.limitedUntil)
+    else state.throttled.add(picked.id)
+    // Auto off: the chat waits for its own account's reset rather than move on.
+    if (end.limitedUntil !== undefined && e.chat.accountPinned) return end
+    state.avoid.add(picked.id)
+    console.warn(
+      `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} ${limitOutcome(end)}:${end.error ?? ''}`,
+    )
+    return 'next'
+  }
+
+  /** A throttle waits on the same login while the thread or the Auto switch holds the chat there, and THROTTLE_WAIT_MS has not passed. */
+  private waitsOnLogin(
+    e: Entry,
+    thread: ServiceThread | undefined,
+    started: number,
+    end: TurnEnd,
+  ): boolean {
+    return (
+      !!end.throttled &&
+      !!(thread || e.chat.accountPinned) &&
+      Date.now() - started < THROTTLE_WAIT_MS
+    )
   }
 
   /** Waits THROTTLE_RETRY_MS, saying so in the chat; false once the chat is deleted or stopped meanwhile. */
@@ -425,8 +606,10 @@ export class Chats {
     const ok = end.ok
     const error = ok ? undefined : interrupted ? 'Interrupted' : (end.error ?? 'The turn failed')
     const stopped = ok || interrupted
-    e.chat.status = stopped ? 'idle' : 'error'
+    const limited = !stopped && end.limitedUntil !== undefined
+    e.chat.status = stopped ? 'idle' : limited ? 'limited' : 'error'
     e.chat.lastError = stopped ? null : (error ?? null)
+    e.chat.limitResetsAt = limited ? (end.limitedUntil ?? null) : null
     e.chat.activity = null
     e.chat.turnStartedAt = null
     const now = Date.now()
@@ -473,18 +656,33 @@ export class Chats {
     return e.chat.serviceThreads?.[service]
   }
 
-  /** The account a thread is bound to when the chat has one there, else the picker's choice. */
+  /** The chat's own account (its thread's, else the Claude login the owner named) while it can take the turn, else the
+   *  picker's choice. With Auto off the chat never leaves its own: `until` says when that account's limit resets. */
   private async accountFor(
+    e: Entry,
     service: Service,
     thread: ServiceThread | undefined,
     avoid: ReadonlySet<string>,
-  ): Promise<Account | { why: string }> {
-    if (thread) {
-      const bound = await this.d.accounts.find(service, thread.accountId)
-      if (bound) return bound
-      console.warn(
-        `[core:chat] ${service} thread's account ${thread.accountId.slice(0, 8)} is not listed`,
-      )
+  ): Promise<Account | { why: string; until?: number }> {
+    const own =
+      thread?.accountId ??
+      (service === 'claude' && !e.chat.accountAuto ? e.chat.account.id : undefined)
+    if (own && !avoid.has(own)) {
+      const a = await this.d.accounts.find(service, own)
+      const until = this.d.accounts.heldUntil(own)
+      if (a && until <= Date.now()) return a
+      if (e.chat.accountPinned) {
+        const name = a?.label ?? e.chat.account.label
+        return a
+          ? {
+              why: `${name} is out of room until ${timeOf(until)}. Auto is off, so this chat waits for it.`,
+              until,
+            }
+          : {
+              why: `${name} is not signed in. Auto is off, so this chat stays on it: sign it in, or turn Auto on.`,
+            }
+      }
+      if (!a) console.warn(`[core:chat] ${service} account ${own.slice(0, 8)} is not listed`)
     }
     return this.d.accounts.pick(service, avoid)
   }
@@ -594,6 +792,63 @@ function images(v: unknown): Image[] {
       ...(typeof i.name === 'string' ? { name: i.name } : {}),
     }
   })
+}
+
+/** The model a create or patch body names: null for the default, undefined when the body does not name one. */
+function modelOf(body: Json): string | null | undefined {
+  if (!('model' in body)) return undefined
+  const m = body.model === null ? '' : str(body.model, 'model').trim()
+  return m === '' || m === 'default' ? null : m
+}
+
+/** The values a create or patch body sets, each checked before the chat changes. */
+function checkSetting(body: Json): void {
+  if ('effort' in body && body.effort !== null && !EFFORTS.includes(body.effort as Effort))
+    throw new ChatError(400, `effort must be one of ${EFFORTS.join(', ')}, or null`)
+  if ('permissionMode' in body && !MODES.includes(body.permissionMode as PermissionMode))
+    throw new ChatError(400, `permissionMode must be one of ${MODES.join(', ')}`)
+  if ('accountPinned' in body && typeof body.accountPinned !== 'boolean')
+    throw new ChatError(400, 'accountPinned must be true or false')
+}
+
+/** Applies a setting `Chats.setting` checked: the chat's own fields, its Auto switch and its login. */
+function applySetting(
+  e: Entry,
+  body: Json,
+  {
+    model,
+    accountId,
+    named,
+  }: { model: string | null | undefined; accountId?: string; named: Account | null },
+): void {
+  const c = e.chat
+  if (model !== undefined) c.model = model
+  if ('effort' in body) c.effort = body.effort as Effort | null
+  if ('permissionMode' in body) c.permissionMode = body.permissionMode as PermissionMode
+  if (body.accountPinned === true) c.accountPinned = true
+  else if (body.accountPinned === false) delete c.accountPinned
+  if (accountId === 'auto' || accountId === '') c.accountAuto = true
+  if (named && (named.id !== c.account.id || c.accountAuto)) {
+    // A session lives on its login: on another one the next turn starts a new session that reads the chat first.
+    if (c.sessionId && named.id !== c.account.id) {
+      c.sessionId = null
+      e.carry = true
+    }
+    c.account = { id: named.id, label: named.label, configDir: named.home }
+    c.accountAuto = false
+  }
+}
+
+/** The line a chat shows for a turn's login: held until its limit resets, or throttled. */
+function limitOutcome(end: TurnEnd): string {
+  return end.limitedUntil === undefined
+    ? 'throttled'
+    : `held until ${new Date(end.limitedUntil).toISOString()}`
+}
+
+/** '4:05 PM': when a held account's limit resets, as the chat says it. */
+function timeOf(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
 function message(err: unknown): string {

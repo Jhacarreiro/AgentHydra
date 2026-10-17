@@ -249,45 +249,17 @@ export function scoreRows(
   since?: number,
 ): ScoreRow[] {
   const rows = new Map<string, ScoreRow>()
-  const counted: Array<{
-    row: ScoreRow
-    v: CliMayteVerdict
-    fresh: boolean
-    template: string | null
-    cell: string
-  }> = []
+  const counted: CountedVerdict[] = []
   const cellSize = new Map<string, number>()
   for (const t of tasks) {
     if (!t.kind || !t.verdicts?.length) continue
-    // The newest verdict per span of work; a provisional one leaves its span out of the card.
-    const bySpan = new Map<number | string, CliMayteVerdict>()
     const index = new Map<CliMayteVerdict, number>()
-    for (const [i, v] of t.verdicts.entries()) {
-      bySpan.set(v.span ?? `v${i}`, v)
-      index.set(v, i)
-    }
-    const filteredVerdicts = [...bySpan.values()].filter((v) => !v.provisional)
+    for (const [i, v] of t.verdicts.entries()) index.set(v, i)
     const template = checkTemplate(t)
-    for (const v of filteredVerdicts) {
+    for (const v of newestPerSpan(t.verdicts)) {
       if (since && v.at < since) continue
-      const key = `${t.kind}|${v.model ?? ''}|${v.effort ?? ''}`
-      const onLadder = ladderIndex({ model: ladderModel(v.model), effort: v.effort }) !== -1
-      const row = rows.get(key) ?? {
-        kind: t.kind,
-        model: v.model,
-        effort: v.effort,
-        pass: 0,
-        fail: 0,
-        slip: 0,
-        rework: 0,
-        failed: 0,
-        excluded: 0,
-        units: 0,
-        fresh: { pass: 0, fail: 0, slip: 0, rework: 0 },
-        onLadder,
-        routing: { pass: 0, fail: 0, slip: 0, rework: 0, units: 0 },
-      }
-      rows.set(key, row)
+      const rung = ladderIndex({ model: ladderModel(v.model), effort: v.effort })
+      const row = rowFor(rows, t.kind, v, rung !== -1)
       if (v.verdict === 'fail' && v.severity === 0) {
         row.excluded++
         continue
@@ -295,29 +267,80 @@ export function scoreRows(
       // Fresh: no fail earlier on the task (a not-scored or provisional one counts: the task climbs after it).
       const at = index.get(v) ?? 0
       const fresh = !t.verdicts.slice(0, at).some((e) => e.verdict === 'fail')
-      const f = fresh ? row.fresh : null
-      if (v.verdict === 'pass') {
-        row.pass++
-        if (f) f.pass++
-      } else {
-        row.fail++
-        if (f) f.fail++
-        if (v.severity === 1) {
-          row.slip++
-          if (f) f.slip++
-        } else if (v.severity === 2) {
-          row.rework++
-          if (f) f.rework++
-        } else row.failed++
-      }
+      countVerdict(row, v, fresh)
       // The work only: a move's re-read is what the move cost, not what the kind costs.
       row.units += Math.max(0, v.units - (v.reread ?? 0))
-      const rung = ladderIndex({ model: ladderModel(v.model), effort: v.effort })
       const cell = `${t.kind}|${rung}|${template ?? ''}`
       if (template) cellSize.set(cell, (cellSize.get(cell) ?? 0) + 1)
-      counted.push({ row, v, fresh, template, cell })
+      counted.push({ row, v, template, cell })
     }
   }
+  weighRouting(counted, cellSize)
+  return [...rows.values()].sort(
+    (a, b) => a.kind.localeCompare(b.kind) || sortRung(a) - sortRung(b),
+  )
+}
+
+interface CountedVerdict {
+  row: ScoreRow
+  v: CliMayteVerdict
+  template: string | null
+  cell: string
+}
+
+/** The newest verdict per span of work; a provisional one leaves its span out of the card. */
+function newestPerSpan(verdicts: CliMayteVerdict[]): CliMayteVerdict[] {
+  const bySpan = new Map<number | string, CliMayteVerdict>()
+  for (const [i, v] of verdicts.entries()) bySpan.set(v.span ?? `v${i}`, v)
+  return [...bySpan.values()].filter((v) => !v.provisional)
+}
+
+/** The row for a verdict's kind and setting, made on its first verdict. */
+function rowFor(
+  rows: Map<string, ScoreRow>,
+  kind: string,
+  v: CliMayteVerdict,
+  onLadder: boolean,
+): ScoreRow {
+  const key = `${kind}|${v.model ?? ''}|${v.effort ?? ''}`
+  const row = rows.get(key) ?? {
+    kind,
+    model: v.model,
+    effort: v.effort,
+    pass: 0,
+    fail: 0,
+    slip: 0,
+    rework: 0,
+    failed: 0,
+    excluded: 0,
+    units: 0,
+    fresh: { pass: 0, fail: 0, slip: 0, rework: 0 },
+    onLadder,
+    routing: { pass: 0, fail: 0, slip: 0, rework: 0, units: 0 },
+  }
+  rows.set(key, row)
+  return row
+}
+
+function countVerdict(row: ScoreRow, v: CliMayteVerdict, fresh: boolean): void {
+  const f = fresh ? row.fresh : null
+  if (v.verdict === 'pass') {
+    row.pass++
+    if (f) f.pass++
+    return
+  }
+  row.fail++
+  if (f) f.fail++
+  if (v.severity === 1) {
+    row.slip++
+    if (f) f.slip++
+  } else if (v.severity === 2) {
+    row.rework++
+    if (f) f.rework++
+  } else row.failed++
+}
+
+function weighRouting(counted: CountedVerdict[], cellSize: Map<string, number>): void {
   for (const { row, v, template, cell } of counted) {
     const n = template ? (cellSize.get(cell) ?? 1) : 1
     const w = Math.min(1, CAMPAIGN_CAP / n)
@@ -330,11 +353,12 @@ export function scoreRows(
     }
     r.units += w * Math.max(0, v.units - (v.reread ?? 0))
   }
-  const rung = (r: ScoreRow): number => {
-    const i = ladderIndex({ model: r.model, effort: r.effort })
-    return i === -1 ? CLIMAYTE_LADDER.length : i
-  }
-  return [...rows.values()].sort((a, b) => a.kind.localeCompare(b.kind) || rung(a) - rung(b))
+}
+
+/** A row's place on the ladder for the sort; settings off the ladder go after it. */
+function sortRung(r: ScoreRow): number {
+  const i = ladderIndex({ model: r.model, effort: r.effort })
+  return i === -1 ? CLIMAYTE_LADDER.length : i
 }
 
 /** A model as the ladder names it: older tasks stored `opus`, and the CLI may report a dated id.

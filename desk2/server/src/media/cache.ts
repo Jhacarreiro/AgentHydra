@@ -131,19 +131,22 @@ export interface MediaCache {
 export function createMediaCache(dir: string): MediaCache {
   /** Pictures already hashed, by path: the ref stands while the file's size and mtime do, so a transcript naming it again costs one stat. */
   const seen = new Map<string, { size: number; mtimeMs: number; ref: ImageRef }>()
+  /** Writes the bytes under their content id unless the cache holds that id already. */
+  const keep = (id: string, bytes: Uint8Array): void => {
+    const file = join(dir, id)
+    if (existsSync(file)) return
+    mkdirSync(dir, { recursive: true })
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+    writeFlushed(tmp, bytes)
+    renameOver(tmp, file)
+  }
   const put = (bytes: Uint8Array, name?: string): ImageRef | null => {
     if (!bytes.length || bytes.length > MAX_GIF_BYTES) return null
     const ext = sniff(bytes)
     if (!ext || bytes.length > (ext === 'gif' ? MAX_GIF_BYTES : MAX_MEDIA_BYTES)) return null
     const hash = createHash('sha256').update(bytes).digest('hex')
     const id = `${hash}.${ext}`
-    const file = join(dir, id)
-    if (!existsSync(file)) {
-      mkdirSync(dir, { recursive: true })
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-      writeFlushed(tmp, bytes)
-      renameOver(tmp, file)
-    }
+    keep(id, bytes)
     const ref: ImageRef = { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: bytes.length }
     if (name) ref.name = name
     return ref
@@ -231,13 +234,7 @@ export function createMediaCache(dir: string): MediaCache {
         const bytes = new Uint8Array(readFileSync(path))
         if (!bytes.length || bytes.includes(0)) return null
         const id = `${createHash('sha256').update(bytes).digest('hex')}.html`
-        const file = join(dir, id)
-        if (!existsSync(file)) {
-          mkdirSync(dir, { recursive: true })
-          const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-          writeFlushed(tmp, bytes)
-          renameOver(tmp, file)
-        }
+        keep(id, bytes)
         return { mediaType: 'text/html', url: MEDIA_ROUTE + id + PREVIEW_REV, bytes: bytes.length, name: basename(path) }
       } catch {
         return null

@@ -192,7 +192,7 @@ function harness(
     workers?: PingWorker[]
     peer?: (n: number) => { ok: boolean; reason: string }
     composer?: { eligible: boolean; ok: boolean }
-    desk?: { ok: boolean; reason: string; notDesk?: boolean }
+    desk?: { ok: boolean; reason: string; notDesk?: boolean; uncertain?: boolean }
     native?: NativeAnswer | ((n: number, text: string) => NativeAnswer)
     send?: (id: string, text: string) => { ok: boolean; message: string }
     swarmJobSeen?: CliMaytePingDeps['swarmJobSeen']
@@ -252,7 +252,12 @@ function harness(
     desk: opts.desk
       ? {
           send: async (sessionId, text) => {
-            const r = opts.desk as { ok: boolean; reason: string; notDesk?: boolean }
+            const r = opts.desk as {
+              ok: boolean
+              reason: string
+              notDesk?: boolean
+              uncertain?: boolean
+            }
             if (r.ok) deskSent.push({ sessionId, text, home: '' })
             return r
           },
@@ -740,13 +745,31 @@ describe('the outbox', () => {
     h.ping.stop()
   })
 
-  test('a Desk 2 failure other than notDesk is journalled, then the peer pipe goes', async () => {
+  test('a Desk 2 refusal (a 4xx before the send) is journalled, then the peer pipe goes', async () => {
     const a = running('w-a')
-    const h = harness({ workers: [a], desk: { ok: false, reason: 'desk 500' } })
+    const h = harness({ workers: [a], desk: { ok: false, reason: 'desk 409' } })
     h.change({ ...a, status: 'failed', error: 'boom' })
     await h.at(30_000)
     expect(h.journal.filter((j) => j.event === 'ping-failed' && j.step === 'desk')).toHaveLength(1)
     expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a Desk 2 send that may have landed (timeout, 5xx) is never sent again by another route', async () => {
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'The operation timed out.', uncertain: true },
+      native: { ok: true, unavailable: false },
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.journal.filter((j) => j.event === 'ping-failed' && j.step === 'desk')).toHaveLength(1)
+    expect(h.nativeSent).toHaveLength(0)
+    expect(h.peerCalls()).toBe(0)
+    await h.at(3_600_000)
+    expect(h.nativeSent).toHaveLength(0)
+    expect(h.peerCalls()).toBe(0)
     h.ping.stop()
   })
 
@@ -862,6 +885,25 @@ describe('the outbox', () => {
     expect(h.workerSends[0][0]).toBe('w-manager')
     expect(h.workerSends[0][1]).toContain('[AgentHydra · CliMayte] Not from the user. Ping 1-2,')
     expect(h.workerSends[0][1]).toContain('• Group aws-teardown-planes settled')
+    h.ping.stop()
+  })
+
+  test('a chat that adopted its own group is never pinged about itself, nor about the owner chats in it', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { group: 'hydra-desk', origin: mgr, chat: true })
+    const other = running('w-chat', { group: 'hydra-desk', origin: mgr, chat: true })
+    const task = running('w-task', { origin: mgr })
+    const h = harness({ workers: [manager, other, task] })
+    h.change(doneOf(other))
+    h.change(doneOf(manager))
+    await h.at(3_600_000)
+    expect(h.workerSends).toHaveLength(0)
+    // A task it dispatched itself still reports to it.
+    h.change(failedOf(task))
+    await h.at(7_200_000)
+    expect(h.workerSends).toHaveLength(1)
+    expect(h.workerSends[0][1]).toContain('w-task')
+    expect(h.workerSends[0][1]).not.toContain('w-chat')
     h.ping.stop()
   })
 
@@ -1258,5 +1300,33 @@ describe('stale lines are dropped when the outbox flushes', () => {
 
   test('the header is the prefix the desk2 note card reads and nothing more', () => {
     expect(PING_HEADER).toBe('[AgentHydra · CliMayte] Not from the user.')
+  })
+})
+
+describe('TOO BIG', () => {
+  test('a worker whose last turn says TOO BIG: pings its summoner with that line first', () => {
+    const base = worker({ id: 'w-5e6f7a8b', title: 'Port the billing module' })
+    const p = snapshotOf(base, null, T0)
+    const big: PingWorker = {
+      ...base,
+      status: 'done',
+      results: ['Read it.\nTOO BIG: one part for the API, one for the UI'],
+    }
+    const events = pingEvents(p, big, T0)
+    expect(events.map((e) => e.kind)).toEqual(['too-big'])
+    expect(events[0].line).toBe(
+      'TOO BIG: one part for the API, one for the UI (w-5e6f7a8b "Port the billing module", done on #35: take the job back and re-split it.)',
+    )
+    // In a ping with other updates, the TOO BIG line leads.
+    const other = worker({ id: 'w-1', group: base.group, status: 'done' })
+    const otherEvent = pingEvents(snapshotOf(other, null, T0), other, T0)
+    const text = pingMessage(
+      [
+        { ...otherEvent[0], seq: 1, at: T0 },
+        { ...events[0], seq: 2, at: T0 },
+      ],
+      [other, big],
+    )
+    expect(text.split('\n')[1]).toStartWith('• TOO BIG: one part for the API')
   })
 })

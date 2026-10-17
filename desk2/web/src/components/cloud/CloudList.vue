@@ -14,6 +14,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
+import { useSidebarSort } from '@/components/sidebar/sort'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
 import ProjectRing from '@/components/sidebar/ProjectRing.vue'
@@ -34,7 +35,7 @@ import { useCloud } from './store'
 // button moves nothing. The rows only this list has follow the desk's in their group, each leading with a
 // cloud (owner, 2026-10-04: "they change order and none display a cloud icon"). A row opens the session
 // (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in select mode it
-// ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (Michael,
+// ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (the other owner,
 // 2026-10-04). The search and filter buttons sit beside the New button (Sidebar.vue), as on the desk list.
 const props = defineProps<{
   /** The groups to draw: the store's with the rows Sidebar adds for running work no row lists (sidebar/tasks.ts addToCloudGroups); else the store's. */
@@ -87,10 +88,12 @@ const ringOf = (r: CloudSession): StatusGlyph => (r.archived ? IDLE_GLYPH : (pro
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
 const hiddenGroups = useHiddenGroups()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
-// Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares;
-// not in select mode, nor while a search or a filter narrows the list.
+// Rows drag to another place in their group (sidebar/rowDrag.ts), into the order the desk list shares; only in Manual
+// (sidebar/sort.ts), where the order dragged into is the one shown. Not in select mode, nor while a search or a filter
+// narrows the list.
 const rowDrag = useRowDrag()
-const canDrag = computed(() => !cloud.selectMode.value && !cloud.search.value.trim() && !scopesNarrowed(cloud.scopes.value))
+const { sort: sortMode } = useSidebarSort()
+const canDrag = computed(() => sortMode.value === 'manual' && !cloud.selectMode.value && !cloud.search.value.trim() && !scopesNarrowed(cloud.scopes.value))
 const collapsed = ref(new Set<string>())
 function toggleGroup(key: string) {
   const next = new Set(collapsed.value)
@@ -190,6 +193,10 @@ const ROW = LIST_ROW
 const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFolder(g.cwd, g.rows.map((r) => ({ cwd: r.cwd, at: r.lastActivityAt }))))
 /** What a group's menu describes: its project's folder, else the group's own or its newest chat's (the desk list's rule). */
 const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.projectFolderOf?.(g) ?? newFolderOf(g)))
+// Both folders of every group, worked out once per change of the groups and not on each redraw of a group's head and menu.
+const folders = computed(() => new Map(shownGroups.value.map((g) => [g.key, { add: newFolderOf(g), menu: menuFolderOf(g) }] as const)))
+const addOf = (g: CloudGroup) => folders.value.get(g.key)?.add ?? null
+const menuOf = (g: CloudGroup) => folders.value.get(g.key)?.menu ?? null
 </script>
 
 <template>
@@ -233,10 +240,10 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
         </button>
       </Tip>
       <span class="flex-1" />
-      <GroupDashboardButton :folder="menuFolderOf(g)" :label="g.label" />
-      <TodoButton :folder="menuFolderOf(g)" :label="g.label" />
-      <Tip v-if="newFolderOf(g)" :label="`New session in ${g.label}`">
-        <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', newFolderOf(g)!)">
+      <GroupDashboardButton :folder="menuOf(g)" :label="g.label" />
+      <TodoButton :folder="menuOf(g)" :label="g.label" />
+      <Tip v-if="addOf(g)" :label="`New session in ${g.label}`">
+        <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', addOf(g)!)">
           <component :is="shellGlyphs.groupNew" class="size-4" />
         </button>
       </Tip>
@@ -270,8 +277,8 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
         <!-- A project folder's group gets the desk list's menu (sidebar/ProjectMenuItems.vue; the sidebar mounts its dialog). -->
         <ProjectMenuItems
-          v-if="menuFolderOf(g)"
-          :folder="menuFolderOf(g)!"
+          v-if="menuOf(g)"
+          :folder="menuOf(g)!"
           :label="g.label"
           :collapsed="collapsed.has(g.key)"
           :hidden="!!g.hidden"

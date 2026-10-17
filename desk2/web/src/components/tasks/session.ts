@@ -10,9 +10,9 @@ import type { SessionTasks } from '@shared/protocol'
  *  they finish, and until then the window's copy is the one shown. */
 const POLL_MS = 15_000
 /** The sessions whose last answer is kept, so going back to one paints at once. */
-const KEPT = 10
+const KEPT = 50
 
-/** Each session's last answer, the newest KEPT. Read without `useSessionTasks` by a view that only counts with them. */
+/** Each session's last answer, the newest KEPT (the rail's cache, rail-cache.ts, keeps the delegation numbers of more across reloads). Read without `useSessionTasks` by a view that only counts with them. */
 export const sessionTasks = shallowRef<ReadonlyMap<string, SessionTasks>>(new Map())
 
 interface Reader {
@@ -58,6 +58,7 @@ async function tick(id: string): Promise<void> {
 
 // A hidden window reads nothing; showing it again reads every session on screen at once.
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  // arkitect-allow: side-effect-teardown the one module-level listener, for the window's life; the readers it pauses are per view
   document.addEventListener('visibilitychange', () => {
     for (const [id, r] of readers) {
       if (document.hidden) halt(r)

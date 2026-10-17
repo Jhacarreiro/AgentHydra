@@ -52,7 +52,7 @@ test('the REST rows answer from AgentHydra', async () => {
 
   expect(await call(desk, '/api/bridge/status')).toEqual({ status: 200, body: { up: true, url: f.url } })
   const accounts = await call(desk, '/api/accounts')
-  expect(accounts.body.map((a: AccountInfo) => a.id)).toEqual(['default', 'cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
+  expect(accounts.body.map((a: AccountInfo) => a.id)).toEqual(['cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
   expect((await call(desk, '/api/accounts/pick')).body).toHaveProperty('id')
   expect(Array.isArray((await call(desk, '/api/external/sessions')).body)).toBe(true)
 
@@ -62,9 +62,9 @@ test('the REST rows answer from AgentHydra', async () => {
   expect((await call(desk, '/api/external/sessions/nope/items')).status).toBe(404)
 
   expect((await call(desk, '/api/climayte/workers')).body.length).toBe(4)
-  expect(f.gets).toContain('/api/corch/workers?limit=20&lean=1')
+  expect(f.gets).toContain('/api/corch/workers?limit=20&lean=1&bridge=1')
   expect((await call(desk, '/api/climayte/workers?all=1')).body.length).toBe(4)
-  expect(f.gets).toContain('/api/corch/workers?lean=1')
+  expect(f.gets).toContain('/api/corch/workers?lean=1&bridge=1')
 
   expect(await call(desk, '/api/climayte/workers/w-00000001/send', post({ text: 'hi' }))).toEqual({ status: 200, body: { ok: true } })
   expect((await call(desk, '/api/climayte/workers/w-00000001/send', post({}))).status).toBe(400)
@@ -178,8 +178,8 @@ test("a running task's finished dispatcher, or its wave's failed manager, stays 
   expect(here('w-parent')).toBeDefined()
   expect(here('w-child')).toMatchObject({ originWorkerId: 'w-parent', originSessionId: sid(700) })
   expect(here('w-wave')).toMatchObject({ originWorkerId: 'w-mgr', originSessionId: sid(702) })
-  expect(f.gets).toContain('/api/corch/workers?ids=w-parent&lean=1')
-  expect(f.gets).toContain('/api/corch/workers?group=mgr-wv-gone&lean=1')
+  expect(f.gets).toContain('/api/corch/workers?ids=w-parent&lean=1&bridge=1')
+  expect(f.gets).toContain('/api/corch/workers?group=mgr-wv-gone&lean=1&bridge=1')
   const remote = list.filter((w) => w.pc)
   expect(remote.some((w) => w.id === 'w-remote-parent')).toBe(true)
   // Still only the newest finished ones besides it.
@@ -190,8 +190,8 @@ test('AgentHydra down: lists stay answerable, writes say 503', async () => {
   const url = deadUrl()
   const desk = await boot(url)
   expect((await call(desk, '/api/bridge/status')).body).toEqual({ up: false, url })
-  expect((await call(desk, '/api/accounts')).body.map((a: AccountInfo) => a.id)).toEqual(['default'])
-  expect((await call(desk, '/api/accounts/pick')).body.id).toBe('default')
+  expect((await call(desk, '/api/accounts')).body).toEqual([])
+  expect((await call(desk, '/api/accounts/pick')).body).toBeNull()
   expect((await call(desk, '/api/external/sessions')).body).toEqual([])
   expect((await call(desk, '/api/climayte/workers')).body).toEqual([])
   expect(await call(desk, '/api/external/sessions/00000000-0000-4000-8000-000000000004')).toEqual({ status: 503, body: { error: `AgentHydra is not running at ${url}` } })

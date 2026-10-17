@@ -6,7 +6,8 @@
 // with the sender's folder name and number, its tokens and claude.ai cookies encrypted under the new
 // profile's own key (the cookie plaintext led by SHA-256 of its host, as Chromium writes it); of two
 // copies in one family the later expiry wins; a login this PC signed in on its own is left alone
-// both ways; a login left out here is not replaced. A wrong write here signs a desktop app out, and
+// both ways; a desktop login is never left out; a profile deleted on one PC is deleted on the other,
+// which says who deleted it and why. A wrong write here signs a desktop app out, and
 // a wrong direction ties two working sign-ins to each other's refreshes. The store is the real
 // Worker on bun:sqlite; the other PC is played by writing to the store with this PC's key.
 // Windows only: the profile key is DPAPI's.
@@ -14,9 +15,11 @@
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
+import { basename, join } from 'node:path'
 import {
+  cliAccountIdentity,
   createCliInstance,
   deleteCliInstance,
   getCliInstance,
@@ -27,6 +30,7 @@ import {
   disconnectLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
+  removeLoginEverywhere,
   runLoginSync,
   sealLogin,
   setLoginSyncExcluded,
@@ -40,6 +44,7 @@ import {
 } from '../src/core/crypto'
 import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
 import { feedCliFromDesktop, feedLinkedCliLogins } from '../src/core/desktop-cli-feed'
+import { renewDesktopGrant } from '../src/core/desktop-cli-renew'
 import {
   type DesktopSyncContext,
   desktopNotes,
@@ -50,7 +55,9 @@ import {
   syncDesktopLogins,
   tokenExpiry,
 } from '../src/core/desktop-login-sync'
+import { removeInstance } from '../src/core/lifecycle'
 import { instancesRoot } from '../src/core/paths'
+import { grantDigest } from '../src/core/revoked-grants'
 import { base, store, token } from './login-sync-store'
 import './no-chats'
 
@@ -59,8 +66,10 @@ const grants = (expiresAt: number) =>
   JSON.stringify({
     'client:org:https://api:user:inference': { token: `t-${expiresAt}`, expiresAt },
   })
-const cookie = (value: string, name = 'sessionKey') => ({
-  creation_utc: '13400000000000000',
+/** Chromium's cookie time (microseconds since 1601) of an epoch-ms time. */
+const chromiumTime = (ms: number): string => String(BigInt(ms + 11_644_473_600_000) * 1000n)
+const cookie = (value: string, name = 'sessionKey', creation = '13400000000000000') => ({
+  creation_utc: creation,
   host_key: HOST,
   top_frame_site_key: '',
   name,
@@ -89,6 +98,7 @@ async function profile(
   expiresAt: number,
   session: string,
   cookieName = 'sessionKey',
+  opts: { tokens?: string; signedInAt?: number } = {},
 ) {
   const dir = join(instancesRoot(), name)
   mkdirSync(join(dir, 'Network'), { recursive: true })
@@ -98,7 +108,7 @@ async function profile(
     JSON.stringify({
       locale: 'en-US',
       lastKnownAccountUuid: uuid,
-      'oauth:tokenCacheV2': await encryptSafeStorage(grants(expiresAt), dir),
+      'oauth:tokenCacheV2': await encryptSafeStorage(opts.tokens ?? grants(expiresAt), dir),
     }),
   )
   const d = new Database(join(dir, 'Network', 'Cookies'), { create: true })
@@ -113,7 +123,11 @@ async function profile(
     'CREATE UNIQUE INDEX cookies_unique_index ON cookies(host_key, top_frame_site_key, has_cross_site_ancestor, name, path, source_scheme, source_port)',
   )
   d.run("insert into meta values ('version', '24'), ('last_compatible_version', '24')")
-  const c = cookie(session, cookieName)
+  const c = cookie(
+    session,
+    cookieName,
+    opts.signedInAt === undefined ? undefined : chromiumTime(opts.signedInAt),
+  )
   const sealed = await encryptV10Gcm(
     key,
     new Uint8Array([
@@ -269,17 +283,280 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       expect((await meta(UC)).version).toBe(before)
       expect((await loginSyncStatus()).logins.find((l) => l.id === UC)?.note).toBe('own')
 
-      // Left out on this PC: a newer copy in the store does not land.
+      // A desktop login is never left out (owner, 2026-10-16): asked to, it still takes the newer copy.
       setLoginSyncExcluded(UA, true)
       await otherPc(UA, 'acct-a', 1, 9999, 'sk-a9')
       await runLoginSync()
-      expect(await here(a)).toEqual({ expiry: 2000, session: 'sk-a3' })
+      expect(await here(a)).toEqual({ expiry: 9999, session: 'sk-a9' })
     } finally {
       disconnectLoginSync()
       // Retried: on the Windows runner a handle the sync just closed can still hold the folder a moment
       // (EBUSY failed CI run 36986153843 after every assertion had passed).
       for (const dir of made)
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // A revoked grant keeps its expiry date, and the year-long one a profile keeps through a re-login
+  // (core/revoked-grants.ts) would win every "later expiry" and put itself back on every PC.
+  test('a grant Anthropic revoked never lands, and never wins the later expiry', async () => {
+    const [UA, UB] = [randomUUID(), randomUUID()]
+    const made: string[] = []
+    const LIVE = 'client:org:https://api:user:inference'
+    const DEAD = 'client:org:https://api:user:inference user:file_upload'
+    const cache = (g: Record<string, { token: string; expiresAt: number }>) => JSON.stringify(g)
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const meta = async (id: string) =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === id)
+      const otherPc = async (id: string, name: string, v2: string, revoked?: string[]) => {
+        const login: PortableDesktopLogin = {
+          kind: 'desktop',
+          id,
+          num: 4343,
+          name,
+          tokenCacheV2: v2,
+          tokenCache: null,
+          cookies: [cookie('sk-r')],
+          expiresAt: 9000,
+          ...(revoked && { revoked }),
+        }
+        const r = await store('PUT', `/v1/logins/${id}`, {
+          version: (await meta(id))?.version ?? 0,
+          blob: sealLogin(key, login),
+          meta: { kind: 'desktop', num: 4343, name, expiresAt: 9000 },
+        })
+        expect(r.status).toBe(200)
+      }
+      const v2Here = async (dir: string) => (await readDesktopTokens(dir))?.v2
+
+      const a = await profile('rev-a', UA, 2000, 'sk-r')
+      made.push(a)
+      await runLoginSync()
+      const mine = await v2Here(a)
+      // An older live grant beside one the other PC found revoked: this PC's 2000 is the later.
+      await otherPc(
+        UA,
+        'rev-a',
+        cache({
+          [LIVE]: { token: 't-1500', expiresAt: 1500 },
+          [DEAD]: { token: 'dead-9000', expiresAt: 9000 },
+        }),
+        [grantDigest('dead-9000')],
+      )
+      await runLoginSync()
+      expect(await v2Here(a)).toBe(mine)
+      expect((await meta(UA)).meta.expiresAt).toBe(2000)
+      // A copy that differs from this one only by a grant known revoked is this one: nothing lands
+      // and nothing goes back up, pass after pass (an older PC keeps sending such a copy).
+      await otherPc(
+        UA,
+        'rev-a',
+        cache({
+          [LIVE]: { token: 't-2000', expiresAt: 2000 },
+          [DEAD]: { token: 'dead-9000', expiresAt: 9000 },
+        }),
+      )
+      const version = (await meta(UA)).version
+      await runLoginSync()
+      await runLoginSync()
+      expect(await v2Here(a)).toBe(mine)
+      expect((await meta(UA)).version).toBe(version)
+      // An account only the store holds lands here without the grant its sender found revoked.
+      await otherPc(
+        UB,
+        'rev-b',
+        cache({
+          [LIVE]: { token: 't-5000', expiresAt: 5000 },
+          [DEAD]: { token: 'dead-b', expiresAt: 9000 },
+        }),
+        [grantDigest('dead-b')],
+      )
+      await runLoginSync()
+      const b = (await listDesktopProfiles()).find((p) => p.name === 'rev-b')!
+      made.push(b.dir)
+      expect(await v2Here(b.dir)).toBe(cache({ [LIVE]: { token: 't-5000', expiresAt: 5000 } }))
+    } finally {
+      disconnectLoginSync()
+      for (const dir of made)
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // Owner, 2026-10-16: "If one of us removes it ... It removes from the other ... let us know that the
+  // other person removed it ... leave a note". The other PC is played by writing its removal marker.
+  test('a profile deleted on one PC is deleted on the other, which says who and why; a sign-in after that syncs again', async () => {
+    const U = randomUUID()
+    const NOTE = 'Moved to the laptop'
+    const made: string[] = []
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const row = async () =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === U)
+      const gone = await profile(
+        `gone-${randomUUID().slice(0, 8)}`,
+        U,
+        Date.now() + 86_400_000,
+        'sk-1',
+      )
+      made.push(gone)
+      await runLoginSync()
+      const shared = await row()
+      expect(shared.meta.kind).toBe('desktop')
+
+      // The other PC's owner deleted their profile of this account, with a note.
+      const marker = { id: U, signedOut: true, removed: true, note: NOTE }
+      const put = await store('PUT', `/v1/logins/${U}`, {
+        version: shared.version,
+        blob: sealLogin(key, marker),
+        meta: {
+          ...shared.meta,
+          signedOut: true,
+          removed: true,
+          expiresAt: 0,
+          by: 'PC-B',
+          at: Date.now(),
+        },
+      })
+      expect(put.status).toBe(200)
+      const r = await runLoginSync()
+      expect(existsSync(gone)).toBe(false)
+      expect(r.removed).toEqual([
+        expect.objectContaining({ kind: 'desktop', by: 'PC-B', note: NOTE }),
+      ])
+      const event = (await loginSyncStatus()).events.find((e) => e.action === 'removed')
+      expect(event?.note).toContain(NOTE)
+
+      // Signed in here again after that: a new sign-in, so it goes up and syncs again.
+      const again = await profile(
+        `again-${randomUUID().slice(0, 8)}`,
+        U,
+        Date.now() + 86_400_000,
+        'sk-2',
+      )
+      made.push(again)
+      await runLoginSync()
+      expect(existsSync(again)).toBe(true)
+      expect((await row()).meta).not.toHaveProperty('removed')
+
+      // This PC's owner deletes it with a note (the delete route's two calls): the store tells the other PC.
+      expect((await removeInstance(again, { note: 'Not needed here' })).ok).toBe(true)
+      removeLoginEverywhere(U, {
+        kind: 'desktop',
+        num: null,
+        name: basename(again),
+        note: 'Not needed here',
+      })
+      await runLoginSync()
+      const sent = (await row()).meta
+      expect(sent).toMatchObject({ signedOut: true, removed: true, by: hostname() })
+      expect(JSON.stringify(sent)).not.toContain('Not needed here')
+    } finally {
+      disconnectLoginSync()
+      for (const dir of made)
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // Found 2026-10-16: both PCs renewed a shared desktop login's Claude Code grant within a minute of
+  // each other with the same refresh token. A refresh rotates it, so the second PC was refused and
+  // walled its linked CLI login as "open its desktop app once". Only the PC whose claim the store
+  // takes refreshes now; the others get the renewed copy from the store.
+  test('of two PCs holding one desktop login, only the one whose claim the store takes refreshes its grant', async () => {
+    const U = randomUUID()
+    const HOUR = 3_600_000
+    let dir = ''
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const row = async () =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === U)
+      /** The other PC rewrites the row with the same login and `meta` of its own. */
+      const otherPcWrites = async (meta: Record<string, unknown>) => {
+        const r = await row()
+        const blob = (await store('GET', `/v1/logins/${U}`)).json.blob
+        expect(
+          (
+            await store('PUT', `/v1/logins/${U}`, {
+              version: r.version,
+              blob,
+              meta: { ...r.meta, by: 'other-pc', ...meta },
+            })
+          ).status,
+        ).toBe(200)
+      }
+      const grantKey = `acct:${U}:${U}:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code`
+      const due = Date.now() + HOUR
+      dir = await profile(`renew-shared-${randomUUID()}`, U, 0, 'sk-r')
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          locale: 'en-US',
+          lastKnownAccountUuid: U,
+          'oauth:tokenCacheV2': await encryptSafeStorage(
+            JSON.stringify({
+              [grantKey]: { token: 'old-access', refreshToken: 'old-refresh', expiresAt: due },
+            }),
+            dir,
+          ),
+        }),
+      )
+      await runLoginSync() // up it goes; this PC and the store agree on it
+      /** The token endpoint; each call records whose claim the store's row carried at that moment. */
+      const claims: unknown[] = []
+      const fetchFn = (async () => {
+        claims.push((await row()).meta.renewBy)
+        return Response.json({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 28800,
+        })
+      }) as unknown as typeof fetch
+      const renew = (now: number) =>
+        renewDesktopGrant(dir, { now, fetchFn, running: async () => new Set() })
+
+      // The other PC's copy moved on: this PC waits for it to land instead of refreshing its own.
+      await otherPcWrites({})
+      expect((await renew(Date.now())).state).toBe('skipped')
+      // The other PC claimed the renewal: this PC leaves the grant alone while the claim holds.
+      await runLoginSync()
+      await otherPcWrites({ renewBy: 'other-pc-id', renewUntil: Date.now() + 5 * 60_000 })
+      await runLoginSync()
+      expect((await renew(Date.now())).state).toBe('skipped')
+      // The other PC sent it from a running app, which refreshes its own grant: left to it until it
+      // runs out.
+      await otherPcWrites({ open: true, renewBy: undefined, renewUntil: undefined })
+      await runLoginSync()
+      expect((await renew(Date.now())).state).toBe('skipped')
+      expect(claims).toHaveLength(0)
+
+      // Run out with nobody renewing it: this PC claims first, and only then refreshes.
+      const out = await renew(due + 1)
+      expect(out.state).toBe('renewed')
+      expect(claims).toHaveLength(1)
+      expect(typeof claims[0]).toBe('string')
+      // The next pass sends the renewed grant up and its claim ends with it.
+      await runLoginSync()
+      const sent = await row()
+      expect(sent.meta.renewBy).toBeUndefined()
+      expect(sent.meta.expiresAt).toBe((out as { expiresAt: number }).expiresAt)
+    } finally {
+      disconnectLoginSync()
+      if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   }, 120_000)
 
@@ -313,10 +590,43 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       )
     const login = () =>
       JSON.parse(readFileSync(join(cliDir, '.credentials.json'), 'utf8')).claudeAiOauth
+    // Anthropic's profile read: every desk-* token is the desktop's account, whatever the folder held.
+    const profileReads: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      profileReads.push(
+        (new Headers(init?.headers).get('authorization') ?? '').replace(/^Bearer /, ''),
+      )
+      return Response.json({
+        account: { uuid: randomUUID(), email: 'alex@example.com', full_name: 'Alex Example' },
+        organization: { uuid: randomUUID(), name: 'Example org', organization_type: 'claude_max' },
+      })
+    }) as unknown as typeof fetch
+    // The folder still names the account it held before the link.
+    writeFileSync(
+      join(cliDir, '.claude.json'),
+      JSON.stringify({
+        numStartups: 4,
+        oauthAccount: {
+          accountUuid: randomUUID(),
+          emailAddress: 'pc-two@example.com',
+          fullName: 'Example Owner',
+        },
+      }),
+    )
     try {
       await desktopHas('desk-1', far)
       linkCliInstanceToDesktop(id, dir, 'feeds')
       expect(await feedLinkedCliLogins()).toBe(1)
+      // The folder now names the fed login's account, keeps the CLI's own settings, and the next pass
+      // reads no profile for the same token.
+      expect(cliAccountIdentity(cliDir)).toEqual({
+        email: 'alex@example.com',
+        name: 'Alex Example',
+      })
+      expect(JSON.parse(readFileSync(join(cliDir, '.claude.json'), 'utf8')).numStartups).toBe(4)
+      await feedLinkedCliLogins()
+      expect(profileReads).toEqual(['desk-1'])
       // The Claude Code grant, and no refresh token: that one stays the desktop app's.
       expect(login()).toEqual({
         accessToken: 'desk-1',
@@ -343,10 +653,130 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       )
       expect(await feedCliFromDesktop(getCliInstance(id)!)).toBe('own-login')
       expect(login().accessToken).toBe('own')
+      // A renewed grant is one more profile read; a sign-in of the folder's own is never read.
+      await feedLinkedCliLogins()
+      expect(profileReads).toEqual(['desk-1', 'desk-2'])
     } finally {
+      globalThis.fetch = realFetch
       deleteCliInstance(id, getCliInstance(id)?.name)
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
+  })
+
+  // Found 2026-10-16 (efficiency audit sweep). A running app refreshes its grants and rewrites config.json on its
+  // own, so after a logout on the other PC a changed token cache written after the logout went back up as a new
+  // sign-in. And the latest grant is a year-long one where a profile has it, minted at or after a sign-in but not
+  // always anew at the next one (seen 2026-10-16 on this PC's profiles), so an older copy holding one beat a newer
+  // sign-in without one.
+  describe('which copy is newer', () => {
+    const DAY = 86_400_000
+    const SESSION =
+      'c:o:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code'
+    const YEAR_LONG = 'c:o:https://api.anthropic.com:user:inference user:file_upload user:profile'
+    const tokens = (session: number, yearLong?: number) =>
+      JSON.stringify({
+        [SESSION]: { token: `s-${session}`, refreshToken: `rs-${session}`, expiresAt: session },
+        ...(yearLong ? { [YEAR_LONG]: { token: `y-${yearLong}`, expiresAt: yearLong } } : {}),
+      })
+    /** One pass's context over a store holding `id`'s row, and what this PC last agreed on for it. */
+    function passOver(
+      id: string,
+      row: { version: number; signedOut: boolean; at: number },
+      agreedVersion: number,
+      theirs: PortableDesktopLogin | null,
+    ) {
+      const uploads: PortableDesktopLogin[] = []
+      const ctx = {
+        store: new Map([[id, { ...row, num: 9, kind: 'desktop', name: 'copy' }]]),
+        state: { [id]: { version: agreedVersion, hash: 'the tokens this PC last shared' } },
+        excluded: new Set<string>(),
+        out: { pushed: 0, landed: 0, unchanged: 0, problems: [], arrived: [] },
+        upload: async (login: PortableDesktopLogin) => {
+          uploads.push(login)
+          return row.version + 1
+        },
+        download: async (uuid: string) => (uuid === id ? theirs : null),
+        markSignedOut: async () => null,
+        confirmGone: () => false,
+        clearGone: () => {},
+        dropUsage: () => {},
+        note: () => {},
+      } as unknown as DesktopSyncContext
+      return { ctx, uploads }
+    }
+    const closed = async () => new Set<string>()
+
+    test('a refresh after a logout on the other PC signs out here; a sign-in after it goes up', async () => {
+      const [stale, fresh] = [randomUUID(), randomUUID()]
+      const loggedOutAt = Date.now() - 60_000
+      // Signed in before the logout; its tokens refreshed and config.json rewritten since.
+      const a = await profile(
+        `stale-${stale.slice(0, 8)}`,
+        stale,
+        Date.now() + DAY,
+        'sk-old',
+        'sessionKey',
+        {
+          signedInAt: loggedOutAt - DAY,
+        },
+      )
+      const made = [a]
+      try {
+        const one = passOver(stale, { version: 3, signedOut: true, at: loggedOutAt }, 2, null)
+        await syncDesktopLogins(one.ctx, closed)
+        expect(one.uploads).toEqual([])
+        expect(await readDesktopTokens(a)).toBeNull()
+        expect(one.ctx.state[stale]).toEqual({ version: 3, hash: '' })
+        // Signed in again after the logout.
+        const b = await profile(
+          `fresh-${fresh.slice(0, 8)}`,
+          fresh,
+          Date.now() + DAY,
+          'sk-new',
+          'sessionKey',
+          {
+            signedInAt: loggedOutAt + 1000,
+          },
+        )
+        made.push(b)
+        const two = passOver(fresh, { version: 3, signedOut: true, at: loggedOutAt }, 2, null)
+        await syncDesktopLogins(two.ctx, closed)
+        expect(two.uploads.map((l) => l.id)).toEqual([fresh])
+        expect(await readDesktopTokens(b)).not.toBeNull()
+      } finally {
+        for (const dir of made)
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 60_000)
+
+    test('the later session grant is the newer copy, whatever a year-long grant beside it says', async () => {
+      const id = randomUUID()
+      const now = Date.now()
+      // Here: an older sign-in with its year-long grant. The store: the other PC's newer one, which has none yet.
+      const dir = await profile(`grants-${id.slice(0, 8)}`, id, 0, 'sk-mine', 'sessionKey', {
+        tokens: tokens(now + 10 * DAY, now + 365 * DAY),
+      })
+      const theirs: PortableDesktopLogin = {
+        kind: 'desktop',
+        id,
+        num: 9,
+        name: 'copy',
+        tokenCacheV2: tokens(now + 30 * DAY),
+        tokenCache: null,
+        cookies: [cookie('sk-theirs')],
+        expiresAt: now + 30 * DAY,
+      }
+      try {
+        const { ctx, uploads } = passOver(id, { version: 3, signedOut: false, at: now }, 2, theirs)
+        await syncDesktopLogins(ctx, closed)
+        expect(uploads).toEqual([])
+        expect(ctx.out.landed).toBe(1)
+        const landed = JSON.parse((await readDesktopTokens(dir))?.v2 ?? '{}')
+        expect(landed[SESSION]?.expiresAt).toBe(now + 30 * DAY)
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 60_000)
   })
 
   describe('a profile with no claude.ai sign-in cookie is signed out', () => {
@@ -409,7 +839,6 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
           ],
         ]),
         state: {},
-        excluded: new Set<string>(),
         out: { pushed: 0, landed: 0, unchanged: 0, problems: [] },
         upload: async () => null,
         download: async (uuid: string) => (uuid === id ? login : null),

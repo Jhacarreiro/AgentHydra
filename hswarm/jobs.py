@@ -232,6 +232,14 @@ def _tripped(leg: str) -> str | None:
     return msg if time.monotonic() < until else None
 
 
+def _route_notes(climayte_note: dict | None, free_note: dict | None) -> dict | None:
+    """selection.route for a task that both CliMayte and the Free accounts turned away: CliMayte's note, with Free's under
+    `free`, so a Free try is not hidden behind CliMayte's note."""
+    if climayte_note and free_note:
+        return {**climayte_note, "free": free_note}
+    return climayte_note or free_note
+
+
 def _spent_legs(model: str, plan: list[str]) -> list[str]:
     """The legs of `model`'s route that route_plan dropped because their provider has no key with credit. A plan
     that is not drawn from that route (an unknown model's `[model]`) has nothing cut short."""
@@ -268,7 +276,8 @@ def _leg_health(leg: str) -> tuple[str, str]:
     pool = keys.pool_for(prov) if prov else None
     if pool is None:
         return "nokey", f"{leg} ({prov or 'unknown provider'}: no key on this machine)"
-    wake = pool.soonest_wake(free=config.api_model_id(leg).endswith(":free"))
+    api_id = config.api_model_id(leg)
+    wake = pool.soonest_wake(free=api_id.endswith(":free"), model=api_id)
     if wake <= NO_CREDIT_TRIP_S:
         return "ok", f"{leg} ({prov}: " + ("ready)" if wake == 0 else f"every key resting, the soonest free in {wake:.0f}s)")
     if wake == float("inf"):
@@ -284,7 +293,7 @@ def route_health(model: str) -> dict:
     return {"serves": "ok" in states or "dead" not in states, "legs": [note for _, note in legs]}
 
 
-# Owner, Michael, 2026-09-25: "ZSwarm should deal with fucking everything. It should deal with which agent to send it
+# Owner, 2026-09-25: "ZSwarm should deal with fucking everything. It should deal with which agent to send it
 # to, which keys are working ... and then rerun them if they're dead." A pinned model is the caller's PREFERENCE, not
 # a reason to fail: a job pinned to a route whose every key was disabled was refused whole (NoCreditLeft), and 15 of
 # 67 pinned builders died PoolSaturated after 120 s with "no other leg", while the same work on the code profile ran
@@ -632,6 +641,78 @@ def _cached_result(task: Task, row: dict, job_id: str) -> Result:
 CANCEL_REQUEST = "cancel"  # a file in a job's folder: another process asking the one running the job to cancel it
 
 
+def _append_result(job: Job, task: Task, res: Result) -> None:
+    with (job.dir / "results.jsonl").open("a", encoding="utf-8") as f:
+        # `key` is the task's content hash: what a later resume_from_job matches this answer by.
+        f.write(json.dumps({**res.as_dict(), "key": job.task_keys.get(task.id, "")}, ensure_ascii=False) + "\n")
+
+
+def _write_transcript(job: Job, task: Task, transcript: object) -> None:
+    tdir = job.dir / "transcripts"
+    tdir.mkdir(exist_ok=True)
+    # The worker's own record, with anything long (the shared system prompt above all) kept once
+    # per job as a blob: these files were 163 KiB of identical prompt each before this. A routed task's
+    # is {"routes": [{model, transcript}]}, so the packing reaches every depth (blobs._walk).
+    packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
+    (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+def _ledger_row(job: Job, task: Task, res: Result) -> dict:
+    return {
+        "id": uuid.uuid4().hex,
+        "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": _ledger_provider(res),
+        "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
+        **_ledger_route(res),
+        **_ledger_selection(task, res),
+        **_ledger_outcome(res),
+        **({} if res.cached_from else billed_fields(res)),
+        **_route_fields(res),
+        **ledger_fields(job.caller),
+    }
+
+
+def _ledger_provider(res: Result) -> str:
+    return "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model)
+
+
+def _ledger_route(res: Result) -> dict:
+    return {
+        "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
+        "failover": ",".join(res.failover) or None,
+        "failover_errors": getattr(res, "failover_errors", None) or None,
+        **error_fields(res),
+        **({"token_basis": "chars/4"} if _via_free(res) else {}),
+    }
+
+
+def _ledger_selection(task: Task, res: Result) -> dict:
+    selected = res.selection.get("selected") or {}
+    return {
+        "selection_profile": res.selection.get("profile"),
+        "benchmark_slug": selected.get("benchmark_slug"),
+        "reasoning_effort": selected.get("reasoning_effort", task.reasoning_effort),
+        # The UNBIASED benchmark cost the pick is judged on, beside the load bias that only ordered it.
+        "benchmark_cost_usd": selected.get("benchmark_cost_usd"),
+        "load_bias": selected.get("load_bias"),
+    }
+
+
+def _ledger_outcome(res: Result) -> dict:
+    return {
+        "stalled": ",".join(getattr(res, "stalled", None) or []) or None,
+        "loop": res.loop, "loop_warnings": res.loop_warnings or None,
+        # How many files the task wrote: the rows ledger_rows later joins a survival score onto.
+        "files_changed": len(res.files_changed) or None,
+        "cached": res.cached_from or None,  # reused from that job's journal: no call made, no spend
+        "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
+        # The leg that gave up: the row's own model is the one that answered, so without this the ledger
+        # could not say which models give up on which profiles (the learning the owner asked for, 2026-10-13).
+        "escalated_from": res.escalation.get("from") if res.escalation else None,
+        "liveness": res.liveness or None,
+        "taint": res.taint or None,
+    }
+
+
 class JobManager:
     def __init__(self, client: DeepSeekClient | None = None):
         self._client = client  # the default provider's (DeepSeek) client; tests inject a fake
@@ -698,7 +779,7 @@ class JobManager:
         return self.client.pool.pick()
 
     def route(self, model: str) -> str:
-        """The path a task takes right now (owner ask, Michael, 2026-09-17): the cheapest PRIMARY path with
+        """The path a task takes right now (owner ask, 2026-09-17): the cheapest PRIMARY path with
         credit, or - when no primary path has any - the cheapest fallback. Direct DeepSeek is primary at
         every hour; the router legs back it up (config.ROUTES says why). Compared on the measured token
         mix (config.REFERENCE_MIX), never on one rate."""
@@ -784,13 +865,14 @@ class JobManager:
             # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
             ask_id = f"ask-{uuid.uuid4().hex[:8]}"
             served, miss = await free_route.consult(ask_id, free)
+            self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
             if served is not None:
                 return served
-            self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
         from .dispatch import ask_selected
         res = await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
-        if miss and miss.get("short"):  # no Free account had room: the ask's ledger line says so (ledger.short_fields)
-            res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or miss}
+        if miss:  # the Free try that did not serve the ask rides on its API row: its short (ledger.short_fields) or its miss
+            route_now = (res.selection or {}).get("route") or {}
+            res.selection = {**(res.selection or {}), "route": {**route_now, **(miss if miss.get("short") else {"free": miss})}}
         return res
 
     async def ask_role(self, role: str, prompt: str, **kw) -> Result:
@@ -822,34 +904,54 @@ class JobManager:
 
     @staticmethod
     def _book_free_miss(note: dict | None, job_id: str, task_id: str, caller: dict | None) -> None:
-        """A Free try HSwarm did not accept is an extra ledger row (the API run that follows is the task)."""
+        """A Free try HSwarm did not accept is an extra ledger row (the API run that follows is the task). A task that moved
+        on to another Free account carries its earlier failed tries under `earlier` (free_route.consult): each is a row."""
         try:
-            if row := free_miss_row(note or {}, job_id, task_id, caller):
-                ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}) + "\n")
+            for one in [*(note or {}).pop("earlier", []), note or {}]:
+                if row := free_miss_row(one, job_id, task_id, caller):
+                    ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}) + "\n")
         except Exception:  # noqa: BLE001 - bookkeeping never fails the task
             pass
 
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
-        # Before the plan's own route runs: an agentic task goes to an idle CliMayte account first, at no extra cost (climayte_route.py).
-        served, route_note = await climayte_route.consult(job.id, task, caller=job.caller)
+        # A tool task the Free accounts may take asks them first (free_route.py), then CliMayte, then the paid API:
+        # CliMayte cannot take web tools, and Free is the cheaper try for read work too. An edit or all task Free may take
+        # (config.ROUTE_VIA_FREE_EDIT_PROFILES, _SHELL_PROFILES) goes there first as well, its leg in a scratch copy of its
+        # folder; other edit and all tasks, and tool-free ones, keep CliMayte first, then Free (an idle CliMayte account
+        # costs nothing extra either).
+        free_first = task.tools != "none" and free_route.eligible(task)
+        free_note = None
+        if free_first:
+            served, free_note = await free_route.consult(job.id, task)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        served, climayte_note = await climayte_route.consult(job.id, task, caller=job.caller)
         if served is not None:
             return served, None
         # Let through at submit for CliMayte, which did not take it: a route that cannot serve at all is refused now,
         # as submit would have, not run into its timeouts.
-        if route_note and route_note.get("floor_miss") and (why := no_route_left([task])):
+        if climayte_note and climayte_note.get("floor_miss") and (why := no_route_left([task])):
             res = Result(id=task.id, backend=task.backend, model=task.model, status="error", error=why,
                          started=now_iso(), finished=now_iso())
-            res.selection = {"route": route_note}
-            climayte_route.mark_dropped(res, route_note)
+            res.selection = {"route": _route_notes(climayte_note, free_note)}
+            climayte_route.mark_dropped(res, res.selection["route"])
             return res, None
-        # then the owner's Free web accounts, for a tool-free task (free_route.py)
-        served, free_note = await free_route.consult(job.id, task)
-        if served is not None:
-            return served, None
-        self._book_free_miss(free_note, job.id, task.id, job.caller)
-        route_note = route_note or free_note
+        if not free_first:
+            served, free_note = await free_route.consult(job.id, task)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        # No Free account had room and CliMayte did not take the task: the paid API is next, so the job waits for a Free
+        # account with room first (route_via_free_wait_s).
+        if free_note and free_note.get("short"):
+            served, free_note = await free_route.consult(job.id, task, wait=True)
+            self._book_free_miss(free_note, job.id, task.id, job.caller)
+            if served is not None:
+                return served, None
+        route_note = _route_notes(climayte_note, free_note)
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
         if route_note and isinstance(res, Result):  # a later offer to CliMayte in the walk (dispatch._climayte_before) is newer
             res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or route_note}
@@ -1603,48 +1705,11 @@ class JobManager:
         record_tree_spend(task, res.cost_usd)  # a no-op outside a spawn tree
         try:
             job.dir.mkdir(parents=True, exist_ok=True)
-            with (job.dir / "results.jsonl").open("a", encoding="utf-8") as f:
-                # `key` is the task's content hash: what a later resume_from_job matches this answer by.
-                f.write(json.dumps({**res.as_dict(), "key": job.task_keys.get(task.id, "")}, ensure_ascii=False) + "\n")
+            _append_result(job, task, res)
             job._journaled.add(task.id)  # a checkpoint need not write this answer again (Job.save)
             if transcript is not None:
-                tdir = job.dir / "transcripts"
-                tdir.mkdir(exist_ok=True)
-                # The worker's own record, with anything long (the shared system prompt above all) kept once
-                # per job as a blob: these files were 163 KiB of identical prompt each before this. A routed task's
-                # is {"routes": [{model, transcript}]}, so the packing reaches every depth (blobs._walk).
-                packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
-                (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
-            row = {
-                "id": uuid.uuid4().hex,
-                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model),
-                "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
-                "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
-                "failover": ",".join(res.failover) or None,
-                "failover_errors": getattr(res, "failover_errors", None) or None,
-                **error_fields(res),
-                **({"token_basis": "chars/4"} if _via_free(res) else {}),
-                "selection_profile": res.selection.get("profile"),
-                "benchmark_slug": (res.selection.get("selected") or {}).get("benchmark_slug"),
-                "reasoning_effort": (res.selection.get("selected") or {}).get("reasoning_effort", task.reasoning_effort),
-                # The UNBIASED benchmark cost the pick is judged on, beside the load bias that only ordered it.
-                "benchmark_cost_usd": (res.selection.get("selected") or {}).get("benchmark_cost_usd"),
-                "load_bias": (res.selection.get("selected") or {}).get("load_bias"),
-                "stalled": ",".join(getattr(res, "stalled", None) or []) or None,
-                "loop": res.loop, "loop_warnings": res.loop_warnings or None,
-                # How many files the task wrote: the rows ledger_rows later joins a survival score onto.
-                "files_changed": len(res.files_changed) or None,
-                "cached": res.cached_from or None,  # reused from that job's journal: no call made, no spend
-                "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
-                # The leg that gave up: the row's own model is the one that answered, so without this the ledger
-                # could not say which models give up on which profiles (the learning the owner asked for, 2026-10-13).
-                "escalated_from": res.escalation.get("from") if res.escalation else None,
-                "liveness": res.liveness or None,
-                "taint": res.taint or None,
-                **({} if res.cached_from else billed_fields(res)),
-                **_route_fields(res),
-                **ledger_fields(job.caller),
-            }
+                _write_transcript(job, task, transcript)
+            row = _ledger_row(job, task, res)
             if getattr(res, "edit_snapshot", None):
                 survival.save(job.id, task.id, res.model, res.finished or now_iso(), res.edit_snapshot)
             ledgerstore.append_line(json.dumps(row) + "\n")

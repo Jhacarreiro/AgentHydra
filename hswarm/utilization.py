@@ -1,7 +1,7 @@
 """Every use of the swarm, costed and compared: one row per hswarm_run job and per hswarm_ask in a
 small SQLite database (~/.hswarm/hswarm.sqlite), with what the same work would have cost as Claude
 sub-agents on the ORCHESTRATOR's model at the time it asked, and a running total across every
-machine (owner ask, Michael, 2026-09-15 evening).
+machine (owner ask, 2026-09-15 evening).
 
 The estimate is measured, never assumed. A sub-agent PROFILE is the median token buckets of one real
 Claude sub-agent on this machine over the last 14 recorded days (Sonnet ones when there are enough),
@@ -31,6 +31,7 @@ import platform
 import secrets
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 
 from . import claude_usage, config, ledgerstore
@@ -141,12 +142,12 @@ def _backfill_days(c: sqlite3.Connection, batch: int = 500) -> None:
 
 
 def _migrate(c: sqlite3.Connection) -> None:
-    """Run numbers (Michael, 2026-09-16: "number each run so I can refer to one"): `seq` counts up per machine in
+    """Run numbers (the other owner, 2026-09-16: "number each run so I can refer to one"): `seq` counts up per machine in
     time order and never changes, so "run 196" means the same row next month. Added to DBs from before it."""
     cols = {r[1] for r in c.execute("PRAGMA table_info(utilizations)")}
     if "seq" not in cols:
         c.execute("ALTER TABLE utilizations ADD COLUMN seq INTEGER")
-    if "caller_account" not in cols:  # Michael, 2026-09-17: which ACCOUNT ordered this run, by its stable hashed id
+    if "caller_account" not in cols:  # The other owner, 2026-09-17: which ACCOUNT ordered this run, by its stable hashed id
         c.execute("ALTER TABLE utilizations ADD COLUMN caller_account TEXT")
     if "task_tokens" not in cols:  # each answered task's own [cache hits, cache misses, output]: caps its estimate at its size
         c.execute("ALTER TABLE utilizations ADD COLUMN task_tokens TEXT")
@@ -158,7 +159,7 @@ def _migrate(c: sqlite3.Connection) -> None:
                 if "duplicate column" not in str(e).lower():
                     raise
     day_cols = {r[1] for r in c.execute("PRAGMA table_info(claude_days)")}
-    for col in ("by_model", "rules"):  # Michael, 2026-09-16: which models did the Claude work, and were the rulings followed
+    for col in ("by_model", "rules"):  # The other owner, 2026-09-16: which models did the Claude work, and were the rulings followed
         if col not in day_cols:
             c.execute(f"ALTER TABLE claude_days ADD COLUMN {col} TEXT")
     if "tokens" not in day_cols:  # the day's own token buckets: the page's token view, beside the dollar one
@@ -226,6 +227,10 @@ def _mode(values: list[str]) -> str:
     return max(set(values), key=values.count) if values else ""
 
 
+SESSION_RECHECK_S = 60.0  # a session the account cache does not know reads AgentHydra's tables again at most this often
+_rechecked: dict[str, float] = {}  # session id -> when caller_account last read them again for it (monotonic)
+
+
 def caller_account(caller: dict | None) -> str:
     """The stable hashed id of the account that ordered a run: by its session first, by the instance folder it
     ran under otherwise (folder names are reused, so the session is the better key). "" when nothing knows it."""
@@ -234,10 +239,25 @@ def caller_account(caller: dict | None) -> str:
     c = caller or {}
     sid = c.get("session_id") or ""
     res = accounts.resolver()
-    if sid and sid not in res["by_session"]:  # a session started since the cache was read is not "unknown" yet
+    if sid and sid not in res["by_session"] and _recheck_due(sid):  # a session started since the cache was read is not "unknown" yet
         res = accounts.resolver(fresh=True)
     found = accounts.of_session(sid, res) or accounts.of_instance(c.get("instance") or "", res)
     return found["account"] if found else ""
+
+
+def _recheck_due(sid: str) -> bool:
+    """Whether a session the account cache does not know may read it again now. Every ledger line looks its caller up,
+    and such a session read AgentHydra's session table and caches again for each one: about 12 ms a line on the shared
+    server's event loop (2026-10-16)."""
+    now = time.monotonic()
+    at = _rechecked.get(sid)
+    if at is not None and now - at < SESSION_RECHECK_S:
+        return False
+    if len(_rechecked) > 1024:  # a long-lived server meets many sessions: forget those whose window has passed
+        for old in [s for s, t in list(_rechecked.items()) if now - t >= SESSION_RECHECK_S]:
+            _rechecked.pop(old, None)
+    _rechecked[sid] = now
+    return True
 
 
 def _caller_fields(caller: dict | None) -> dict:
@@ -588,21 +608,36 @@ def backfill(jobs_dir: Path | None = None, ledger: Path | None = None) -> dict:
     try:
         have = {r[0] for r in c.execute("SELECT id FROM utilizations")}
         prof = current_profile(c)
-        from . import archive
+        from . import archive, history
         from .job import fold_journal
 
         models: dict[str, str] = {}
+
+        def store(job_id: str) -> None:
+            doc = archive.read_json(job_id, "job.json")
+            if not isinstance(doc, dict):
+                return
+            row = _job_row_from_doc(job_id, fold_journal(job_id, doc), models)  # a finished record's results are in its journal
+            if row is None:
+                return
+            _store_priced(c, row, prof)
+            added["jobs"] += 1
+
+        cold = history.cold_jobs()
+        by_day: dict[str, set[str]] = {}
         for job_id in archive.job_ids():  # folders and archives alike
             if job_id in have:
                 continue
-            doc = archive.read_json(job_id, "job.json")
-            if not isinstance(doc, dict):
-                continue
-            row = _job_row_from_doc(job_id, fold_journal(job_id, doc), models)  # a finished record's results are in its journal
-            if row is None:
-                continue
-            _store_priced(c, row, prof)
-            added["jobs"] += 1
+            if job_id in cold and not archive.job_dir(job_id).is_dir() and not archive.archive_path(job_id).is_file():
+                by_day.setdefault(cold[job_id], set()).add(job_id)  # read a day at a time below, not one pass each
+            else:
+                store(job_id)
+        for day in sorted(by_day, reverse=True):
+            try:
+                for job_id in history.each_cold_job(day, by_day[day]):  # one pass of the day's archive (taskstore.index_jobs)
+                    store(job_id)  # each job is in the cold cache as it is yielded, so its reads answer from memory
+            except history.READ_ERRORS:
+                continue  # a day that will not read is left out, as before
         if ledger.exists() or ledgerstore.archives(ledger):
             # Archives first, then the live file: a line keeps the index it had before the months were rotated out.
             for i, line in enumerate(ledgerstore.iter_lines(None, ledger)):
@@ -946,7 +981,7 @@ def totals(c: sqlite3.Connection, machine: str | None = None) -> dict:
     """The running total: every machine's rows in this DB (imported shards included), or one machine's, with
     the Claude work done beside it on the same days and the share the swarm's estimate is of the two.
 
-    Three units, because a list-price dollar is not what a subscription charges (owner ask, Michael, 2026-09-17):
+    Three units, because a list-price dollar is not what a subscription charges (owner ask, 2026-09-17):
     `*_usd` is Anthropic's list price, `*_tokens` is the same work in tokens, and the plan figures convert a
     list dollar at what this fleet's plans actually cost per list dollar (see plan_rates)."""
     args = (machine,) if machine else ()
@@ -985,7 +1020,7 @@ def plan_rates(c: sqlite3.Connection) -> dict:
 
     rate = (the plans of the accounts that DID work, charged per day they worked) / (the list-price value of the
     work they did on those days). On a subscription that is the honest conversion: list price is what the API
-    would have billed, the rate is what the plan billed instead (owner ask, Michael, 2026-09-17: count the
+    would have billed, the rate is what the plan billed instead (owner ask, 2026-09-17: count the
     accounts actually used, not every account that is open). Only complete days with a plan cost count; a
     machine with none of its own is priced at the fleet rate and flagged `estimated`. Nothing measured -> None."""
     rows = [dict(r) for r in c.execute(

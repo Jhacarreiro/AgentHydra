@@ -88,11 +88,16 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, manag
     sessionId: w.sessionId ?? null,
     originSessionId,
     originWorkerId,
+    ...(w.chat ? { chat: true } : {}),
     sessions: w.sessions ?? [],
     startedAt: w.createdAt ?? null,
     endedAt: active ? null : (w.updatedAt ?? null),
     lastActivityAt: w.updatedAt ?? null,
     lastActivity: w.lastActivity ?? null,
+    doing: w.doing ?? null,
+    doingSince: w.doingSince ?? null,
+    doingKind: w.doingKind ?? null,
+    lastStepAt: w.lastStepAt ?? null,
     usedPct: w.used?.pct ?? null,
     tokens: tokenTotal(w.tokens),
     verdict: w.verdicts?.at(-1)?.verdict ?? null,
@@ -208,6 +213,10 @@ export function mapRemoteWorker(w: AhRemoteWorker, pc: string, managers: Readonl
     endedAt: active ? null : (w.updatedAt ?? null),
     lastActivityAt: w.updatedAt ?? null,
     lastActivity: w.lastActivity ?? null,
+    doing: w.doing ?? null,
+    doingSince: w.doingSince ?? null,
+    doingKind: w.doingKind ?? null,
+    lastStepAt: w.lastStepAt ?? null,
     usedPct: null,
     tokens: null,
     verdict: w.verdict ?? null,
@@ -260,7 +269,8 @@ export interface ChatWorkerRef {
  * handoff gives the worker a new session and keeps the old ones), when its origin is the chat's own worker, or when its
  * origin is a worker that (through any depth, cycle-safe) belongs. Workers already matched (`workerIds`) still count,
  * so a chain survives AgentHydra dropping a middle worker from its list. Another PC's workers never belong: their
- * ids may equal this PC's (the chat's matched `workerIds` among them).
+ * ids may equal this PC's (the chat's matched `workerIds` among them). Another Desk chat's worker (`chat`) never
+ * belongs either, and its dispatches are not walked to: they are that chat's.
  */
 export function workersOfChat(all: readonly CliMayteWorker[], chat: ChatWorkerRef): CliMayteWorker[] {
   const { workers, byId, byOriginSession, byOriginWorker } = workerIndexOf(all)
@@ -273,7 +283,7 @@ export function workersOfChat(all: readonly CliMayteWorker[], chat: ChatWorkerRe
   const mine = new Set<string>()
   const queue: string[] = []
   const take = (id: string): void => {
-    if (id === chat.workerId || mine.has(id)) return
+    if (id === chat.workerId || mine.has(id) || isAnotherChatWorker(byId, chat, id)) return
     mine.add(id)
     queue.push(id)
   }
@@ -286,6 +296,28 @@ export function workersOfChat(all: readonly CliMayteWorker[], chat: ChatWorkerRe
   if (chat.workerId) for (const child of byOriginWorker.get(chat.workerId) ?? []) take(child)
   for (let i = 0; i < queue.length; i++) for (const child of byOriginWorker.get(queue[i]!) ?? []) take(child)
   return mine.size ? workers.filter((w) => mine.has(w.id)) : []
+}
+
+/**
+ * The stored ids of a chat that still belong to it: not another Desk chat's worker (`others`: the ids every other chat
+ * runs as, and any listed worker flagged `chat`), and not reached only through one. An id the list no longer holds is
+ * kept unless it is another chat's.
+ */
+export function keptWorkerIds(all: readonly CliMayteWorker[], chat: ChatWorkerRef, others: ReadonlySet<string>): string[] {
+  const { byId } = workerIndexOf(all)
+  return (chat.workerIds ?? []).filter((id) => {
+    const seen = new Set<string>()
+    for (let cur: string | undefined = id; cur && !seen.has(cur); cur = byId.get(cur)?.originWorkerId ?? undefined) {
+      if (cur === chat.workerId) return true
+      if (others.has(cur) || isAnotherChatWorker(byId, chat, cur)) return false
+      seen.add(cur)
+    }
+    return true
+  })
+}
+
+function isAnotherChatWorker(byId: ReadonlyMap<string, CliMayteWorker>, chat: ChatWorkerRef, id: string): boolean {
+  return id !== chat.workerId && byId.get(id)?.chat === true
 }
 
 interface WorkerIndex {

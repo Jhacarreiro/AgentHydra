@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
+import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, promotionFor, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
 import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
 import { AsyncFile } from '../async-file'
@@ -46,6 +46,8 @@ function load(text: string): Data {
   // Older records lack lastSignedInAt: a signed-in account was last signed in when it was last checked.
   for (const i of value.instances) if (typeof i.lastSignedInAt !== 'number') i.lastSignedInAt = i.loggedIn ? i.checkedAt ?? null : null
   for (const i of value.instances) if (typeof i.autoName !== 'boolean') i.autoName = generic(i.name)
+  // Marks made while every paid plan counted ("Now on Go", before 2026-10-14) go once the move changed nothing to promote.
+  for (const i of value.instances) if (i.planChange && promotionFor(i.provider, i.planChange.from) === promotionFor(i.provider, i.planChange.to)) i.planChange = null
   for (const t of value.threads) if (t.status === 'running') { t.status = 'failed'; t.error = 'Desk restarted during the request. Read this chat before sending again.' }
   return value
 }
@@ -77,18 +79,19 @@ export class FreeStorage {
       catch (error) { if (!this.restore('damaged')) throw error }
     }
   }
-  create(provider: FreeProvider, name?: string): FreeInstance {
-    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
-    mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
-    this.data.instances.push(instance)
-    this.save()
-    return instance
+  create(provider: FreeProvider, name?: string, pool?: Pick<FreeInstance, 'poolState' | 'poolAdmission'>): FreeInstance {
+    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null, ...pool }
+    return this.insert(instance)
   }
   /** An account another PC shares (free-instances/sync.ts): its id and name, and its number unless one here has it. */
   adopt(shared: Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>): FreeInstance {
     const taken = this.data.instances.some(i => i.num === shared.num)
     const num = taken ? Math.max(0, ...this.data.instances.map(i => i.num)) + 1 : shared.num
     const instance: FreeInstance = { ...shared, num, autoName: generic(shared.name), loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
+    return this.insert(instance)
+  }
+  /** Adds a new account and its state folder, then saves. */
+  private insert(instance: FreeInstance): FreeInstance {
     mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
     this.data.instances.push(instance)
     this.save()
@@ -122,6 +125,15 @@ export class FreeStorage {
     if (Date.now() - this.backedUpAt < BACKUP_EVERY_MS) return
     this.backedUpAt = Date.now()
     void this.backupWriter.write(json)
+  }
+  /** Admissions need an acknowledged atomic snapshot, rather than a fire-and-forget save. */
+  async saveDurable(timeoutMs = 10_000): Promise<boolean> {
+    const json = JSON.stringify(this.data)
+    const saved = this.writer.write(json)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([saved, new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) })])
+    } finally { clearTimeout(timer) }
   }
   /** Server shutdown: what is queued but not on disk yet is written now. Call it after the service's last save. */
   flushSync(): void {

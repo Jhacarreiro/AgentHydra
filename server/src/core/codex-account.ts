@@ -25,6 +25,7 @@
 // Nothing here throws for expected failure conditions (missing/corrupt auth.json, an unparseable
 // JWT, network/timeout/401, malformed JSON) — every path returns a CodexAccount instead.
 
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { UsageLimit, UsageSnapshot } from '../types'
@@ -84,6 +85,8 @@ export interface CodexAccountCacheEntry {
   orgTitle: string | null
   subscriptionActiveUntil: string | null
   resolvedAt: string
+  /** Value-blind proof that this exact saved grant answered 401, never the grant itself. */
+  authFailure?: { fingerprint: string; at: string }
 }
 
 // ----------------------------------------------------------------------------
@@ -170,6 +173,21 @@ interface CodexAuthFile {
     account_id?: string
   } | null
   last_refresh?: string
+}
+
+function loginFingerprint(auth: CodexAuthFile): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        mode: auth.auth_mode,
+        key: auth.OPENAI_API_KEY,
+        access: auth.tokens?.access_token,
+        refresh: auth.tokens?.refresh_token,
+        identity: auth.tokens?.id_token,
+        account: auth.tokens?.account_id,
+      }),
+    )
+    .digest('hex')
 }
 
 /** Read and parse `<codexHome>/auth.json`, or null when absent/unreadable/corrupt. */
@@ -301,6 +319,9 @@ function writeCodexCacheEntry(codexHome: string, entry: CodexAccountCacheEntry):
       orgTitle: entry.orgTitle ?? null,
       subscriptionActiveUntil: entry.subscriptionActiveUntil ?? null,
       resolvedAt: entry.resolvedAt ?? new Date().toISOString(),
+      ...(entry.authFailure
+        ? { authFailure: { fingerprint: entry.authFailure.fingerprint, at: entry.authFailure.at } }
+        : {}),
     }
 
     const file = codexAccountsCacheFile()
@@ -367,7 +388,7 @@ interface CodexUsageResponse {
 async function fetchCodexUsage(
   token: string,
   accountId: string | null,
-): Promise<CodexUsageResponse | null> {
+): Promise<{ body: CodexUsageResponse | null; status: number | null }> {
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)
@@ -384,14 +405,14 @@ async function fetchCodexUsage(
         headers,
         signal: controller.signal,
       })
-      if (!res.ok) return null
-      return (await res.json()) as CodexUsageResponse
+      if (!res.ok) return { body: null, status: res.status }
+      return { body: (await res.json()) as CodexUsageResponse, status: res.status }
     } finally {
       clearTimeout(timeout)
     }
   } catch {
     // network error / DNS / timeout / abort / malformed JSON
-    return null
+    return { body: null, status: null }
   }
 }
 
@@ -654,8 +675,9 @@ export function localCodexAccount(codexHome: string, source = 'offline'): CodexA
 
     const fields = mergeCachedCodexIdentity(local, cached, usable)
     const planLabel = codexPlanLabel(fields.planType)
+    const rejected = usable && cached?.authFailure?.fingerprint === loginFingerprint(auth)
     return newCodexAccount({
-      status: usable ? 'cache' : 'offline',
+      status: rejected ? 'loggedout' : usable ? 'cache' : 'offline',
       authMode: 'chatgpt',
       email: fields.email,
       name: fields.name,
@@ -665,7 +687,7 @@ export function localCodexAccount(codexHome: string, source = 'offline'): CodexA
       userId: fields.userId,
       orgTitle: fields.orgTitle,
       subscriptionActiveUntil: fields.subscriptionActiveUntil,
-      source,
+      source: rejected ? 'auth_rejected' : source,
       label: buildLabel(fields.name, fields.email, planLabel),
     })
   } catch {
@@ -702,9 +724,32 @@ export async function resolveCodexAccount(
       }
     }
 
-    const body = expired
-      ? await fetchUsageViaAppServer(codexHome, options.connect ?? connectCodexRpc)
+    const read = expired
+      ? {
+          body: await fetchUsageViaAppServer(codexHome, options.connect ?? connectCodexRpc),
+          status: null,
+        }
       : await fetchCodexUsage(auth.tokens.access_token, accountId)
+    const body = read.body
+    if (read.status === 401) {
+      // A failed old request cannot sign out a grant replaced while the read was in flight.
+      const current = readCodexAuth(codexHome)
+      if (current && loginFingerprint(current) === loginFingerprint(auth)) {
+        const now = new Date().toISOString()
+        const cached = readCodexCache()[normalizeInstancePath(codexHome)]
+        writeCodexCacheEntry(codexHome, {
+          email: local.email,
+          name: local.name,
+          planType: local.planType,
+          accountId,
+          userId: local.userId,
+          orgTitle: local.orgTitle,
+          subscriptionActiveUntil: local.subscriptionActiveUntil,
+          resolvedAt: cached?.resolvedAt ?? now,
+          authFailure: { fingerprint: loginFingerprint(auth), at: now },
+        })
+      }
+    }
     // Token was only ever held in this local binding; nothing persists it.
     if (!body) return { account: localCodexAccount(codexHome), usage: null }
     // Reject a workspace mismatch or a login changed while the asynchronous read was in flight.

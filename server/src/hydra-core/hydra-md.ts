@@ -62,6 +62,9 @@ export function parseHydra(text: string): HydraDoc | null {
   return doc
 }
 
+/** Scope-log lines a hydra.md keeps, newest last; nothing reads further back. */
+const SCOPE_LOG_KEPT = 20
+
 export function renderHydra(doc: HydraDoc): string {
   const lines = [
     '# hydra.md',
@@ -77,7 +80,7 @@ export function renderHydra(doc: HydraDoc): string {
     '## Plan',
     ...doc.plan,
     '## Scope log',
-    ...doc.scopeLog,
+    ...doc.scopeLog.slice(-SCOPE_LOG_KEPT),
   ]
   return `${lines.join('\n')}\n`
 }

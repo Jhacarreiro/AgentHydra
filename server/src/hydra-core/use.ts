@@ -1,12 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
-import { addPick, emptyDoc, type HydraDoc, leadLine, parseHydra, renderHydra } from './hydra-md'
-import { appendLog } from './log'
-import { chatPaths } from './paths'
+import type { CliMayteRole } from '../climayte-lib'
+import { deskChats } from '../desk-client'
+import { completionsApi } from '../mcp-client'
+import { peopleAddon } from '../people-host'
+import {
+  type Caller,
+  type ChatOfCaller,
+  chatOfCaller,
+  refuse,
+  type SeatParent,
+  untracedRefusal,
+} from './caller'
+import { type CatalogEntry, loadCatalog, loadText } from './catalog'
 
-const WAIT_S = 30
-const TERMINAL = ['done', 'failed', 'cancelled']
 const GROUP = 'hydra-core'
 
 export interface Report {
@@ -15,8 +20,16 @@ export interface Report {
 }
 
 export interface Daemon {
-  dispatch(prompt: string, title: string): Promise<string>
+  /** `persona`: the worker runs as that persona's seat (role seat). */
+  dispatch(prompt: string, title: string, cwd: string, persona?: string): Promise<string>
   report(id: string, waitS: number): Promise<Report | null>
+  /** A seat kept as a worker: its session resumes with `text`. */
+  send(id: string, text: string): Promise<void>
+  /** The completion registry (completions.ts): tells this chat when a seat it opened finishes. */
+  completions?: {
+    waitFor(input: { ticket: string; label: string; read: string; after: number }): Promise<unknown>
+    seen(ticket: string): Promise<unknown>
+  }
 }
 
 export type UseArgs = {
@@ -25,19 +38,26 @@ export type UseArgs = {
   mode: 'become' | 'consult' | 'hire' | 'load'
   question?: string
   job?: string
-}
-
-function writeDoc(file: string, doc: HydraDoc): void {
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, renderHydra(doc))
-}
-
-function readDoc(file: string): HydraDoc | null {
-  return existsSync(file) ? parseHydra(readFileSync(file, 'utf8')) : null
+  cwd?: string
+  caller?: CliMayteRole
+  /** The traced caller (mcp-core), for the refusal journal. */
+  who?: Caller
+  /** The Desk chat `chat` is, as the caller resolved it (null: none); undefined: use() resolves `chat` itself. */
+  desk?: SeatParent | null
+  /** Keys this chat was filed under before (caller.ts chatOfCaller). */
+  aliases?: string[]
+  /** Why this call has no seat (logged with a seatless consult or hire). */
+  why?: string
 }
 
 function entryOf(dir: string, id: string): CatalogEntry {
-  const e = loadCatalog(dir).entries.get(id)
+  const entries = loadCatalog(dir).entries
+  const name = id.startsWith('lead:') ? id.slice('lead:'.length) : null
+  const e =
+    entries.get(id) ??
+    (name === null
+      ? undefined
+      : [...entries.values()].find((x) => x.kind === 'person' && x.name === name))
   if (!e) throw new Error(`no catalog entry ${id}: use core_find to get an id`)
   return e
 }
@@ -61,12 +81,14 @@ function readText(v: unknown): string | null {
 
 export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise<unknown>): Daemon {
   return {
-    async dispatch(prompt, title) {
+    completions: completionsApi,
+    async dispatch(prompt, title, cwd, persona) {
+      const seat = persona ? { role: 'seat', persona } : {}
       const reply = (await api('/api/corch/workers', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          tasks: [{ prompt, title, kind: 'review', light: true }],
+          tasks: [{ prompt, title, kind: 'review', light: true, cwd, ...seat }],
           group: GROUP,
         }),
       })) as { workers?: { id?: unknown }[] }
@@ -85,71 +107,63 @@ export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise
       if (!w) return null
       return { status: String(w.status ?? ''), text: readText(w) }
     },
+    async send(id, text) {
+      const r = (await api(`/api/corch/workers/${encodeURIComponent(id)}/send`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })) as { ok?: boolean; message?: string }
+      if (!r?.ok)
+        throw new Error(`the seat ${id} did not take the message: ${r?.message ?? 'no answer'}`)
+    },
   }
 }
 
-function consultPrompt(e: CatalogEntry, question: string): string {
-  return [
-    `You are consulted as ${e.name}: ${e.when}`,
-    `Full text: ${loadRef(e)}`,
-    '',
-    'Question:',
-    question,
-    '',
-    'Answer in at most 300 words; read only; change nothing.',
-  ].join('\n')
+/** The words a refused consult or hire gets back. They name no role (ROLES.md: a drone is never told it is one). */
+export function refusalOf(mode: string, id: string): string {
+  return `This session cannot ${mode} ${id}: ask whoever started you to ${mode} it.`
 }
 
-async function consult(dir: string, args: UseArgs, e: CatalogEntry, daemon: Daemon, now: Date) {
-  const files = chatPaths(dir, args.chat)
-  const job =
-    args.job ?? (await daemon.dispatch(consultPrompt(e, args.question ?? ''), `Consult ${e.name}`))
-  const r = await daemon.report(job, WAIT_S)
-  const doc = readDoc(files.hydraMd)
-  if (doc) {
-    addPick(doc, e, 'consult')
-    writeDoc(files.hydraMd, doc)
-  }
-  appendLog(dir, { chat: args.chat, event: 'use', mode: 'consult', id: e.id, job }, now)
-  if (!r || !TERMINAL.includes(r.status)) return { job, status: 'working' }
-  return { job, status: r.status, text: r.text }
-}
-
-function become(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
-  const files = chatPaths(dir, args.chat)
-  const doc = readDoc(files.hydraMd) ?? emptyDoc(now)
-  doc.lead = leadLine(e)
-  doc.updated = now.toISOString()
-  writeDoc(files.hydraMd, doc)
-  appendLog(dir, { chat: args.chat, event: 'use', mode: 'become', id: e.id }, now)
-  return { lead: doc.lead, text: loadText(e) }
-}
-
-function hire(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
-  const files = chatPaths(dir, args.chat)
-  const doc = readDoc(files.hydraMd)
-  if (doc) {
-    addPick(doc, e, 'hire')
-    writeDoc(files.hydraMd, doc)
-  }
-  appendLog(dir, { chat: args.chat, event: 'use', mode: 'hire', id: e.id }, now)
-  const path = loadRef(e)
-  const prefix = `You are hired as ${e.name}: ${e.when}. Read your full text at ${path} before you start.`
-  return { id: e.id, persona: path, prefix, question: args.question ?? null }
+/** The chat a seat opens under: the one the caller resolved (mcp-core), or the Desk chat `chat` names. */
+async function seatChat(args: UseArgs): Promise<ChatOfCaller> {
+  if (args.desk !== undefined)
+    return { key: args.chat, desk: args.desk, aliases: args.aliases ?? [] }
+  const chats = (await deskChats().catch(() => null)) as SeatParent[] | null
+  const who = { role: args.caller, worker: null, deskChat: null, why: null }
+  return chatOfCaller(who, chats, args.chat)
 }
 
 export async function use(dir: string, args: UseArgs, daemon: Daemon, now = new Date()) {
   const e = entryOf(dir, args.id)
   checkMode(e, args.mode)
-  switch (args.mode) {
-    case 'become':
-      return become(dir, args, e, now)
-    case 'consult':
-      if (!args.job && !args.question) throw new Error('consult needs a question')
-      return consult(dir, args, e, daemon, now)
-    case 'hire':
-      return hire(dir, args, e, now)
-    case 'load':
-      return { id: e.id, text: loadText(e) }
-  }
+  if (args.mode === 'load') return { id: e.id, text: loadText(e) }
+  const seatMode = args.mode === 'consult' || args.mode === 'hire'
+  // Traced by mcp-core and still nobody: only a Prime opens seats, and this caller cannot show it is one.
+  if (seatMode && args.who && !args.who.role)
+    refuse(args.who, untracedRefusal(`${args.mode} ${e.id}`, args.who.why), {
+      dir,
+      chat: args.chat,
+      mode: args.mode,
+      id: e.id,
+    })
+  if (seatMode && (args.caller === 'drone' || args.caller === 'seat'))
+    refuse(
+      args.who ?? { role: args.caller, worker: null, deskChat: null, why: null },
+      refusalOf(args.mode, e.id),
+      { dir, chat: args.chat, mode: args.mode, id: e.id },
+    )
+  // A seat opens under the chat's Desk row; the add-on decides what a chat with none gets.
+  const chat = seatMode ? await seatChat(args) : null
+  const answer = await peopleAddon()?.useMode?.({
+    dir,
+    mode: args.mode,
+    entry: e,
+    args,
+    chat,
+    daemon,
+    now,
+  })
+  if (answer == null)
+    throw new Error(`no people on this PC: ${args.mode} ${e.id} needs the people add-on`)
+  return answer
 }

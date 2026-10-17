@@ -18,7 +18,7 @@ import {
 import type { ServerContext } from '../context'
 import { connectorStatus, connectorsReady } from '../connectors/registry'
 import { notOwnPage } from '../own-page'
-import { ensureUpstream, gitOut, RepoYetiClient, RepoYetiError, workTreeRoot } from '../repoyeti/api'
+import { ensureUpstream, gitFact, RepoYetiClient, RepoYetiError, workTreeRoot } from '../repoyeti/api'
 import { compareUrl, parseGithubRemote, prBranchName } from '../repoyeti/remote'
 
 const WHAT = "RepoYeti's git actions"
@@ -59,7 +59,7 @@ async function readBranches(t: Target): Promise<{ current: string | null; names:
 }
 
 async function defaultBranch(root: string, names: string[]): Promise<string | null> {
-  const head = await gitOut(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+  const head = await gitFact(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
   if (head?.startsWith('origin/')) return head.slice('origin/'.length)
   return ['main', 'master'].find((n) => names.includes(n)) ?? null
 }
@@ -68,7 +68,7 @@ async function state(t: Target): Promise<RepoYetiGitState> {
   const { current, names } = await readBranches(t)
   const preview = await t.client.call<{ undo?: Step; redo?: Step }>('GET', `/api/repos/${t.id}/undo`).catch((): { undo?: Step; redo?: Step } => ({}))
   // The URL as configured: get-url applies insteadOf rewrites, which can turn a GitHub URL into something else.
-  const url = (await gitOut(t.root, ['config', '--get', 'remote.origin.url'])) ?? (await gitOut(t.root, ['remote', 'get-url', 'origin']))
+  const url = (await gitFact(t.root, ['config', '--get', 'remote.origin.url'])) ?? (await gitFact(t.root, ['remote', 'get-url', 'origin']))
   const words = (s?: Step): string | null => (s?.ok ? (s.step?.subject ?? s.message ?? 'the last git action') : null)
   return {
     repoId: t.id,

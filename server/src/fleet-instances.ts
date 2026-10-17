@@ -42,7 +42,12 @@ export interface FleetInstanceEntry {
   pid: number | null
   /** Which account is signed in RIGHT NOW (config.json, read fresh); null = signed out. */
   loginUuid: string | null
+  /** The stored login, and the app not signed out by itself while it runs (`appSignedOut`):
+   *  landing, moves and fan-outs read this to choose an app, and one on its sign-in page cannot
+   *  run a chat. */
   signedIn: boolean
+  /** The running app's own sign-out line (core/app-sign-in-log.ts); null when closed or signed in. */
+  appSignedOut: string | null
   /** Cached identity (email/plan) - null when never resolved. Token-free by construction,
    *  and never a previous login's (see the module header on re-login staleness). */
   account: FleetInstanceIdentity | null
@@ -102,7 +107,8 @@ export async function fleetInstances(deps: FleetInstancesDeps = {}): Promise<Fle
         isRunning: i.isRunning,
         pid: i.pid,
         loginUuid: i.loginUuid,
-        signedIn: i.loginUuid !== null,
+        signedIn: i.loginUuid !== null && !i.appSignedOut,
+        appSignedOut: i.appSignedOut ?? null,
         account: identity,
       }
     }),

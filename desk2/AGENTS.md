@@ -1,10 +1,10 @@
-# AgentHydra 2.0 (Hydra Desk 2, Michael's copy of desk/)
+# AgentHydra 2.0 (Hydra Desk 2, the other owner's copy of desk/)
 
 This folder is AgentHydra's window, AgentHydra 2.0: called Hydra Desk 2 until 2026-10-06, when the owner
 named it AgentHydra. What a person sees says AgentHydra (the window title, the shortcut, the launcher's
 messages); the folder, port, data folders, `HydraDesk2.exe` and the mutexes keep Desk 2's names, each a
-migration of its own if ever renamed. It began as a copy of Jacob's Hydra Desk (`../desk`) made on
-2026-10-04 so Michael can try new things on it without touching Jacob's app. Both run side by side: Desk 2 is on port 7798, keeps
+migration of its own if ever renamed. It began as a copy of the owner's Hydra Desk (`../desk`) made on
+2026-10-04 so the other owner can try new things on it without touching the owner's app. Both run side by side: Desk 2 is on port 7798, keeps
 its data in `~/.hydra-desk-2/`, opens in its own native window (`launcher/HydraDesk2.exe`, a WebView2
 host built from `launcher/host`, its data in `%LOCALAPPDATA%\HydraDesk2\webview`), and has its own
 "AgentHydra" shortcut. SPEC.md is the design it started from and still describes what is
@@ -20,7 +20,8 @@ between server/ and web/.
   (removed 2026-10-04): Desk's cloud list and its session header (`web/src/components/session-header`)
   replace it, and the copy's "open this chat" goes to Desk (`hydra/src/lib/desk-embed.ts`). Desk owns the one
   sidebar: a copy tab with a sidebar of its own (HSwarm's tree, whose nodes include Routing and CliMayte,
-  `hydra/src/components/HSwarmView.vue`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
+  `hydra/src/components/HSwarmView.vue`, or the Tools tab's Managers and Routines groups,
+  `hydra/src/lib/tools-sidebar.ts`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
   the tab's AppView, and only the tab on screen (App.vue's `setDeskView`) is sent; Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.
@@ -86,10 +87,17 @@ between server/ and web/.
   bracketed `text-[13px]`. A new step goes in the `@theme` block AND in that app's `lib/utils.ts` tailwind-merge
   extension: tailwind-merge reads an unknown `text-*` as a colour, and `cn()` then drops the colour beside it
   (2026-10-13); each app's `utils.test.ts` reads the theme and fails on a step it does not know.
-- `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
+- `desk/` is the owner's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.
+- `bun run test` runs `server/test-own-process/` as a `bun test` of its own after the main suite. It holds a file that
+  crashed the shared process: `free-request-coordinator.test.ts` runs a node:net server and its client in the test
+  process, and Bun 1.4.3 on Windows frees such a socket's state while a poll still holds it (a segfault in 3 of 4 full
+  runs, 2026-10-16; its header has the detail). In a test's own server, wait for an accepted socket's `close`; never
+  `destroy()` it. Name test folders with `./` (`bun test ./server/test ./web/test`): a bare `server/test` is a name
+  filter that also matches `server/test-own-process/`, and that file then runs in the shared process (a segfault,
+  2026-10-16).
 - Every `bun test` run from `desk2/` preloads `server/test/preload.ts` (`desk2/bunfig.toml`): removing the folder the
   suite runs in, or a folder holding it, throws, and `process.env` cannot be reassigned. A test restores only the env
   keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left
@@ -98,9 +106,19 @@ between server/ and web/.
   A test that swaps a global (`fetch`, `WebSocket`, a DOM stand-in) saves the real one first and puts it back in an
   `afterAll` or `afterEach`: on 2026-10-12 a store test's stubs, left behind, failed 286 tests in later files. The
   preload names the file that leaves one swapped (the next file's first test fails with it) and puts it back.
+  It does the same for `HOME`, `USERPROFILE`, `LOCALAPPDATA` and `APPDATA` (2026-10-15: a file that moved them to a
+  folder it then removed left later files' headless Chrome without a debugging port, 38 failures over three runs).
+  A test that reads people (a lead, a manager, a seat's persona) brings its own people door, `usePeopleDoor()` in
+  `server/test/people-addon-fixture.ts`: without one it reads this PC's real door, and passes or fails by machine.
+  The preload also gives each test file a TEMP folder of its own and removes it after that file, while a shared module
+  (a fixture under `server/test/fixtures/`) is loaded once per run: such a module makes its temp folder when it is
+  called, never at import (2026-10-15: a root made at import was gone for every later file, and 5 core-slot tests
+  failed with ENOENT).
 - A Desk on any home but `~/.hydra-desk-2` (a test's, an e2e script's, a probe's) is a throwaway: it never joins
   Login sync and sets up no Free runtime (`server/src/real-home.ts`, 2026-10-07: before, one pulled every Free login
-  into %TEMP%). Never gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.
+  into %TEMP%), and it starts with the babysitter and the instance manager off (`defaultSettings`, 2026-10-17): its
+  bridge reaches the real AgentHydra, so they would continue and move the real chats from an empty memory. Never
+  gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.
 - Never read or print a secret: the agenthydra MCP entry copied from `~/.claude.json` (SPEC.md, `mcpServers`) and any
   `.credentials.json` stay out of logs and output.
 - Never open a visible console window: detached processes use `Start-Process -WindowStyle Hidden` with

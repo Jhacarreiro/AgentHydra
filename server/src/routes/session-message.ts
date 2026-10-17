@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { spawnCaptured } from '../core/process'
+import { readTranscriptTailText } from '../fleet'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
 import { DELIVERY_ACTUATOR_FILE, resolveMiscAsset } from '../misc-assets'
@@ -31,6 +31,77 @@ function actuatorTurn<T>(run: () => Promise<T>): Promise<T> {
 // live writer, this fires the app's OWN `claude://resume` import targeted at the instance -
 // the app re-renders the chat at the top of its sidebar - then retries the type once. A live
 // unrendered session is refused honestly (resume-importing over a live writer is forbidden).
+/** The RUNNING instance whose app holds a desktop chat (as the message route resolves it), or the answer to give. */
+async function runningDesktopChat(
+  sessionId: string,
+  body: Record<string, unknown>,
+): Promise<{ dir: string } | { error: string; status: 404 | 409 }> {
+  const { findDesktopChat, desktopChatOn } = await import('../instance-sessions')
+  const { listInstances } = await import('../core/instances')
+  const namedRef = typeof body.instance === 'string' ? body.instance.trim() : ''
+  const named = namedRef
+    ? (await listInstances()).find(
+        (i) => i.name === namedRef || samePathKey(i.dir, namedRef.replace(/^desktop:/, '')),
+      )
+    : undefined
+  const meta = named ? desktopChatOn(named.dir, sessionId) : findDesktopChat(sessionId)
+  if (namedRef && (!named || !meta)) return { error: 'not on the named instance', status: 409 }
+  const home = named ? named.dir : await desktopHomeFor(sessionId).catch(() => null)
+  if (!meta || !home) return { error: 'no desktop chat holds this session', status: 404 }
+  const inst = named ?? (await listInstances()).find((i) => samePathKey(i.dir, home))
+  if (!inst) return { error: `no instance owns ${home}`, status: 404 }
+  if (!inst.isRunning)
+    return { error: `instance '${inst.name}' is not running - open it first`, status: 409 }
+  return { dir: inst.dir }
+}
+
+// POST /api/sessions/:id/stop: Claude Desktop's own Stop for a working chat, inside its RUNNING app
+// (claude-native-send.ts tryNativeStop). The instance resolves as the message route resolves it. Nothing
+// is retried or typed: unavailable answers 503 with the reason, a refusal 409, an unconfirmed stop 502.
+app.post('/api/sessions/:id/stop', async (c) => {
+  const sessionId = c.req.param('id')
+  const found = await runningDesktopChat(sessionId, await jsonBody(c))
+  if ('error' in found) return c.json({ ok: false, error: found.error }, found.status)
+  const { tryNativeStop } = await import('../claude-native-send')
+  const stopped = await tryNativeStop(found.dir, sessionId)
+  if (stopped.ok) return c.json({ ok: true, route: 'native', verified: true })
+  const status = stopped.refused ? 409 : stopped.unavailable ? 503 : 502
+  return c.json({ ok: false, error: stopped.reason ?? 'the app did not stop the chat' }, status)
+})
+
+// POST /api/sessions/:id/setting { model?, effort? }: a desktop chat's model and effort, set inside its RUNNING app
+// through the app's own setModel / setEffort (claude-native-send.ts tryNativeSetting), the calls its pickers make, so a
+// turn running now keeps going and the next one runs on them. Answers what the app kept; nothing is retried.
+app.post('/api/sessions/:id/setting', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
+  const effort = typeof body.effort === 'string' && body.effort ? body.effort : undefined
+  if (!model && !effort) return c.json({ ok: false, error: 'model or effort required' }, 400)
+  const { NATIVE_EFFORTS } = await import('../core/claude-native/native-program')
+  if (effort && !NATIVE_EFFORTS.includes(effort))
+    return c.json({ ok: false, error: `effort must be one of ${NATIVE_EFFORTS.join(', ')}` }, 400)
+  if (model && !/^[A-Za-z0-9._:[\]-]{1,100}$/.test(model))
+    return c.json({ ok: false, error: 'model must be a model id' }, 400)
+  const found = await runningDesktopChat(sessionId, body)
+  if ('error' in found) return c.json({ ok: false, error: found.error }, found.status)
+  const { tryNativeSetting } = await import('../claude-native-send')
+  const set = await tryNativeSetting(found.dir, sessionId, {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+  if (set.ok)
+    return c.json({
+      ok: true,
+      route: 'native',
+      verified: true,
+      model: set.model,
+      effort: set.effort,
+    })
+  const status = set.refused ? 409 : set.unavailable ? 503 : 502
+  return c.json({ ok: false, error: set.reason ?? 'the app did not take the change' }, status)
+})
+
 app.post('/api/sessions/:id/message', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)
@@ -84,8 +155,17 @@ app.post('/api/sessions/:id/message', async (c) => {
   // runs. It goes in as a message from another session, never as the person, and the app keeps its
   // own refusals (archived, stopped until a person sends; claude-native-send.ts). Where native control
   // is not set up, or nothing reached the app, the pipe is tried as before.
+  //
+  // ⛔ ONLY A PERSON'S OWN SEND TYPES (owner, 2026-10-15). The composer (route 2) raises the app's
+  // window, clicks through its sidebar and types. A move's resume took it on 2026-10-15 and the
+  // owner watched the window go full screen, minimize, and then have its menus clicked. So every
+  // caller is never-type unless it sends `allow_typing: true`, which only AgentHydra's own chat box
+  // does (hydra sendSessionMessage): the courier's resumes and replies, fan_out_send, archive's
+  // preserve prompt, CliMayte's ping and spawn's fallback starter get the native send, the pipe,
+  // or a refusal.
+  const neverType = body.peer_only === true || body.allow_typing !== true
   let nativeWhy = ''
-  if (body.peer_only === true) {
+  if (neverType) {
     const { sendOrHold } = await import('../claude-native-send')
     const fromName =
       typeof body.from === 'string' && body.from.trim()
@@ -180,16 +260,17 @@ app.post('/api/sessions/:id/message', async (c) => {
     // turn is in flight is the one thing the courier's rail 4 forbids. A caller that knows the
     // turn is in flight sets peer_only, and then "no pipe" is a refusal, never a downgrade to
     // the route that would interrupt. Without this the courier could only obey rail 4 by
-    // refusing every live chat up front - which is exactly the bug it was fixed out of.
-    if (body.peer_only === true)
+    // refusing every live chat up front - which is exactly the bug it was fixed out of. Since
+    // 2026-10-15 every caller but a person's own send is never-type (route 0's comment).
+    if (neverType)
       return c.json(
         {
           ok: false,
           route: 'peer',
           delivered: false,
-          error: `peer_only: no peer pipe for this session, and the native send did not reach the app (${nativeWhy})`,
+          error: `never types: no peer pipe for this session, and the native send did not reach the app (${nativeWhy})`,
           detail:
-            'the composer is the only route left and it types - refusing to interrupt a live turn. Retry when the chat is idle.',
+            "the composer is the only route left and it types into the app's window - refusing. Retry once the app runs with native control, or when the chat has a live engine.",
         },
         409,
       )
@@ -210,7 +291,8 @@ app.post('/api/sessions/:id/message', async (c) => {
   let verify = supplied.length >= MIN_VERIFY ? supplied : ''
   if (!verify && transcript) {
     try {
-      const raw = readFileSync(transcript, 'utf8')
+      // The last 64 KB, never the whole transcript: a busy chat's file runs to tens of MB and this runs on every send.
+      const raw = readTranscriptTailText(transcript, 60000)?.text ?? ''
       const tail = raw.length > 60000 ? raw.slice(-60000) : raw
       for (const line of tail.split('\n').reverse()) {
         if (!line.includes('"text"')) continue

@@ -1,9 +1,11 @@
-# International standard API. China accounts use a separate API at https://api.stepfun.com/v1;
-# configure that base_url locally for China-issued keys. Never try a key against both regions.
-# Subscription Step Plan accounts also have a separate /step_plan/v1 API.
+# International standard API. China accounts (platform.stepfun.com) use a separate API at https://api.stepfun.com/v1,
+# and a China-issued key answers 401 here. StepFun's regional endpoints table (https://github.com/stepfun-ai/Step-3.5-Flash)
+# and https://platform.stepfun.com/docs/api-reference/models/list name both; a key that 401s here is looked for on the
+# other once and kept on the one that serves it (client.find_region). Step Plan accounts have a separate /step_plan/v1 API.
 base_url = "https://api.stepfun.ai/v1"
+region_base_urls = ["https://api.stepfun.ai/v1", "https://api.stepfun.com/v1"]
 transport = "openai"
-about = "StepFun's international standard API for the Step chat and reasoning model family. China and Step Plan accounts require their account-specific endpoint."
+about = "StepFun's Step chat and reasoning model family. International and China keys each go to their own region; Step Plan accounts require their account-specific endpoint."
 website = "https://www.stepfun.com"
 key_url = "https://platform.stepfun.ai"
 docs = "https://platform.stepfun.ai/docs/en/api-reference/chat/chat-completion-create"

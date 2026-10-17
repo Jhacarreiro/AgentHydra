@@ -2,10 +2,11 @@
 // these. Email masking, a JSON-lines log that rolls monthly or at a size cap and never throws on write, and the
 // route prefix: every diagnostics route is GET /api/diagnostics/<name>, behind the server's loopback guard.
 
-import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
+import { readFrom } from './file-bytes'
 
 export const DIAGNOSTICS_API = '/api/diagnostics'
 
@@ -189,23 +190,6 @@ function parseFile(f: string, st: { size: number; mtimeMs: number }, hit: Parsed
   const tail: unknown[] = []
   parseLines(tail, chunk.toString('utf8', end))
   return { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, rows, tail }
-}
-
-/** The file's bytes from `from` to `to`. */
-function readFrom(file: string, from: number, to: number): Buffer {
-  const fd = openSync(file, 'r')
-  try {
-    const buf = Buffer.alloc(Math.max(0, to - from))
-    let got = 0
-    while (got < buf.length) {
-      const n = readSync(fd, buf, got, buf.length - got, from + got)
-      if (n === 0) break
-      got += n
-    }
-    return got === buf.length ? buf : buf.subarray(0, got)
-  } finally {
-    closeSync(fd)
-  }
 }
 
 /** Pushes every parsable JSON line of `text` onto `rows`; a torn line is skipped. */

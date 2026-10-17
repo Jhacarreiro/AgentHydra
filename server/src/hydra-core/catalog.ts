@@ -5,7 +5,7 @@ export const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill'] as
 export type Kind = (typeof KINDS)[number]
 export const MODES = ['become', 'consult', 'hire'] as const
 const COSTS = ['free', 'low', 'medium', 'high']
-/** The company ladder, lowest first: 1 intern, 2 employee, 3 manager, 4 owner. Tier 5, the real Jacob, is a rule, never an entry. */
+/** The company ladder, lowest first: 1 intern, 2 employee, 3 manager, 4 owner. Tier 5, the real person, is a rule, never an entry. */
 export const TIERS = ['intern', 'employee', 'manager', 'owner'] as const
 /** The tiers a lead is offered from, best first; owners are consulted and interns are hired under a lead. */
 export const LEAD_TIERS = ['manager', 'employee'] as const
@@ -22,7 +22,8 @@ export const FAMILIES = [
   'you-sue',
   'creator',
 ] as const
-const ID = /^(person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
+/** A catalog id: <kind>:<slug>. */
+export const ID = /^(person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
 
 /** A tier's rung on the ladder, 1 (intern) to 4 (owner); 0 for no tier. */
 export const tierRank = (tier: string | undefined): number =>
@@ -52,6 +53,8 @@ export interface CatalogEntry {
   how: string
   load: Load
   source?: string
+  /** Set by loadCatalog for an entry from PINNED_FILE: the owner's standing rulings, which feedback never moves. */
+  pinned?: true
 }
 
 export interface Skip {
@@ -83,9 +86,10 @@ function checkLoad(v: unknown): Load | null {
   return null
 }
 
-export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: string } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { why: 'not an object' }
-  const o = raw as Record<string, unknown>
+/** The fields every entry has: its id, kind, name, when, how and cost. */
+function checkHead(
+  o: Record<string, unknown>,
+): Pick<CatalogEntry, 'id' | 'kind' | 'name' | 'when' | 'how' | 'cost'> | { why: string } {
   const id = text(o.id)
   if (!id || !ID.test(id)) return { why: 'id must be <kind>:<slug>' }
   const kind = o.kind as Kind
@@ -98,6 +102,13 @@ export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: strin
   const how = text(o.how)
   if (!how) return { why: 'how missing' }
   if (!COSTS.includes(o.cost as string)) return { why: 'cost must be free, low, medium or high' }
+  return { id, kind, name, when, how, cost: o.cost as string }
+}
+
+/** The list and load fields, checked after the head fields. */
+function checkBody(
+  o: Record<string, unknown>,
+): { tags: string[]; folders: string[]; load: Load } | { why: string } {
   if (o.title !== undefined && typeof o.title !== 'string') return { why: 'title must be a string' }
   const tags = texts(o.tags)
   if (!tags) return { why: 'tags must be a list of strings' }
@@ -105,38 +116,58 @@ export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: strin
   if (!folders) return { why: 'folders must be a list of strings' }
   const load = checkLoad(o.load)
   if (!load) return { why: 'load must be file, skill, tool or none' }
+  return { tags, folders, load }
+}
+
+/** A person's tier, family, modes and org-chart links, the fields only a person has; sets them on the entry when all pass. */
+function checkPerson(o: Record<string, unknown>, entry: CatalogEntry): { why: string } | null {
+  if (!tierRank(o.tier as string))
+    return { why: 'a person needs a tier: intern, employee, manager or owner' }
+  if (!(FAMILIES as readonly string[]).includes(o.family as string))
+    return { why: `a person needs a family from ${FAMILIES.join(', ')}` }
+  const modes = texts(o.modes)
+  if (!modes?.length || !modes.every((m) => (MODES as readonly string[]).includes(m)))
+    return { why: 'a person needs modes from become, consult, hire' }
+  if (o.reportsTo !== undefined && !(text(o.reportsTo) ?? '').startsWith('person:'))
+    return { why: 'reportsTo must be a person id' }
+  if (o.division !== undefined && !text(o.division)) return { why: 'division must be a name' }
+  entry.tier = o.tier as string
+  entry.family = o.family as string
+  entry.modes = modes
+  if (o.reportsTo !== undefined) entry.reportsTo = text(o.reportsTo) as string
+  if (o.division !== undefined) entry.division = text(o.division) as string
+  return null
+}
+
+export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { why: 'not an object' }
+  const o = raw as Record<string, unknown>
+  const head = checkHead(o)
+  if ('why' in head) return head
+  const body = checkBody(o)
+  if ('why' in body) return body
   const entry: CatalogEntry = {
-    id,
-    kind,
-    name,
-    when,
-    tags,
-    cost: o.cost as string,
-    how,
-    load,
+    id: head.id,
+    kind: head.kind,
+    name: head.name,
+    when: head.when,
+    tags: body.tags,
+    cost: head.cost,
+    how: head.how,
+    load: body.load,
   }
   if (o.title !== undefined) entry.title = o.title as string
-  if (folders.length) entry.folders = folders
+  if (body.folders.length) entry.folders = body.folders
   if (typeof o.source === 'string') entry.source = o.source
-  if (kind === 'person') {
-    if (!tierRank(o.tier as string))
-      return { why: 'a person needs a tier: intern, employee, manager or owner' }
-    if (!(FAMILIES as readonly string[]).includes(o.family as string))
-      return { why: `a person needs a family from ${FAMILIES.join(', ')}` }
-    const modes = texts(o.modes)
-    if (!modes?.length || !modes.every((m) => (MODES as readonly string[]).includes(m)))
-      return { why: 'a person needs modes from become, consult, hire' }
-    if (o.reportsTo !== undefined && !(text(o.reportsTo) ?? '').startsWith('person:'))
-      return { why: 'reportsTo must be a person id' }
-    if (o.division !== undefined && !text(o.division)) return { why: 'division must be a name' }
-    entry.tier = o.tier as string
-    entry.family = o.family as string
-    entry.modes = modes
-    if (o.reportsTo !== undefined) entry.reportsTo = text(o.reportsTo) as string
-    if (o.division !== undefined) entry.division = text(o.division) as string
+  if (head.kind === 'person') {
+    const why = checkPerson(o, entry)
+    if (why) return why
   }
   return { entry }
 }
+
+/** The catalog file of the owner's pinned rulings. */
+export const PINNED_FILE = 'generated-pinned.json'
 
 const rank = (file: string) => (file.startsWith('generated-') ? 0 : 1)
 
@@ -169,7 +200,7 @@ export function loadCatalog(dir: string): Catalog {
       if ('why' in r) {
         const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined
         skipped.push({ file, id: typeof id === 'string' ? id : undefined, why: r.why })
-      } else entries.set(r.entry.id, r.entry)
+      } else entries.set(r.entry.id, file === PINNED_FILE ? { ...r.entry, pinned: true } : r.entry)
     }
   }
   return { entries, skipped }

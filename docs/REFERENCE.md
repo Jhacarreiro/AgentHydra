@@ -126,12 +126,19 @@ also paced under the burst at which ChatGPT locks it out (a learned cap of new c
 `free_status` gives each account's `plan`, its last hour (`lastHour`, marked FAILING at 90% failed of 5 or
 more) and its pace (`paced` until a time, or `pace`: new chats of the cap in the last 30 minutes). Free
 threads are private, so unlike probe chats they need no deleting. The call answers within 45 s
-with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
-hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
+with a `batch` for `free_results` while the sending goes on; batches are kept 6 hours (saved, so a daemon
+restart carries them on), the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running; a
+task still queued while it restarts (503 while it stops, then no answer) waits for it within the batch's
+30 minutes, and a send it never answered goes again under its own request id.
+
+History lookups use bounded, opt-in Desk queries: `/api/free/threads?view=recent&limit=30&account=...`
+returns `{total,threads}`; `view=lookup&chat_id=...` accepts up to 32 identifiers and returns each ID's
+first stored match. Full history, `since` and full-list ETag behavior are unchanged. Older windows
+that ignore these selectors still work through the MCP's original filtering and routing.
 
 **`babysitter`** (`server/src/mcp-babysitter.ts`) answers which chats a usage limit stopped right now: each
 one (a Desk chat, a Claude Desktop or CLI session) with its account, when it stopped, when its limit resets,
-its state (`waiting`, `resumed`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
+its state (`waiting`, `resumed`, `held`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
 the last 10 continues the babysitter sent. It reads Desk 2's `GET /api/babysitter`, which answers from the
 babysitter's last look (every 5 minutes and when a known reset passes; no model is asked), so a call costs
 milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off. Each session row's
@@ -139,7 +146,7 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 moment of the stop.
 
 **Routines** is the babysitter's third sibling (Desk 2's `plugins/73-routines.ts`, logic in
-`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, Settings > Managers > Routines). A routine is one
+`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, AgentHydra's Tools tab). A routine is one
 standing job on this PC, on a schedule: a command, an AI prompt that runs as a chat you can open, or a Windows scheduled
 task. Routines run on the PC through AgentHydra's own CLI and accounts; the manager asks no model itself. The owner's
 rule for them: a routine runs only for something the owner asked for in the owner's own words, and an AI can only propose one.
@@ -180,7 +187,7 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   makes the routine `ended` after that local day: it never runs but stays listed.
 
 States: `idle`, `due`, `running`, `paused` (the owner paused it), `off` (its status says off), `ended` (past `until`),
-`broken` (with its reason) and `waiting` (a proposal waiting for the owner's yes, listed under "Waiting for your yes").
+`broken` (with its reason) and `waiting` (a proposal waiting to be approved, by the owner or by an agent he told to, listed under "Awaiting approval").
 
 Schedule semantics: the memory keeps each schedule routine's last slot. The first time a routine is seen it starts from now,
 so a slot already past never runs. A look runs the newest slot at or before now, once, when it is later than the last slot
@@ -198,11 +205,13 @@ the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB);
 proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
-Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the
-owner's click, `X-Desk-Caller: window`) may resume, approve, discard, switch the manager (`enabled`), or edit a routine; an
-agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
-is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
-chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
+Who may do what. Any caller (the window or an agent) may read, run one now, pause one, propose one, approve one, move one
+to the central store, and set its group and campaigns (`meta`) (the owner, 2026-10-16: an agent approves the routines he asks
+for, never handing the click back to him). Only the window (the owner's click, `X-Desk-Caller: window`) may resume, discard,
+switch the manager (`enabled`), edit a routine or set its mode; an agent's request for those gets 403 `only the owner can do that, in AgentHydra's Tools tab`. On the Tools tab's
+Overview each routine is a card whose small switch pauses or resumes it; the card opens its page (its schedule in words,
+its history, Run now and Open chat), and the Routine manager's page holds the manager's `enabled` switch (owner,
+2026-10-17: Desk's Settings > Managers, which listed them before, is now a link to the Tools tab). A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
 runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
 into `routines/<id>.json` without `why`, discard deletes it.
@@ -211,12 +220,82 @@ into `routines/<id>.json` without `why`, discard deletes it.
 routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `headline`, `totals`, `settings`, last run,
 `nextRunAt`, the run going on (`kind` `command` or `prompt`, its runner's `pid` or its chat), and its last 30 runs, plus
 `proposals` and `error`. `POST /api/routines` takes one action per call:
-`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard }` (an id; `resume`, `approve` and
-`discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
+`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard, move }` (an id; `resume` and
+`discard` are window only), or `{ propose: { id, why, ...contract } }`, or `{ meta: { id, group?, campaigns? } }` (a key it
+names is set, `null` removes it, an absent one is kept). Anything else answers 400 with the expected shape; a bad `group` or
+`campaigns` value is 400 with the reason, an unknown routine 404.
 
-The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause` and `propose`,
-each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
-a routine rather than add one, and to prefer a temporary background task it manages itself.
+The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause`, `propose`,
+`approve`, `move` and `meta`, each marked MUTATES. It cannot resume, discard, edit or switch the manager. Its description tells the
+agent to approve or move only a routine the owner asked for in his own words, to propose a routine rather than add one
+nobody asked for, and to prefer a temporary background task it manages itself.
+
+**Group and campaigns.** Two optional keys say where a routine belongs; neither changes what it runs. `group` is the folder
+the Tools tab's Routines group lists it under (1 to 40 characters, one line). `campaigns` lists the CrAInium's Campaigns arm ids it works for
+(1 to 10, each `^[a-z0-9][a-z0-9-]{0,63}$`, no repeats). A central document keeps both outside its approval, as it keeps
+`description`, so setting them leaves the routine approved and running. Each routine's `group` and `campaigns` (null when
+absent) are on its entry in `GET /api/routines`. `GET /api/routines/:id/campaigns` (`?fresh=1` skips its 60-second cache)
+asks the arm's `campaigns` tool through the person's Connections server, `show` for each id and `dnc` once: a `RoutineCampaigns`
+answer with each campaign's ledger (status, goal, `ready` summed over its lanes, numbers, sends per day, newest 5 runs and the
+do-not-contact count). Addresses are never read into it. An id the arm does not know is in `missing`; with no Connections
+server, or a refusal of every campaign, `error` says why and `campaigns` is empty (HTTP 200 either way).
+
+**Central routines** (the owner, 2026-10-15: one place for the routines, which other people can use too). When
+`<desk home>/routines-store.json` names a store, the manager also lists the routines kept there, which every computer reading
+that store sees; without the file none of this runs. The file's shape and the document format are in `desk2/shared/routines.ts`
+("CENTRAL ROUTINES"). Today the store is the CrAInium: each routine is one document, `routines/<id>.md` (format `routine/1`:
+a JSON front matter holding the contract's keys, plus `title`, `why`, `timeZone`, `workdir`, `runsOn` and `approval`, and the
+prompt as its body), under one docs repo key, read and written through the person's own Connections `docs` tool
+(`desk2/server/src/routines/store-crainium.ts`). Nothing in a document is a machine path: `workdir` is a repo plus a folder in
+it, found through the file's `repos`, and `~/` is the running computer's home.
+
+- **Approval.** A document runs only with an Ed25519 signature, by a key this computer trusts (its own
+  `<desk home>/routines-approver.key`, made with the store, or one the file's `approvers` lists), over its id and the sha of
+  everything in it but `approval`, `description`, `group` and `campaigns` (`routines/central.ts`). Any other change makes it a proposal again. Approve
+  signs with this computer's key and writes the document back with the sha it read; an edit is signed again the same way, and
+  answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
+  the MCP tool) and approve; a proposal that arrives already carrying an `approval` is refused.
+- **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
+  pinned here and runs as a local routine does. A document with `"eachRunner": true` (signed like every other key) runs on
+  every runner carrying its labels, each its own copy as a local routine, never claimed and of any kind, status included:
+  work each computer does over its own data, such as learning from that computer's chats. When neither, any runner carrying
+  the labels may run it (schedule routines only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
+  of twice its timeout, renewed while the run lives (`routines/manager-board.ts`, `routines/runs.ts`). Anything else is state
+  `elsewhere`, listed and never run, read or paused here. A schedule keeps its own `timeZone` on every runner.
+- **Runs.** Every central run is reported to the run log as CloudEvents (`routine.claimed`, `routine.started`,
+  `routine.ended`), and each card shows the newest run of each central routine, wherever it ran.
+- **When the store is down.** The manager keeps a copy of each document in `<desk home>/routines/central/`, reads the store
+  again at most every 5 minutes (at once with `?fresh=1`), and runs approved pinned routines from the copy. A board that does
+  not answer holds back only the shared slots.
+- **Same id as a file here.** The file is listed and runs; the document is named under the store's `problems` in
+  `GET /api/routines` `store` (Settings shows that line), never listed. A file being moved is the exception, below.
+- **Move to central** (ROUTINES.md 7.7: one routine at a time, on the owner's say). With a store named, each card of this
+  computer's own routines has Move to central (`POST /api/routines` `{ "move": "<id>" }`, any caller; 400 with no store).
+  It writes the routine to the store as a document pinned to this runner (`runsOn` its name), so it runs here as it did: a
+  schedule keeps this computer's zone, `cwd` becomes the `workdir` of the deepest checkout `repos` names that holds it (else
+  `~/` in this home; in neither the move is refused, naming `repos`), and a command argument in this home starts with `~/`
+  (`routines/central.ts` `documentOf`). Until the owner decides, the file runs on and takes no edit, the document waits under
+  Awaiting approval as a move (`moving` on both), and `<desk home>/routines-moving.json` marks it. Approve signs the
+  document (refused if it changed in the store since the move) and retires the file to `<desk home>/routines/moved/` in the
+  same step (`routines/manager-move.ts`): the routine keeps its id and its memory, so the slot the file last ran is not run
+  again. Discard takes the document out of the store, and the file runs on. A look finishes a move a trusted key approved
+  on another computer, and forgets one whose document left the store.
+
+The design, the standards it borrows from (cron with an IANA zone as Kubernetes CronJob does, GitHub-style runner labels,
+Temporal's overlap names, CloudEvents, lease semantics) and the open decisions are in the CrAInium: `docs get`, repo
+`lunarwerx/connections`, path `docs/architecture/ai/ROUTINES.md`.
+
+Asking the owner for help. A routine whose run ends `failed` or `timed-out` opens an incident (scope `routine`, key = the
+routine id, the routine's name and the run's last line as its text), and so does a routine that turns `broken` (once while it
+stays broken; that memory is in-process, so a Desk restart reports a still-broken routine again). An `ok` run resolves it,
+and so does the file checking out again unless a failed last run keeps it open; `busy` and `interrupted` do nothing.
+Incidents page the owner over the OS and email channels, and a repeat while one is open adds a count, not a new ping. A
+script or agent stuck on something only the owner can fix asks the same way: the daemon's `POST /api/incidents` with
+`{ key, message, scope? }` (scope defaults to `routine`) answers `{ id, notified }`, the MCP tool `ask_owner_help` (MUTATES,
+through `hydra_run`) takes the same arguments, and `POST /api/incidents/resolve-by-key` with `{ scope, key }` resolves every
+open incident for that key. A prompt routine's brief should name what the job fixes by itself and ask for help only for the
+rest. The hooks: `desk2/server/src/plugins/73-routines.ts` (`reportIncident`, `reportBroken`) and
+`desk2/server/src/routines/incident.ts`; the daemon side is `server/src/routes/incidents.ts` and `server/src/mcp-session-tools.ts`.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
@@ -357,6 +436,45 @@ independent pollers re-hit a limited account roughly every 30 seconds and each e
 the window being waited out, so an account that tripped a limit could never recover: measured on
 2026-09-11, accounts that had read fine two hours earlier sat at 429 all day. The number obeyed is
 always the server's own. None is invented here.
+
+### A 429 can be a revoked login
+
+The usage endpoint answers a REVOKED OAuth token the same way it answers a rate limit: 429
+`rate_limit_error` with a fresh `Retry-After` of about an hour, on every read, for as long as anyone
+asks. Measured 2026-10-16 on two instances that had read "rate limited, it clears on its own" for
+days: the profile endpoint (`/api/oauth/profile`) answered the same tokens 401 "OAuth access token
+has been revoked." So every 429 is followed by one profile read with the same token
+(`revokedLoginError`, `server/src/usage-api.ts`). A 401 there is recorded as the 401 it is, the row
+reads `token_revoked` instead of `rate_limited` (desktop and CLI rows alike), the account's last
+reading leaves the room ranking as a signed-out one does, and the token is held off as long as a real
+429 would be.
+
+**Signing in again does not replace a revoked desktop login.** Claude Desktop keeps its saved grants
+through a sign-in to the same account (its `main.log`: "preserving oauth cache (same-user
+re-login)"), and its token getter hands out a saved grant until that grant's own `expiresAt`
+without asking whether it still works. It makes a new grant only when the saved one is missing, or
+expired with its refresh refused. Revoking a grant does not move its expiry, so a revoked Claude Code
+grant (a month long) or inference grant (a year long) stays in use through any number of re-logins.
+AgentHydra therefore takes such grants out itself (`server/src/core/revoked-grants.ts`):
+
+- A grant is revoked only on the profile endpoint's word (a 401 that says revoked); an expired grant
+  is the app's to refresh and is left alone. It is remembered by a SHA-256 digest of its token, never
+  the token, in `revoked-grants.json` in the data dir.
+- It leaves the profile's token caches (`oauth:tokenCacheV2` and `oauth:tokenCache` in
+  `config.json`) only while the app is closed, when a usage check reads `token_revoked` (every grant
+  of the profile is asked about then, the profile-only ones included) and just before AgentHydra
+  opens the profile (known digests only, no network). The file is read again right before the write
+  and left alone if anything changed it meanwhile (Login sync may have landed a newer login).
+- The app then makes new grants from its claude.ai sign-in the next time it needs one. Until then the
+  row reads `no_token`; a profile whose claude.ai sign-in was revoked too may ask for a sign-in once.
+- Login sync never lands a remembered grant, leaves it out of "the later expiry wins" (a dead
+  year-long grant would otherwise win every comparison and put itself back on every PC), treats a
+  copy that differs only by such grants as the same copy, and sends each account's digests with its
+  login so the other PC drops them too.
+
+What revokes these grants in the first place is not settled. Revocations of the same shape predate
+Login sync. One hazard remains under investigation: Login sync puts one desktop login, refresh token
+included, on both PCs.
 
 ### Built-in guidance
 
@@ -668,12 +786,24 @@ that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the 
 
 The profile comes from a sampler that runs from boot: `on top` is where the samples were,
 `innermost daemon frame` the daemon function closest to them and `outermost daemon frame` the timer or
-route that started it. That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
+route that started it. Sampling requests an 8 ms interval rather than the runtime's 1 ms default,
+reducing native sampler CPU while still naming long blocks. The 250 ms heartbeat, two-second
+sample drains and existing warning thresholds remain unchanged. Counts measure sampled activity;
+compare profiles from the same running process and sampling configuration.
+That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
 delivery, a synchronous chat list and process queries, CliMayte's boot reading every finished worker), and the
 3,510 s the daemon spent blocked in the 24 h to 2026-10-11 (the spend report's cold read, CliMayte's check and
 wave judges running git, the account map reading every profile's past logins, the Sessions list re-checking
 CliMayte's finished workers, a cancel's `taskkill`; each now runs off the thread), so read these lines before
 profiling a second daemon.
+
+A steady load never blocks long enough to leave a `STALL` line, so the same sampler keeps every sample since
+boot: `GET /api/health/profile?top=0&heap=1` answers `since`, `samples` and the `top`, `inner` and `outer` rows
+(`top=0` lists every row, so two reads can be subtracted), with `memory` (`process.memoryUsage()`) and, with
+`heap=1`, the JS heap by object type. The counts only grow: read it twice a minute apart and subtract, and
+compare only two reads with the same `since`, at steady state, since a read soon after a restart is mostly boot.
+That is how the CliMayte tick was found to take about half the daemon's samples on 2026-10-15 (a98f9edd):
+1,674 a minute before, 901 after.
 
 ## Auto-update
 
@@ -688,6 +818,18 @@ POST /api/update/settings   { "enabled": true, "intervalSecs": 21600 }
 the working tree is clean, applies (`git pull --ff-only` + reinstall + rebuild) and relaunches itself
 on the same port (`AGENTHYDRA_RELAUNCH=1` makes the successor wait for the predecessor to free it).
 A dirty tree is never touched.
+
+Source checks and applies share one operation queue in the app adapter, covering the complete
+fetch/check or pull/install/build sequence. The spawn lane alone serializes only individual
+commands, which allowed another check to replace `FETCH_HEAD` during a pull. Each queued check
+still reads fresh state, failures reach their caller without wedging the queue, and apply progress
+starts only when that apply begins. Compiled release updates keep their existing path.
+
+Free MCP batches stay in the daemon's memory: preparing, queued or running batches are a hard
+restart guard, including during automatic updates. Admission closes synchronously before the
+successor handoff, then reopens if the handoff fails. If work starts while an update builds, the
+applied update keeps a pending restart and retries every five seconds once the work is clear,
+without applying it again. This also completes a requested manual update when auto-apply is off.
 
 Because updates are a `git pull --ff-only` against `origin/main`, **pushing `main` is the release**:
 as soon as `main` moves, every instance with auto-update enabled fast-forwards to it on its next
@@ -723,6 +865,28 @@ instance is deleted. `POST /api/instances/:dir/meta` applies a present value, cl
 is `null`, and leaves an absent field unchanged. The curated icon/color keys live in
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
 `desk2/hydra/src/lib/instance-appearance.ts`.
+
+### How the Instances tab stays live
+
+Live means a watcher, a change event, or a short poll while something is in flight, never only a manual Refresh
+(owner, 2026-10-16). While the tab is on screen it runs three watches beside the two-minute list refresh:
+
+| Watch | Every | Asks | Acts when |
+|---|---|---|---|
+| Logins | 5 s | `GET /api/instances/logins` (config.json, no process scan) | a profile's login moved: the old identity is dropped and resolved again |
+| Unconfirmed logins | on the login watch | the account resolve, for a running app whose login could not be confirmed (the yellow mark) | its last resolve is 10 s old (`desk2/hydra/src/lib/account-resolve.ts`); a closed app keeps the 15-minute re-check |
+| Exits | 3 s, only while a row reads open | `GET /api/instances/alive?pids=...`: a signal-0 probe of each Desktop pid, Codex `desktopPid` and CLI `livePids`, no process scan | a pid is gone: the daemon drops both scan caches and the tab lists that kind again at once |
+
+`GET /api/cli-instances` gives each login's `livePids` (its live sessions' pids) beside `liveSessions`. The filter's
+facets act on every row kind: a CLI login's plan is its own or its linked desktop's and it is open while a session
+runs; a Free login's plan is the one its site reports ("Free" on the Free plan) and it is open while a chat or check
+of it is in flight; a DeepSeek harness row's plan is "API key" and it is open while it runs. An unknown fact never
+sets a row aside.
+
+A process scan that fails (a timed-out WMI query) is not "nothing runs": the Desktop list and the Codex list each read
+the last scan that answered, if it is under five minutes old (`lastGoodClaudeProcessScan` in `server/src/core/process.ts`,
+`listCodexDesktopProcesses` in `server/src/core/codex-desktop.ts`). A `fresh` read, which launch and stop use to act,
+never takes that snapshot.
 
 ### The usage numbers on a row
 
@@ -965,6 +1129,13 @@ workflow can never check out. Before it had a name, a pre-commit hook was its on
 that hook is skipped by `--no-verify` and silently does nothing on any machine without the sibling
 checkout. External contributors should not run it; nothing in CI depends on it.
 
+`.arkitect/ratchets/` is the other owner-only gate: one inventory per Architect performance check (25 of them,
+seeded 2026-10-16 after the efficiency audit), holding how many warnings each file is allowed per rule. The
+Architect lives in a private repo, so CI skips it; the owner's land tool (`cycle.py`, kept outside this repo) runs
+`arkitect ratchet --check <the inventoried ids>` on every land and fails one whose own files raise a count. A rise
+elsewhere is a note. After fixing a warning, lower its count with
+`arkitect ratchet --check <id> --decrease-baselines`; a count is never raised by tool, only by a reviewed hand edit.
+
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
 
@@ -1000,6 +1171,26 @@ same process to happen at all. Two rules came out of chasing it:
   ~1-in-3 failure rate is roughly a 0.2% chance of coincidence.
 - **Anything keyed on mtime alone needs a tiebreaker** (size, or an explicit generation counter),
   because two writes can share one tick and the second one then looks like no write at all.
+- **A test that reads people brings its own people door.** Managers, leads and seat personas come only
+  from the people add-on, which reads this PC's `~/.agenthydra/people-store.json` or the sue-dredd
+  checkout beside it, so a test without its own door passes or fails by machine: on 2026-10-15 the
+  lead-pick and core-slot tests failed on a PC that has the real door.
+  `usePeopleDoor()` gives a test a scratch door and forgets it after (`server/tests/hydra-core-fixture.ts`,
+  `desk2/server/test/people-addon-fixture.ts`).
+- **A file that moves `HOME` or `USERPROFILE` puts it back.** Every later file in the run inherits it:
+  desk2's `people-setup.test.ts` pointed both at a folder it then removed, and the headless Chrome
+  tests in later files never opened their debugging port (38 failures over three runs, each file green
+  alone). desk2's preload now puts `HOME`, `USERPROFILE`, `LOCALAPPDATA` and `APPDATA` back between
+  files, and the next file's first test names the one that moved them (`desk2/server/test/preload.ts`).
+  In both suites, `scripts/checks/test-stub-outlives-its-file.mjs` rule E flags a home or temp
+  variable set at module scope or in a before hook and never put back.
+- **A folder has no size to break the tie, so a cached listing follows the racy-git rule.** The
+  folder tree (`server/src/core/folder-tree.ts`) records when it listed each folder and lists it again
+  until that listing is at least `RACY_MS` (2 s) after the folder's mtime. Trusting an unchanged mtime
+  alone missed a file created right after a listing in 407 of 3,000 tries on a Windows PC (2026-10-13),
+  and failed `folder-tree.test.ts` on windows-latest, whose clock steps about every 15.6 ms. The same
+  test passed 200 looped runs on a PC whose steps are about 0.3 ms: a race that hangs on the clock's
+  step size needs a script that drives it directly, not a loop of the ordinary test.
 
 ### A test that waits on a real process, on a loaded box
 
@@ -1054,7 +1245,7 @@ left are:
   fixture: a `bun test` started from an agent's shell can have one live parent, not two.
   `climayte-origin.test.ts`'s nearest-engine case starts a relay that starts the asker, and asserts the
   asker's chain is exactly [relay, test]. Its children get a scratch `HOME` and `USERPROFILE` (Bun's
-  `os.homedir()` follows them), so a crashed session's stale `~/.claude/sessions/<pid>.json`, naming a
+  `os.homedir()` follows them), so a crashed session's stale [`~/.claude/sessions/<pid>.json`](CLAUDE-CONFIG-LAYOUT.md), naming a
   pid Windows has since given to the relay, cannot answer.
 - **A timing assertion says which stall it saw.** The limit-reset thread test
   (`cli-limit-reset.test.ts`) runs a ticker on a second thread; on a failure it prints whether that

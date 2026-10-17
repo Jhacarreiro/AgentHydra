@@ -24,12 +24,25 @@
 //   have their own tokens and both stay signed in; tying them together would let either PC's refresh
 //   sign the other out. A PC joins the store's copy only where it has none: a signed-out profile of
 //   the same folder name, or a new profile made with that name and number.
-// - From then on the copy whose tokens expire later wins, as for the CLI (a refresh pushes them out).
+// - From then on the copy whose session grant (the app's own sign-in, which it refreshes) expires later
+//   wins, else the one whose latest grant does, as for the CLI (a refresh pushes them out). The latest
+//   grant alone is a year-long one where a profile has it, minted at or after a sign-in, not always
+//   anew at the next one, and it can be dead while it reads months away (accounts.ts). A grant
+//   Anthropic revoked (core/revoked-grants.ts) does not count and is never landed: the dead year-long
+//   grant a profile keeps would otherwise win every comparison and put itself back.
 // - A logout reaches every PC, as for the CLI (owner, 2026-10-02): an account this PC held and shared
 //   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
-//   their profile out of it once its app is closed, unless theirs was signed in after the logout.
+//   their profile out of it once its app is closed, unless theirs was signed in after the logout: its
+//   claude.ai sign-in cookie was made after it (a refresh keeps the cookie's creation time).
+// - So does a delete (owner, 2026-10-16): the deleting PC turns the row into the removal marker with
+//   the owner's note, and the other PCs delete their profile of that account once its app is closed
+//   and say who deleted it and why. A desktop login is never left out of sync.
 // - Cookies are read only while the profile is closed (Chromium holds the database locked); a pass
-//   while it runs sends the new tokens with the cookies the store already has.
+//   while it runs sends the new tokens with the cookies the store already has, and says so
+//   (`meta.open`).
+// - One PC refreshes a shared login's Claude Code grant, the one whose claim the store takes
+//   (cli-login-sync.ts claimDesktopRenewal); the others get the renewed copy from the store. Two PCs
+//   refreshing one refresh token leave all but the first refused (2026-10-16).
 // - Windows only: elsewhere the profile key lives in the Keychain or a keyring, which nothing here
 //   writes.
 //
@@ -51,7 +64,12 @@ import {
 import { copyFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { LoginArrival } from '../login-sync-arrivals'
+import {
+  type LoginArrival,
+  type LoginRemoval,
+  removalEvent,
+  removalReason,
+} from '../login-sync-arrivals'
 import { deleteAccountsCacheEntry } from './accounts'
 import {
   decryptSafeStorage,
@@ -61,11 +79,13 @@ import {
   getWindowsMasterKey,
 } from './crypto'
 import { ensureWindowsMasterKey } from './crypto/keys.win'
+import { fsSlot } from './fs-slots'
 import { logoutInstance } from './instance-logout'
 import { claimInstanceNumber, instanceNumbers, instanceRef } from './instance-numbers'
 import { createInstance } from './lifecycle'
 import { instancesRoot, normalizePath } from './paths'
 import { listClaudeProcesses } from './process'
+import { isRevokedGrant, revokedDigestsFor, withoutRevokedGrants } from './revoked-grants'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CLAUDE_HOST = /^\.?claude\.ai$|\.claude\.ai$/
@@ -94,8 +114,12 @@ export interface PortableDesktopLogin {
   tokenCache: string | null
   /** Null when the sending PC could not read them (its app was running) and the store had none. */
   cookies: DesktopCookie[] | null
-  /** The latest expiry among its grants (epoch ms): the later copy wins. */
+  /** The latest expiry among its grants (epoch ms): the later copy wins when either copy has no
+   *  session grant (newerHere). */
   expiresAt: number
+  /** Digests of this account's grants the sending PC found revoked (core/revoked-grants.ts): the
+   *  receiving PC drops them too. */
+  revoked?: string[]
 }
 
 /** A store blob's content as a desktop login for `id`, or null. */
@@ -190,7 +214,7 @@ export async function listDesktopProfiles(): Promise<DesktopProfile[]> {
  *  nothing is decrypted. Null when the database cannot be copied or read (the app holds it). */
 export async function hasSessionKey(dir: string): Promise<boolean | null> {
   if (
-    !(await stat(cookieDb(dir)).then(
+    !(await fsSlot(() => stat(cookieDb(dir))).then(
       () => true,
       () => false,
     ))
@@ -216,14 +240,19 @@ export async function readDesktopTokens(
   return v2 || v1 ? { uuid, v2, v1 } : null
 }
 
-/** The latest `expiresAt` among the grants of the token caches (epoch ms; 0 when none says). */
-export function tokenExpiry(...caches: Array<string | null>): number {
+/** The latest `expiresAt` among the live grants of the token caches whose key `keep` takes (epoch ms;
+ *  0 when none says). A grant's key ends in its scopes; a grant known revoked keeps its date but never
+ *  comes back to life. */
+function latestExpiry(caches: Array<string | null>, keep: (grantKey: string) => boolean): number {
   let latest = 0
   for (const c of caches) {
     if (!c) continue
     try {
-      for (const g of Object.values(JSON.parse(c) as Record<string, unknown>)) {
-        const e = Number((g as { expiresAt?: unknown } | null)?.expiresAt) || 0
+      for (const [k, g] of Object.entries(JSON.parse(c) as Record<string, unknown>)) {
+        if (!keep(k)) continue
+        const grant = g as { expiresAt?: unknown; token?: unknown } | null
+        if (typeof grant?.token === 'string' && isRevokedGrant(grant.token)) continue
+        const e = Number(grant?.expiresAt) || 0
         if (e > latest) latest = e
       }
     } catch {
@@ -231,6 +260,34 @@ export function tokenExpiry(...caches: Array<string | null>): number {
     }
   }
   return latest
+}
+
+/** The latest `expiresAt` among the live grants of the token caches (epoch ms; 0 when none says). */
+export const tokenExpiry = (...caches: Array<string | null>): number =>
+  latestExpiry(caches, () => true)
+
+/** The scope only the app's own sign-in grant carries (accounts.ts). */
+const APP_SESSION_SCOPE = 'user:sessions:claude_code'
+
+/** The latest `expiresAt` among the app's own session grants (epoch ms; 0 when there is none). */
+export const sessionExpiry = (...caches: Array<string | null>): number =>
+  latestExpiry(caches, (k) => k.includes(APP_SESSION_SCOPE))
+
+/** Chromium keeps a cookie's time as microseconds since 1601. */
+const CHROMIUM_EPOCH_MS = 11_644_473_600_000
+
+/** When this claude.ai sign-in was made (epoch ms): the earliest creation time of its `sessionKey*`
+ *  cookies. Chromium keeps a cookie's creation time when the site sets the same value again, and a
+ *  token refresh never touches it, so only a new sign-in moves it. 0 when no cookie says. */
+export function signedInAt(cookies: DesktopCookie[] | null): number {
+  let first = 0
+  for (const c of cookies ?? []) {
+    const us = String(c.creation_utc ?? '')
+    if (!c.name.startsWith('sessionKey') || !/^\d+$/.test(us)) continue
+    const ms = Number(BigInt(us) / 1000n) - CHROMIUM_EPOCH_MS
+    if (ms > 0 && (!first || ms < first)) first = ms
+  }
+  return first
 }
 
 const cookieDb = (dir: string): string => join(dir, 'Network', 'Cookies')
@@ -241,6 +298,16 @@ const mtimeOf = (path: string): number => {
     return 0
   }
 }
+
+/** Whether a removal marker (another PC deleted the login, cli-login-sync.ts's header) reaches the
+ *  instance or profile here that holds its row (`st`: what this PC last agreed with the store on). Only
+ *  a login this PC shared: a desktop sign-in of its own was never tied to the other PC's. And not once
+ *  this PC has taken the removal (`st` agrees with the marker): whatever holds the row since is new,
+ *  and goes up as a sign-in. */
+export const removalReaches = (
+  st: { version: number } | undefined,
+  remote: { version: number },
+): boolean => st !== undefined && st.version !== remote.version
 
 function cookieVersion(d: Database): number {
   try {
@@ -259,7 +326,7 @@ let cookieCopies = 0
 async function withCookieCopy<T>(dir: string, read: (d: Database) => T): Promise<T | null> {
   const tmp = join(tmpdir(), `ah-cookies-${process.pid}-${Date.now()}-${++cookieCopies}.db`)
   try {
-    await copyFile(cookieDb(dir), tmp)
+    await fsSlot(() => copyFile(cookieDb(dir), tmp))
     const d = new Database(tmp, { readonly: true, safeIntegers: true })
     try {
       return read(d)
@@ -269,7 +336,7 @@ async function withCookieCopy<T>(dir: string, read: (d: Database) => T): Promise
   } catch {
     return null
   } finally {
-    await rm(tmp, { force: true })
+    await fsSlot(() => rm(tmp, { force: true }))
   }
 }
 
@@ -481,6 +548,7 @@ export async function portableDesktopLogin(
     tokenCache: tokens.v1,
     cookies,
     expiresAt: tokenExpiry(tokens.v2, tokens.v1),
+    revoked: revokedDigestsFor(p.uuid),
   }
 }
 
@@ -553,11 +621,15 @@ export async function landDesktopLogin(
     }
   const path = join(dir, 'config.json')
   const cfg = readJson(path) ?? {}
+  const live = {
+    v2: withoutRevokedGrants(login.tokenCacheV2),
+    v1: withoutRevokedGrants(login.tokenCache),
+  }
   const [v2, v1] = await Promise.all([
-    login.tokenCacheV2 ? encryptSafeStorage(login.tokenCacheV2, dir) : Promise.resolve(null),
-    login.tokenCache ? encryptSafeStorage(login.tokenCache, dir) : Promise.resolve(null),
+    live.v2 ? encryptSafeStorage(live.v2, dir) : Promise.resolve(null),
+    live.v1 ? encryptSafeStorage(live.v1, dir) : Promise.resolve(null),
   ])
-  if ((login.tokenCacheV2 && !v2) || (login.tokenCache && !v1))
+  if ((live.v2 && !v2) || (live.v1 && !v1))
     return { written: false, created, num, dir, message: 'Its login could not be encrypted here.' }
   cfg.lastKnownAccountUuid = login.id
   if (v2) cfg['oauth:tokenCacheV2'] = v2
@@ -585,7 +657,8 @@ export async function landDesktopLogin(
 /** One pass's view of the store and this PC's agreement with it, from core/cli-login-sync.ts. */
 export interface DesktopSyncContext {
   /** The store's rows (desktop and CLI alike; a desktop one has kind 'desktop'). `signedOut`: a PC
-   *  logged the account out and the others sign out too; `at`: when the row was written. */
+   *  logged the account out and the others sign out too; `removed` (with it): a PC deleted its
+   *  profile and the others delete theirs; `at`: when the row was written, `by`: by which PC. */
   store: Map<
     string,
     {
@@ -594,13 +667,15 @@ export interface DesktopSyncContext {
       kind: string
       name: string | null
       signedOut: boolean
+      removed: boolean
       at: number
+      by: string | null
     }
   >
   state: Record<string, { version: number; hash: string; cookies?: number }>
-  excluded: Set<string>
-  /** Upload; the new version, or null when the store moved meanwhile (409). */
-  upload(login: PortableDesktopLogin, expect: number): Promise<number | null>
+  /** Upload; the new version, or null when the store moved meanwhile (409). `open`: its app runs here
+   *  and refreshes the grant itself, so the other PCs leave the renewal to it (claimDesktopRenewal). */
+  upload(login: PortableDesktopLogin, expect: number, open?: boolean): Promise<number | null>
   download(id: string): Promise<PortableDesktopLogin | null>
   /** Turn the account's row into the signed-out marker; the new version, or null (409). */
   markSignedOut(
@@ -613,11 +688,15 @@ export interface DesktopSyncContext {
    *  AgentHydra's Log out). `clearGone` when it is there again. */
   confirmGone(uuid: string): boolean
   clearGone(uuid: string): void
+  /** The note the deleting PC's owner left on a removal marker, or null. */
+  removalNote(uuid: string): Promise<string | null>
+  /** Delete a profile here with the reason given (lifecycle.ts removeInstance and its guards). */
+  remove(dir: string, why: string): Promise<{ ok: boolean; message: string | null }>
   /** Drop a signed-out profile's cached usage, as a Log out does. */
   dropUsage(dir: string): void
   note(
     num: number | null,
-    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut',
+    action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut' | 'removed',
     text: string,
   ): void
   out: {
@@ -626,6 +705,7 @@ export interface DesktopSyncContext {
     unchanged: number
     problems: string[]
     arrived: LoginArrival[]
+    removed: LoginRemoval[]
   }
 }
 
@@ -731,7 +811,11 @@ async function sendProfile(
 ): Promise<void> {
   const { ctx } = pass
   const cookies = await cookiesToSend(pass, look, theirs)
-  const v = await ctx.upload(await portableDesktopLogin(look.p, look.tokens, cookies), expect)
+  const v = await ctx.upload(
+    await portableDesktopLogin(look.p, look.tokens, cookies),
+    expect,
+    !look.isClosed,
+  )
   if (v !== null)
     ctx.state[look.uuid] = {
       version: v,
@@ -769,6 +853,19 @@ async function syncAgreedProfile(
   ctx.out.unchanged++
 }
 
+/** Whether this profile's tokens are a newer copy than the store's: by the app's own session grant
+ *  when both hold one and they differ, else by the latest grant (see the header). Grants known revoked
+ *  never count, on either side (latestExpiry), so a dead one cannot win and put itself back. */
+function newerHere(look: ProfileLook, theirs: PortableDesktopLogin): boolean {
+  const mine = sessionExpiry(look.tokens.v2, look.tokens.v1)
+  const their = sessionExpiry(theirs.tokenCacheV2, theirs.tokenCache)
+  if (mine && their && mine !== their) return mine > their
+  return (
+    tokenExpiry(look.tokens.v2, look.tokens.v1) >
+    tokenExpiry(theirs.tokenCacheV2, theirs.tokenCache)
+  )
+}
+
 /** The store moved on since this PC last agreed with it. A decision that waits for the app to
  *  close is remembered, so a profile open for days is not downloaded again every pass. */
 async function syncMovedProfile(
@@ -778,7 +875,7 @@ async function syncMovedProfile(
   st: DesktopSyncState,
 ): Promise<void> {
   const { ctx } = pass
-  const { uuid, hash, isClosed, tokens } = look
+  const { uuid, hash, isClosed } = look
   const pending = `${remote.version}:${hash}`
   if (!isClosed && deferred.get(uuid) === pending) {
     pass.waiting.add(uuid)
@@ -786,7 +883,12 @@ async function syncMovedProfile(
   }
   const theirs = await ctx.download(uuid)
   if (!theirs) return
-  const sameTokens = tokensHash(theirs.tokenCacheV2, theirs.tokenCache) === hash
+  // Compared without the grants known revoked: a copy that differs only by those is this one.
+  const theirLive = [
+    withoutRevokedGrants(theirs.tokenCacheV2),
+    withoutRevokedGrants(theirs.tokenCache),
+  ]
+  const sameTokens = tokensHash(theirLive[0], theirLive[1]) === hash
   // The same tokens with other cookies: the store's are the ones that moved (a profile that was
   // open when its tokens went up sends its cookies once it closes).
   const cookiesToLand =
@@ -796,7 +898,7 @@ async function syncMovedProfile(
   if (sameTokens && !cookiesToLand) {
     ctx.state[uuid] = { version: remote.version, hash, cookies: st.cookies }
     ctx.out.unchanged++
-  } else if (!sameTokens && tokenExpiry(tokens.v2, tokens.v1) > theirs.expiresAt)
+  } else if (!sameTokens && newerHere(look, theirs))
     await sendProfile(pass, look, remote.version, theirs.cookies)
   else if (!isClosed) {
     deferred.set(uuid, pending)
@@ -806,7 +908,9 @@ async function syncMovedProfile(
 
 /** The store says signed out (another PC logged this account out) and a profile here holds it. A
  *  login signed in here after the logout is the newer word and goes up in its place; the one this PC
- *  last shared, or any written before the logout, signs out here once its app is closed. */
+ *  last shared, or any written before the logout, signs out here once its app is closed. A running
+ *  app refreshes its grants and rewrites config.json on its own, so neither says a sign-in is new; its
+ *  sign-in cookie does (signedInAt), and is read once the app is closed. */
 async function meetSignOut(
   pass: DesktopPass,
   look: ProfileLook,
@@ -815,18 +919,44 @@ async function meetSignOut(
   const { ctx } = pass
   const st = look.st
   // This PC already took that logout, so a login here now is a new sign-in.
-  const signedInSince =
-    st?.version === remote.version ||
-    (st?.hash !== look.hash && mtimeOf(join(look.p.dir, 'config.json')) > remote.at)
-  if (signedInSince) {
+  if (st?.version === remote.version) {
     await sendProfile(pass, look, remote.version, null)
     return
   }
   if (!look.isClosed) return
+  if (st?.hash !== look.hash && signedInAt(await freshCookies(look)) > remote.at) {
+    await sendProfile(pass, look, remote.version, null)
+    return
+  }
   if (!(await logoutInstance(look.p.dir)).ok) return
   ctx.dropUsage(look.p.dir)
   ctx.state[look.uuid] = { version: remote.version, hash: '' }
   ctx.note(look.p.num, 'signedOut', 'Logged out on another PC, so signed out here too.')
+}
+
+/** The store says another PC deleted this account's profile (removalReaches checked it reaches this
+ *  one): delete it here too once its app is closed, and tell the owner who deleted it and why. */
+async function meetRemoval(
+  pass: DesktopPass,
+  uuid: string,
+  p: DesktopProfile & { uuid: string },
+  remote: DesktopStoreRow,
+): Promise<void> {
+  const { ctx } = pass
+  if (!isClosedDir(await pass.running(), p.dir)) {
+    pass.waiting.add(uuid)
+    return
+  }
+  const note = await ctx.removalNote(uuid)
+  const r = await ctx.remove(p.dir, removalReason(remote.by, note))
+  if (!r.ok) {
+    ctx.out.problems.push(`#${p.num}: ${r.message}`)
+    return
+  }
+  ctx.dropUsage(p.dir)
+  ctx.state[uuid] = { version: remote.version, hash: '' }
+  ctx.note(p.num, 'removed', removalEvent(remote.by, note))
+  ctx.out.removed.push({ kind: 'desktop', num: p.num, by: remote.by, note })
 }
 
 /** A signed-in store copy: a sign-in cookie and a grant with time left. */
@@ -859,10 +989,13 @@ async function syncProfile(
   p: DesktopProfile & { uuid: string },
 ): Promise<void> {
   const { ctx } = pass
-  if (ctx.excluded.has(uuid)) return
   ctx.clearGone(uuid)
   const remote = ctx.store.get(uuid)
   if (remote && remote.kind !== 'desktop') return
+  if (remote?.removed && removalReaches(ctx.state[uuid], remote)) {
+    await meetRemoval(pass, uuid, p, remote)
+    return
+  }
   const tokens = await readDesktopTokens(p.dir)
   if (!tokens) {
     ctx.out.problems.push(`#${p.num}: its desktop login does not open on this PC.`)
@@ -901,17 +1034,17 @@ async function syncProfile(
   else await syncMovedProfile(pass, look, remote, look.st)
 }
 
-/** Accounts no profile here holds. Signed out everywhere: nothing to do. One this PC held and shared:
- *  logged out here (a profile deleted here is left out first), so its row turns into the signed-out
- *  marker. Otherwise the store's copy signs in a signed-out profile here of the same folder name,
- *  else a new one. */
+/** Accounts no profile here holds. Signed out or deleted everywhere: nothing to do. One this PC held
+ *  and shared: logged out here, so its row turns into the signed-out marker (a profile deleted here
+ *  turned it into the removal marker first, cli-login-sync.ts sendRemovals). Otherwise the store's
+ *  copy signs in a signed-out profile here of the same folder name, else a new one. */
 async function syncStoreOnlyAccounts(
   pass: DesktopPass,
   mine: Map<string, DesktopProfile & { uuid: string }>,
 ): Promise<void> {
   const { ctx } = pass
   for (const [uuid, remote] of ctx.store) {
-    if (remote.kind !== 'desktop' || mine.has(uuid) || ctx.excluded.has(uuid)) continue
+    if (remote.kind !== 'desktop' || mine.has(uuid)) continue
     if (remote.signedOut) {
       ctx.state[uuid] = { version: remote.version, hash: '' }
       ctx.clearGone(uuid)

@@ -208,6 +208,31 @@ jobs:
       - name: Guardrail (install.ps1 parses under Windows PowerShell 5.1)
         run: bun scripts/checks/ps1-read-as-ansi.mjs
 
+      # Fails on a reversed copy made only to search it (`[...xs].reverse().find(p)`): findLast and
+      # findLastIndex search from the end in place. The 2026-10-16 efficiency audit fixed this in one
+      # file and a sweep found the same line in nine more. See the check's header.
+      - name: Guardrail (no reversed copy just to search it)
+        run: bun scripts/checks/reversed-copy-to-search.mjs
+
+      # Fails on `Promise.all(xs.map(...))` over async fs calls in a Bun process: each item can start an
+      # I/O pool thread Bun never gives back. e5382243 put one back into the function 44429d00 had fixed
+      # two days before. Read one at a time or take an fsSlot. See the check's header.
+      - name: Guardrail (no unbounded async fs fan-out)
+        run: bun scripts/checks/fs-fanout-unbounded.mjs
+
+      # Fails if a file outside the deliberate owners writes a login's credential file or token-store key: a
+      # second writer can put a stale token back over a fresh refresh. Landed 2026-10-10 without this step,
+      # so no land ran it, and 9acd9397 turned it red on main on 2026-10-16. See the check's header.
+      - name: Guardrail (only the deliberate owners write a login's credentials)
+        run: bun scripts/checks/credential-writer-ratchet.mjs
+
+      # Fails if a tracked .ts/.vue/.py/.js/.mjs file holds a raw control byte (anything below 0x20
+      # but TAB, LF and CR). pushback.ts carried four backspace bytes where its regex meant `\b`
+      # from d5e3904b to 2026-10-16, most likely written through a shell that halves backslashes,
+      # so the pattern never matched and an editor showed nothing wrong. See the check's header.
+      - name: Guardrail (no raw control bytes in source)
+        run: bun scripts/checks/raw-control-bytes-in-source.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.
@@ -299,6 +324,12 @@ jobs:
         working-directory: desk2
         run: bun install --frozen-lockfile
 
+      # desk2's server imports the root server's people host (server/src/people-host.ts), and that file's
+      # own imports (hono) resolve from the root workspace, not desk2's: without it the typecheck stops at
+      # "Cannot find module 'hono'" (every run since 25d7d6f8, 2026-10-15).
+      - name: Install dependencies (root, for the server files desk2 imports)
+        run: bun install --frozen-lockfile
+
       - name: Typecheck (desk2)
         working-directory: desk2
         run: bun run typecheck
@@ -320,7 +351,8 @@ jobs:
 
       - name: Install ClaudFree and its test tools (desk2)
         working-directory: desk2
-        run: pip install "server/src/free-instances/harness[browser,dev]"
+        # mcp: test_private_only reads the MCP server's chat tools.
+        run: pip install "server/src/free-instances/harness[browser,dev,mcp]"
 
       - name: Test (desk2 free-instances harness)
         working-directory: desk2

@@ -81,11 +81,6 @@ def _build_parser():
         help="Account service; Claude remains the default",
     )
     parser.add_argument(
-        "--regular",
-        action="store_true",
-        help="Use an ordinary chat instead of Claude Incognito chat",
-    )
-    parser.add_argument(
         "--prompt",
         help="Message for HTTP chat",
     )
@@ -176,8 +171,8 @@ def _check_references(parser, args):
     # Validate the command/option combinations before opening any state or sockets.
     if args.timeout < 1:
         parser.error("--timeout must be positive")
-    if args.command not in {"chat", "resume"} and (args.prompt or args.regular):
-        parser.error("--prompt and --regular are only valid with chat/resume")
+    if args.command not in {"chat", "resume"} and args.prompt:
+        parser.error("--prompt is only valid with chat/resume")
     if args.command not in {"chat", "resume", "read", "track"} and (
         args.identifier or args.chat_id
     ):

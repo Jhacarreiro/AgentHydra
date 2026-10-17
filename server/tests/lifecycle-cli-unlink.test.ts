@@ -18,7 +18,7 @@
 // never a pre-existing instance.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import {
   createCliInstance,
   deleteCliInstance,
@@ -34,7 +34,7 @@ const cleanupCliIds: string[] = []
 afterEach(() => {
   for (const id of cleanupCliIds.splice(0)) {
     try {
-      deleteCliInstance(id, getCliInstance(id)?.name ?? '')
+      deleteCliInstance(id, 'Test cleanup')
     } catch {
       // best-effort
     }
@@ -67,7 +67,7 @@ describe('removeInstance() clears CLI-instance links to the deleted desktop dir 
     expect(linked.ok).toBe(true)
     expect(getCliInstance(id)?.associatedDesktopDir).toBe(desktopDir)
 
-    const result = await removeInstance(desktopDir, { confirmName: basename(desktopDir) })
+    const result = await removeInstance(desktopDir, { note: 'Ghost link test' })
 
     expect(result.ok).toBe(true)
     expect(existsSync(desktopDir)).toBe(false)
@@ -94,7 +94,7 @@ describe('removeInstance() clears CLI-instance links to the deleted desktop dir 
     linkCliInstanceToDesktop(id, survivingDir, 'unrelated-cli (desktop)')
     expect(getCliInstance(id)?.associatedDesktopDir).toBe(survivingDir)
 
-    const result = await removeInstance(deletedDir, { confirmName: basename(deletedDir) })
+    const result = await removeInstance(deletedDir, { note: 'Unrelated link test' })
     expect(result.ok).toBe(true)
 
     // Unrelated link must survive — only the CLI instance linked to the DELETED dir gets cleared.
@@ -103,7 +103,7 @@ describe('removeInstance() clears CLI-instance links to the deleted desktop dir 
 
   test('no CLI instance linked to the deleted dir -> delete proceeds exactly as before (no-op loop)', async () => {
     const desktopDir = makeDesktopDir('no-links')
-    const result = await removeInstance(desktopDir, { confirmName: basename(desktopDir) })
+    const result = await removeInstance(desktopDir, { note: 'No links test' })
     expect(result.ok).toBe(true)
     expect(existsSync(desktopDir)).toBe(false)
   })

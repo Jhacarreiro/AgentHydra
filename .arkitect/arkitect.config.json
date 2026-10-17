@@ -5,7 +5,7 @@
   },
   "checks": {
     "account-scoped-storage-keys": {
-      "$reason": "Device-level by design: AgentHydra's web UI has no signed-in app account (a local dashboard over the same-origin daemon). agenthydra.app.view is the per-window tab choice, rebrandNoticePending a one-shot upgrade flag, and the usage-filter keys are display preferences over the whole account list. AgentHydra 2.0's window (desk2/web) and its copy of these pages (desk2/hydra) are the same single-user local window over the loopback server with no app sign-in: their agenthydra.* and hydra-desk* keys hold panel, width, layout, sort, filter, period, privacy-blur, dismissal and last-view choices, and hydra-desk-drafts names the composer's image-draft database. The same holds for the session list's filter choices (archived, source, dispatched, shape, rate-limited), the analytics source selection, the New screen's two project toggles, the dev-server snapshot (this machine's own servers, shown before the first fetch answers), the What's new marker and last-seen version, and the tasks panel width.",
+      "$reason": "Device-level by design: AgentHydra's web UI has no signed-in app account (a local dashboard over the same-origin daemon). agenthydra.app.view is the per-window tab choice, rebrandNoticePending a one-shot upgrade flag, and the usage-filter keys are display preferences over the whole account list. AgentHydra 2.0's window (desk2/web) and its copy of these pages (desk2/hydra) are the same single-user local window over the loopback server with no app sign-in: their agenthydra.* and hydra-desk* keys hold panel, width, layout, sort, filter, period, privacy-blur, dismissal and last-view choices, and hydra-desk-drafts names the composer's image-draft database. The same holds for the session list's filter choices (archived, source, dispatched, shape, rate-limited), the analytics source selection, the New screen's two project toggles, the dev-server snapshot (this machine's own servers, shown before the first fetch answers), the What's new marker and last-seen version, and the tasks panel width. The same holds for the rail's width and folded state, the sidebar's compact, folded and side choices, the Instances usage period, the open/closed state of a CliMayte wave row, and hydra-desk:outside-held, the messages typed into an outside chat while it works elsewhere (keyed by chat inside, kept over a reload until they are sent).",
       "deviceGlobalAllow": [
         "agenthydra.app.view",
         "${PREFIX}rebrandNoticePending",
@@ -68,7 +68,15 @@
         "hydra-desk:dictation-lang",
         "hydra-desk:dock-dismissed",
         "hydra-desk:screen",
-        "hydra-desk:view"
+        "hydra-desk:view",
+        "agenthydra.climayte.waveOpen",
+        "agenthydra.instances.usagePeriod",
+        "hydra-desk.rail.folded",
+        "hydra-desk.rail.width",
+        "hydra-desk.sidebar.compact",
+        "hydra-desk.sidebar.folded",
+        "hydra-desk.sidebar.side",
+        "hydra-desk:outside-held"
       ]
     },
     "ime-composition-enter-guard": {
@@ -79,6 +87,14 @@
         "/web/src/main.js",
         "/web/src/main.jsx"
       ]
+    },
+    "dependency-hygiene": {
+      "$reason": "core/ has no package.json of its own by design (core/tsconfig.json): it resolves @anthropic-ai/claude-agent-sdk through that tsconfig's `paths` to desk2/server's copy, which desk2/server/package.json declares and pins. The import is declared, one manifest over.",
+      "ignoreUnlisted": ["@anthropic-ai/claude-agent-sdk"]
+    },
+    "barrel-fanout-inventory": {
+      "$reason": "This repo's barrel inventory lives beside this config.",
+      "policyPath": ".arkitect/barrel-fanout-inventory.json"
     }
   }
 }

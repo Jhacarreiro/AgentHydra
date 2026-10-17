@@ -109,7 +109,7 @@ def test_resume_from_job_reruns_only_changed_or_failed_tasks(tmp_path, monkeypat
 
 def test_prunable_finds_only_finished_folders_older_than_the_window(tmp_path, monkeypatch):
     # The job folders are a cache of delivered work (results + worker transcripts); the numbers live in the
-    # ledger and the synced shard. One day put 1.2 GiB here, so the cache needs a broom (Michael, 2026-09-16).
+    # ledger and the synced shard. One day put 1.2 GiB here, so the cache needs a broom (the other owner, 2026-09-16).
     import datetime as dt
 
     from hswarm.job import Job

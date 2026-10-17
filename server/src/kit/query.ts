@@ -802,13 +802,22 @@ function* ledgerPages(c: Scan): Generator<void, void, void> {
   const nextEdge = c.db.query(
     'select session, ref from usage_session where (session, ref) > (?, ?) order by session, ref limit 1 offset ?',
   )
-  let after: [string, string] = ['', '']
+  const firstEdge = c.db.query(
+    'select session, ref from usage_session order by session, ref limit 1 offset ?',
+  )
+  let after: [string, string] | null = null
   for (;;) {
-    const edge = nextEdge.get(after[0], after[1], LEDGER_PAGE_ROWS - 1) as {
+    const edge = (
+      after
+        ? nextEdge.get(after[0], after[1], LEDGER_PAGE_ROWS - 1)
+        : firstEdge.get(LEDGER_PAGE_ROWS - 1)
+    ) as {
       session: string
       ref: string
     } | null
-    const upTo: [string, string] = edge ? [edge.session, edge.ref] : ['￿', '￿']
+    // Empty strings are real normalized keys, and no Unicode string is a terminal key.
+    const lower = after ? '(session, ref) > (?, ?) and ' : ''
+    const upper = edge ? '(session, ref) <= (?, ?) and ' : ''
     take(
       c,
       selectRows(
@@ -817,8 +826,8 @@ function* ledgerPages(c: Scan): Generator<void, void, void> {
         c.dims,
         false,
         {
-          sql: `(session, ref) > (?, ?) and (session, ref) <= (?, ?) and ${unplussed}`,
-          args: [...after, ...upTo, ...c.ledger.args],
+          sql: `${lower}${upper}${unplussed}`,
+          args: [...(after ?? []), ...(edge ? [edge.session, edge.ref] : []), ...c.ledger.args],
         },
         HOUR_MS,
         c.flag,
@@ -827,7 +836,7 @@ function* ledgerPages(c: Scan): Generator<void, void, void> {
     )
     yield
     if (!edge) break
-    after = upTo
+    after = [edge.session, edge.ref]
   }
 }
 
@@ -951,16 +960,17 @@ function* pagedCutRows(c: Scan, cols: string): Generator<void, CutRow[], void> {
   const cutWhere = `${sessWhere.sql}${dim.sql} and +first_ts <= ? and +last_ts >= ? and (+first_ts < ? or +last_ts > ?)`
   const cutArgs = [...sessWhere.args, ...dim.args, win.to, win.from, win.from, win.to]
   const nextEdge = db.query(
-    'select session, ref from usage_session where (session, ref) >= (?, ?) order by session, ref limit 1 offset ?',
+    'select session, ref from usage_session where (session, ref) > (?, ?) order by session, ref limit 1 offset ?',
+  )
+  const firstEdge = db.query(
+    'select session, ref from usage_session order by session, ref limit 1 offset ?',
   )
   let after: [string, string] | null = null
   for (;;) {
     const edge: { session: string; ref: string } | null = sliced
-      ? (nextEdge.get(
-          after?.[0] ?? '',
-          after?.[1] ?? '',
-          after ? LEDGER_PAGE_ROWS : LEDGER_PAGE_ROWS - 1,
-        ) as {
+      ? ((after
+          ? nextEdge.get(after[0], after[1], LEDGER_PAGE_ROWS - 1)
+          : firstEdge.get(LEDGER_PAGE_ROWS - 1)) as {
           session: string
           ref: string
         } | null)

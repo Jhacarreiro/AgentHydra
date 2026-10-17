@@ -21,6 +21,8 @@ export interface FakeState {
   chatsError?: string
   sessions: any[]
   instances: any[]
+  /** Set: GET /api/cli-instances answers this error with a 500 instead of `instances`. */
+  instancesError?: string
   workers: any[]
   detail: any
   tail: any
@@ -153,6 +155,13 @@ export function statsAnswers(): FakeState['stats'] {
       pricesAsOf: '2026-10-01',
       priceSource: 'bundled',
       coverage: { sessions: 50, total: 60, refreshing: true, bytes: 0 },
+      // Where each source's record begins; `newtool` has none.
+      kitCoverage: {
+        sources: {
+          desktop: { events: 500, firstTs: new Date(2026, 5, 30, 9).getTime(), lastTs: Date.now() },
+          climayte: { events: 300, firstTs: new Date(2026, 8, 30, 23).getTime(), lastTs: Date.now() },
+        },
+      },
       notes: [],
     },
     activity: { hours, tools: [], agentMinutes: 321, health: [], editSurvival: { sessions: 0, average: null, overdue: 0 } },
@@ -202,46 +211,58 @@ const json = (data: unknown, status = 200) => Response.json(data, { status })
 const stat = (answer: any) => (typeof answer === 'string' ? json({ error: answer }, 500) : json(answer))
 
 function handlePost(state: FakeState, p: string, body: any): Response {
-  if (p === '/api/corch/workers') {
-    // Only the refusals the request-id probe meets: AgentHydra checks a task's requestId before its prompt.
-    const t = body?.tasks?.[0]
-    if (state.requestIds !== false && t?.requestId !== undefined && !t.requestId) return json({ error: 'task 1: requestId must be a non-empty string of at most 200 characters' }, 400)
-    if (!t?.prompt) return json({ error: 'task 1: prompt is empty' }, 400)
-    return json({ error: 'not found' }, 404)
-  }
-  if (p === '/api/corch/cancel') {
-    const w = state.workers.find((x) => x.id === body?.id && ACTIVE.has(x.status))
-    if (w) w.status = 'cancelled'
-    return json({ cancelled: w ? [w.id] : [], keptMessages: {} })
-  }
+  if (p === '/api/corch/workers') return postWorkers(state, body)
+  if (p === '/api/corch/cancel') return postCancel(state, body)
   const send = /^\/api\/corch\/workers\/([^/]+)\/send$/.exec(p)
-  if (send) {
-    const w = state.workers.find((x) => x.id === decodeURIComponent(send[1]))
-    if (!w) return json({ ok: false, message: `no such worker ${send[1]}` })
-    if (!ACTIVE.has(w.status)) return json({ ok: false, message: `worker ${w.id} is ${w.status}` })
-    if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
-    return json({ ok: true, message: 'queued' })
-  }
+  if (send) return postSend(state, send[1], body)
   const branch = /^\/api\/sessions\/([^/]+)\/branch$/.exec(p)
-  if (branch) {
-    // AgentHydra's session-branch: a reply line that is not in the chat is a 404
-    if (body?.uuid === 'not-in-this-chat') return json({ error: 'that reply is not in this chat' }, 404)
-    return json({ session_id: `branch-of-${decodeURIComponent(branch[1])}`, source: 'claude' })
-  }
+  if (branch) return postBranch(branch[1], body)
   const now = /^\/api\/corch\/workers\/([^/]+)\/deliver-now$/.exec(p)
-  if (now) {
-    if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
-    const w = state.workers.find((x) => x.id === decodeURIComponent(now[1]))
-    if (!w) return json({ ok: false, message: 'No such worker.' })
-    return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
-  }
+  if (now) return postDeliverNow(state, now[1])
   const cancel = /^\/api\/corch\/workers\/([^/]+)\/cancel-held$/.exec(p)
-  if (cancel) {
-    if (state.cancelHeld === false) return new Response('404 Not Found', { status: 404 })
-    const removed = state.cancelRemoves !== false
-    return json({ ok: true, removed, message: removed ? 'Taken back: the worker will not run it.' : 'That message is not held any more: it was delivered, or its turn has begun.' })
-  }
+  if (cancel) return postCancelHeld(state)
   return json({ error: 'not found' }, 404)
+}
+
+function postWorkers(state: FakeState, body: any): Response {
+  // Only the refusals the request-id probe meets: AgentHydra checks a task's requestId before its prompt.
+  const t = body?.tasks?.[0]
+  if (state.requestIds !== false && t?.requestId !== undefined && !t.requestId) return json({ error: 'task 1: requestId must be a non-empty string of at most 200 characters' }, 400)
+  if (!t?.prompt) return json({ error: 'task 1: prompt is empty' }, 400)
+  return json({ error: 'not found' }, 404)
+}
+
+function postCancel(state: FakeState, body: any): Response {
+  const w = state.workers.find((x) => x.id === body?.id && ACTIVE.has(x.status))
+  if (w) w.status = 'cancelled'
+  return json({ cancelled: w ? [w.id] : [], keptMessages: {} })
+}
+
+function postSend(state: FakeState, id: string, body: any): Response {
+  const w = state.workers.find((x) => x.id === decodeURIComponent(id))
+  if (!w) return json({ ok: false, message: `no such worker ${id}` })
+  if (!ACTIVE.has(w.status)) return json({ ok: false, message: `worker ${w.id} is ${w.status}` })
+  if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
+  return json({ ok: true, message: 'queued' })
+}
+
+function postBranch(id: string, body: any): Response {
+  // AgentHydra's session-branch: a reply line that is not in the chat is a 404
+  if (body?.uuid === 'not-in-this-chat') return json({ error: 'that reply is not in this chat' }, 404)
+  return json({ session_id: `branch-of-${decodeURIComponent(id)}`, source: 'claude' })
+}
+
+function postDeliverNow(state: FakeState, id: string): Response {
+  if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
+  const w = state.workers.find((x) => x.id === decodeURIComponent(id))
+  if (!w) return json({ ok: false, message: 'No such worker.' })
+  return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
+}
+
+function postCancelHeld(state: FakeState): Response {
+  if (state.cancelHeld === false) return new Response('404 Not Found', { status: 404 })
+  const removed = state.cancelRemoves !== false
+  return json({ ok: true, removed, message: removed ? 'Taken back: the worker will not run it.' : 'That message is not held any more: it was delivered, or its turn has begun.' })
 }
 
 function getWorkers(state: FakeState, q: URLSearchParams): Response {
@@ -273,7 +294,7 @@ function plainGet(state: FakeState, p: string): Response | null {
     case '/api/sessions':
       return json(state.sessions)
     case '/api/cli-instances':
-      return json(state.instances)
+      return state.instancesError ? json({ error: state.instancesError }, 500) : json(state.instances)
     case '/api/analytics/spend':
       return stat(state.stats.spend)
     case '/api/analytics/activity':

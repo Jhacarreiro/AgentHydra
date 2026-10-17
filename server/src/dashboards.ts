@@ -17,8 +17,13 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path'
 import { DATA_DIR, PORT } from './config'
+import {
+  type DashboardBackend,
+  ensureDashboardBackend,
+  stopDashboardBackend,
+} from './dashboard-backend'
 import TODO_WIDGET from './dashboard-widgets/todo.js' with { type: 'text' }
 import { fourmanBoard, unavailableBoard } from './fourman'
 
@@ -54,6 +59,7 @@ export interface DashboardEntry {
 export interface DashboardRead extends DashboardSummary {
   folder: string
   entries: DashboardEntry[]
+  backend: DashboardBackend | null
   path?: string
   content?: string
   encoding?: 'utf8' | 'base64'
@@ -78,6 +84,7 @@ export interface DashboardChange {
   files?: DashboardFile[]
   edits?: DashboardEdit[]
   remove?: string[]
+  backend?: DashboardBackend | null
 }
 
 interface Meta {
@@ -85,6 +92,7 @@ interface Meta {
   name: string
   updatedBy: string
   updatedAt: string
+  backend?: DashboardBackend
 }
 
 function fail(message: string): never {
@@ -235,6 +243,7 @@ async function fullRead(id: string, workspace: string, path?: string): Promise<D
       bytes: f.bytes,
       updatedAt: new Date(f.mtimeMs).toISOString(),
     })),
+    backend: (await readMeta(id))?.backend ?? null,
   }
   if (path !== undefined) {
     const rel = checkPath(path)
@@ -309,6 +318,54 @@ function parseChange(raw: unknown): DashboardChange & { by: string } {
     files,
     edits,
     remove,
+    backend: parseBackendArg(raw.backend),
+  }
+}
+
+function parseBackendArg(raw: unknown): DashboardBackend | null | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null) return null
+  if (!isObj(raw))
+    fail('backend must be an object {command, cwd, port, health}, or null to remove it')
+  const { command, cwd, port, health } = raw
+  if (
+    !Array.isArray(command) ||
+    command.length === 0 ||
+    command.some((c) => typeof c !== 'string' || !c)
+  )
+    fail('backend.command must be a list of strings: the program, then its arguments')
+  const exe = command[0] as string
+  if (!isAbsolute(exe) && !/[\\/]/.test(exe))
+    fail(
+      `backend.command[0] ${JSON.stringify(exe)} must be an absolute path or a path relative to cwd`,
+    )
+  if (typeof cwd !== 'string' || !isAbsolute(cwd))
+    fail('backend.cwd must be an absolute folder path')
+  if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535)
+    fail('backend.port must be a port number from 1 to 65535')
+  if (typeof health !== 'string' || !health.startsWith('/'))
+    fail('backend.health must be a path such as /api/ping')
+  return { command: command as string[], cwd, port: port as number, health }
+}
+
+/** The backend's folder must be inside the project and its program must exist; both are checked on write. */
+async function checkBackend(backend: DashboardBackend, workspace: string): Promise<void> {
+  let cwd: string
+  try {
+    cwd = await realpath(backend.cwd)
+    if (!(await stat(cwd)).isDirectory()) throw new Error('not a folder')
+  } catch {
+    fail(`backend.cwd is not an existing folder: ${backend.cwd}`)
+  }
+  const ws = await realpath(workspace).catch(() => resolve(workspace))
+  const lower = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
+  if (lower(cwd) !== lower(ws) && !lower(cwd).startsWith(lower(ws) + sep))
+    fail('backend.cwd must be inside the project folder')
+  const exe = resolve(backend.cwd, backend.command[0] ?? '')
+  try {
+    if (!(await stat(exe)).isFile()) throw new Error('not a file')
+  } catch {
+    fail(`backend.command[0] is not an existing file: ${exe}`)
   }
 }
 
@@ -361,13 +418,95 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+type ParsedChange = DashboardChange & { by: string }
+
+/** Writes one file of a change into the staged copy; a file may not replace a folder. */
+async function writeFileChange(at: (p: string) => string, f: DashboardFile): Promise<void> {
+  const data = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8')
+  if (data.length > MAX_FILE_BYTES)
+    fail(`${f.path} is ${data.length} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
+  if ((await exists(at(f.path))) && !(await lstat(at(f.path))).isFile())
+    fail(`${f.path} is a folder here; write a file inside it or remove it first`)
+  await mkdir(dirname(at(f.path)), { recursive: true })
+  await writeFile(at(f.path), data)
+}
+
+/** Replaces the one place the edit's "old" text occurs in the staged copy; it must occur exactly once. */
+async function applyEdit(at: (p: string) => string, e: DashboardEdit, i: number): Promise<void> {
+  let text: string
+  try {
+    text = await readFile(at(e.path), 'utf8')
+  } catch {
+    fail(`edits[${i}]: ${e.path} does not exist; create it with files first`)
+  }
+  const first = text.indexOf(e.old)
+  if (first < 0)
+    fail(
+      `edits[${i}]: the "old" text was not found in ${e.path}; read the file again, it may have changed`,
+    )
+  if (text.includes(e.old, first + 1))
+    fail(
+      `edits[${i}]: the "old" text occurs more than once in ${e.path}; include more surrounding text so it is unique`,
+    )
+  await writeFile(at(e.path), text.slice(0, first) + e.new + text.slice(first + e.old.length))
+}
+
+/** Builds the staged copy: the previous site (or the `from` folder, or nothing when cleared), then the change. */
+async function stageChange(change: ParsedChange, site: string, staging: string): Promise<void> {
+  if (change.from) await copyFrom(change.from, staging)
+  else if (!change.clear) await cp(site, staging, { recursive: true, preserveTimestamps: true })
+  const at = (p: string) => join(staging, ...p.split('/'))
+  for (const f of change.files ?? []) await writeFileChange(at, f)
+  for (const [i, e] of (change.edits ?? []).entries()) await applyEdit(at, e, i)
+  for (const p of change.remove ?? []) await rm(at(p), { force: true })
+}
+
+/** Swaps the staged copy in as site/; the old site waits as site.old until the swap is complete. */
+async function publishStaging(dir: string, site: string, staging: string): Promise<void> {
+  await rm(join(dir, 'site.old'), { recursive: true, force: true })
+  await rename(site, join(dir, 'site.old'))
+  await rename(staging, site)
+  await rm(join(dir, 'site.old'), { recursive: true, force: true })
+}
+
+/** After a failed write: drop the staged copy, and put the old site back if the swap had moved it away. */
+async function recoverSite(dir: string, site: string, staging: string): Promise<void> {
+  await rm(staging, { recursive: true, force: true })
+  if (!(await exists(site)) && (await exists(join(dir, 'site.old'))))
+    await rename(join(dir, 'site.old'), site)
+}
+
+/** Records who wrote last, stops the backend when its declaration changed, and reads the site back. */
+async function recordWrite(
+  id: string,
+  workspace: string,
+  change: ParsedChange,
+  previous: Meta | null,
+): Promise<DashboardRead> {
+  const dir = dirOf(id)
+  const backend = change.backend === undefined ? previous?.backend : (change.backend ?? undefined)
+  const meta: Meta = {
+    workspace,
+    name: basename(workspace),
+    updatedBy: change.by,
+    updatedAt: new Date().toISOString(),
+    ...(backend ? { backend } : {}),
+  }
+  await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
+  if (JSON.stringify(previous?.backend ?? null) !== JSON.stringify(backend ?? null))
+    stopDashboardBackend(id)
+  return fullRead(id, workspace)
+}
+
 export async function writeDashboard(folder: string, raw: unknown): Promise<DashboardRead> {
   const change = parseChange(raw)
   const workspace = workspaceOf(folder)
   const id = dashboardId(workspace)
+  if (change.backend) await checkBackend(change.backend, workspace)
   return serialized(id, async () => {
     const dir = dirOf(id)
     const site = siteOf(id)
+    const previous = await readMeta(id)
     await mkdir(site, { recursive: true })
     for (const n of await readdir(dir)) {
       if (n.startsWith('.staging-') || n === 'site.old')
@@ -376,56 +515,14 @@ export async function writeDashboard(folder: string, raw: unknown): Promise<Dash
     const staging = join(dir, `.staging-${randomBytes(4).toString('hex')}`)
     try {
       await mkdir(staging, { recursive: true })
-      if (change.from) await copyFrom(change.from, staging)
-      else if (!change.clear) await cp(site, staging, { recursive: true, preserveTimestamps: true })
-      const at = (p: string) => join(staging, ...p.split('/'))
-      for (const f of change.files ?? []) {
-        const data = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8')
-        if (data.length > MAX_FILE_BYTES)
-          fail(`${f.path} is ${data.length} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
-        if ((await exists(at(f.path))) && !(await lstat(at(f.path))).isFile())
-          fail(`${f.path} is a folder here; write a file inside it or remove it first`)
-        await mkdir(dirname(at(f.path)), { recursive: true })
-        await writeFile(at(f.path), data)
-      }
-      for (const [i, e] of (change.edits ?? []).entries()) {
-        let text: string
-        try {
-          text = await readFile(at(e.path), 'utf8')
-        } catch {
-          fail(`edits[${i}]: ${e.path} does not exist; create it with files first`)
-        }
-        const first = text.indexOf(e.old)
-        if (first < 0)
-          fail(
-            `edits[${i}]: the "old" text was not found in ${e.path}; read the file again, it may have changed`,
-          )
-        if (text.indexOf(e.old, first + 1) >= 0)
-          fail(
-            `edits[${i}]: the "old" text occurs more than once in ${e.path}; include more surrounding text so it is unique`,
-          )
-        await writeFile(at(e.path), text.slice(0, first) + e.new + text.slice(first + e.old.length))
-      }
-      for (const p of change.remove ?? []) await rm(at(p), { force: true })
+      await stageChange(change, site, staging)
       checkLimits(await walk(staging))
-      await rm(join(dir, 'site.old'), { recursive: true, force: true })
-      await rename(site, join(dir, 'site.old'))
-      await rename(staging, site)
-      await rm(join(dir, 'site.old'), { recursive: true, force: true })
+      await publishStaging(dir, site, staging)
     } catch (err) {
-      await rm(staging, { recursive: true, force: true })
-      if (!(await exists(site)) && (await exists(join(dir, 'site.old'))))
-        await rename(join(dir, 'site.old'), site)
+      await recoverSite(dir, site, staging)
       throw err
     }
-    const meta: Meta = {
-      workspace,
-      name: basename(workspace),
-      updatedBy: change.by,
-      updatedAt: new Date().toISOString(),
-    }
-    await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
-    return fullRead(id, workspace)
+    return recordWrite(id, workspace, change, previous)
   })
 }
 
@@ -514,59 +611,156 @@ async function hydraFeed(id: string, rest: string[], isHead: boolean): Promise<R
   return text(404, 'not found')
 }
 
-/** A Response when the request's Host names a dashboard site (answered here, never reaching /api), else null. */
-export async function serveDashboardSite(req: Request): Promise<Response | null> {
-  const id = dashboardHostId(req.headers.get('host'))
-  if (!id) return null
-  if (req.method !== 'GET' && req.method !== 'HEAD')
-    return text(405, 'a dashboard site only answers GET and HEAD', { allow: 'GET, HEAD' })
-  if (!ID_RE.test(id) || !(await exists(dirOf(id)))) return text(404, 'no such dashboard')
-  const url = new URL(req.url)
-  let segs: string[]
-  try {
-    const decoded = decodeURIComponent(url.pathname)
-    if (decoded.includes('\0') || decoded.includes('\\')) return text(400, 'bad path')
-    segs = decoded.split('/').filter(Boolean)
-  } catch {
-    return text(400, 'bad path')
+const API_PREFIX = '/_hydra/api'
+const MAX_BODY_BYTES = 1024 * 1024
+const UPSTREAM_TIMEOUT_MS = 30_000
+const NO_BODY_STATUS = [101, 204, 205, 304]
+
+function json(status: number, body: unknown, extra: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8', ...SITE_HEADERS, ...extra },
+  })
+}
+
+async function readBodyLimited(req: Request): Promise<Uint8Array | null> {
+  if (!req.body) return new Uint8Array()
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
   }
-  if (segs.some((s) => s === '.' || s === '..')) return text(404, 'not found')
-  const isHead = req.method === 'HEAD'
-  if (segs[0] === '_hydra') return hydraFeed(id, segs.slice(1), isHead)
-  const site = siteOf(id)
+  return Buffer.concat(chunks)
+}
+
+async function serveBackend(id: string, req: Request, url: URL): Promise<Response> {
+  if (req.method !== 'GET' && req.method !== 'POST')
+    return json(
+      405,
+      { error: 'a dashboard backend only answers GET and POST' },
+      { allow: 'GET, POST' },
+    )
+  const rest = url.pathname.slice(API_PREFIX.length)
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(rest)
+  } catch {
+    return json(400, { error: 'bad path' })
+  }
+  if (
+    decoded.includes('\0') ||
+    decoded.includes('\\') ||
+    decoded.split('/').some((s) => s === '.' || s === '..')
+  )
+    return json(404, { error: 'not found' })
+  const backend = (await readMeta(id))?.backend
+  if (!backend) return json(404, { error: 'this dashboard has no backend' })
+  let body: Uint8Array | undefined
+  if (req.method === 'POST') {
+    const own = `http://${(req.headers.get('host') ?? '').toLowerCase()}`
+    const mime = req.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (req.headers.get('origin')?.toLowerCase() !== own)
+      return json(403, { error: 'a POST is accepted only from this dashboard itself' })
+    if (mime !== 'application/json')
+      return json(403, { error: 'a POST body must be application/json' })
+    const read = await readBodyLimited(req)
+    if (!read) return json(413, { error: 'the request body is over 1 MB' })
+    body = read
+  }
+  const problem = await ensureDashboardBackend(id, backend, join(dirOf(id), 'backend.log'))
+  if (problem) return json(502, { error: problem })
+  const headers = new Headers()
+  const accept = req.headers.get('accept')
+  const type = req.headers.get('content-type')
+  if (accept) headers.set('accept', accept)
+  if (type) headers.set('content-type', type)
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${backend.port}/api${rest}${url.search}`, {
+      method: req.method,
+      headers,
+      body,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    })
+    const bytes = await upstream.arrayBuffer()
+    const nullBody = NO_BODY_STATUS.includes(upstream.status)
+    return new Response(nullBody ? null : bytes, {
+      status: upstream.status,
+      headers: {
+        'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
+        ...SITE_HEADERS,
+      },
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError')
+      return json(504, { error: 'the backend did not answer within 30 seconds' })
+    return json(502, { error: 'the backend stopped answering; see backend.log' })
+  }
+}
+
+/** Starts the backend of every dashboard that declares one; called once when the daemon boots. */
+export async function startDeclaredBackends(): Promise<void> {
+  const names = await readdir(root()).catch(() => [] as string[])
+  for (const id of names.filter((n) => ID_RE.test(n))) {
+    const backend = (await readMeta(id))?.backend
+    if (backend) void ensureDashboardBackend(id, backend, join(dirOf(id), 'backend.log'))
+  }
+}
+
+/** The decoded path's segments, or null for a path that cannot be read safely (bad escapes, a NUL or a backslash). */
+function sitePathSegments(pathname: string): string[] | null {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return null
+  }
+  if (decoded.includes('\0') || decoded.includes('\\')) return null
+  return decoded.split('/').filter(Boolean)
+}
+
+/** The real path of an existing file or folder, or null when there is none. */
+async function realOrNull(p: string): Promise<string | null> {
+  try {
+    return await realpath(p)
+  } catch {
+    return null
+  }
+}
+
+/** Answers a GET or HEAD for a file under the site folder; a folder answers with its index.html. */
+async function serveSiteFile(
+  site: string,
+  url: URL,
+  segs: string[],
+  isHead: boolean,
+): Promise<Response> {
   const html = (body: string, status = 200) =>
     new Response(isHead ? null : body, {
       status,
       headers: { 'content-type': TYPES.html as string, ...SITE_HEADERS },
     })
-  let siteReal: string
-  try {
-    siteReal = await realpath(site)
-  } catch {
-    return html(PLACEHOLDER)
-  }
-  let target = join(siteReal, ...segs)
-  let real: string
-  try {
-    real = await realpath(target)
-  } catch {
-    if (segs.length === 0) return html(PLACEHOLDER)
-    return text(404, 'not found')
-  }
+  const siteReal = await realOrNull(site)
+  if (siteReal === null) return html(PLACEHOLDER)
+  let real = await realOrNull(join(siteReal, ...segs))
+  if (real === null) return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
   if (real !== siteReal && !real.startsWith(siteReal + sep)) return text(404, 'not found')
-  const s = await stat(real)
-  if (s.isDirectory()) {
+  if ((await stat(real)).isDirectory()) {
     if (segs.length && !url.pathname.endsWith('/'))
       return new Response(null, {
         status: 301,
         headers: { location: `${url.pathname}/${url.search}`, ...SITE_HEADERS },
       })
-    target = join(real, 'index.html')
-    try {
-      real = await realpath(target)
-    } catch {
-      return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
-    }
+    real = await realOrNull(join(real, 'index.html'))
+    if (real === null) return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
     if (!real.startsWith(siteReal + sep)) return text(404, 'not found')
   }
   const body = await readFile(real)
@@ -575,4 +769,22 @@ export async function serveDashboardSite(req: Request): Promise<Response | null>
     status: 200,
     headers: { 'content-type': type, 'content-length': String(body.length), ...SITE_HEADERS },
   })
+}
+
+/** A Response when the request's Host names a dashboard site (answered here, never reaching /api), else null. */
+export async function serveDashboardSite(req: Request): Promise<Response | null> {
+  const id = dashboardHostId(req.headers.get('host'))
+  if (!id) return null
+  const url = new URL(req.url)
+  if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`))
+    return serveBackend(id, req, url)
+  if (req.method !== 'GET' && req.method !== 'HEAD')
+    return text(405, 'a dashboard site only answers GET and HEAD', { allow: 'GET, HEAD' })
+  if (!ID_RE.test(id) || !(await exists(dirOf(id)))) return text(404, 'no such dashboard')
+  const segs = sitePathSegments(url.pathname)
+  if (!segs) return text(400, 'bad path')
+  if (segs.some((s) => s === '.' || s === '..')) return text(404, 'not found')
+  const isHead = req.method === 'HEAD'
+  if (segs[0] === '_hydra') return hydraFeed(id, segs.slice(1), isHead)
+  return serveSiteFile(siteOf(id), url, segs, isHead)
 }

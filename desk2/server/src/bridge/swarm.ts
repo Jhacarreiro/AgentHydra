@@ -52,6 +52,8 @@ interface JobParts {
   counts?: Record<string, number>
   created?: string | null
   finished?: string | boolean | null
+  tokens?: number | null
+  cost_usd?: number | null
 }
 
 function jobOf(j: JobParts, caller: Caller, pc: string | null): SwarmJob {
@@ -75,7 +77,17 @@ function jobOf(j: JobParts, caller: Caller, pc: string | null): SwarmJob {
     callerHostSessionId: caller.host,
     callerTitle: caller.title,
     pc,
+    tokens: j.tokens ?? null,
+    costUsd: j.cost_usd ?? null,
+    models: null, // read from the job's results.jsonl by attachJobModels (swarm-models.ts), not in the list
   }
+}
+
+/** Each job's folder (HSwarm's `dir`), by job id: where its results.jsonl is. A job whose list gave none has no entry. */
+export function jobDirs(answer: AhHswarmJobs | null | undefined): Map<string, string> {
+  const dirs = new Map<string, string>()
+  for (const j of answer?.jobs ?? []) if (j?.job_id && j.dir) dirs.set(j.job_id, j.dir)
+  return dirs
 }
 
 export function mapSwarmJob(j: AhHswarmJob, chats: ChatIndex = new Map()): SwarmJob {

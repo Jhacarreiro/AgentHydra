@@ -239,9 +239,15 @@ async function listUnixDesktopProcessRecords(): Promise<CodexDesktopProcessRecor
   return records
 }
 
+/** How old a successful scan may be and still stand in for a failed one in a LISTING (as core/instances.ts's). */
+const LAST_GOOD_SCAN_MAX_AGE_MS = 5 * 60_000
+
+/** The last scan that answered, whatever came after it. */
+let lastGoodScan: { runtimes: CodexDesktopRuntime[]; at: number } | null = null
+
 /** The one OS scan behind {@link listCodexDesktopProcesses} — a second `Get-CimInstance
- *  Win32_Process` on Windows, and therefore a second ~490ms PowerShell spawn, on the Codex
- *  table's own 5s poll. Cached for the same reasons as core/process.ts's; see scan-cache.ts. */
+ *  Win32_Process` on Windows, and therefore a second ~490ms PowerShell spawn, beside the Claude
+ *  scan. Cached for the same reasons as core/process.ts's; see scan-cache.ts. */
 const codexProcessCache = createScanCache<CodexProcessScan>(
   async () => {
     try {
@@ -258,7 +264,9 @@ const codexProcessCache = createScanCache<CodexProcessScan>(
               : 'neither /proc nor `ps` returned a process list',
         }
       }
-      return { ok: true, runtimes: codexDesktopRuntimesFromRecords(records) }
+      const runtimes = codexDesktopRuntimesFromRecords(records)
+      lastGoodScan = { runtimes, at: Date.now() }
+      return { ok: true, runtimes }
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : String(error) }
     }
@@ -274,19 +282,25 @@ export type CodexProcessScan =
 /**
  * Running Codex/ChatGPT Desktop processes, keyed by their `--user-data-dir`.
  *
- * Served from a shared cached snapshot (see scan-cache.ts): the Codex instances table polls this
- * every 5s and the underlying scan is a PowerShell + WMI round trip. `fresh: true` bypasses the
+ * Served from a shared cached snapshot (see scan-cache.ts): the Instances tab re-reads the Codex list
+ * every two minutes and at once when its exit watch sees an app's pid gone, and the underlying scan
+ * is a PowerShell + WMI round trip. `fresh: true` bypasses the
  * cache for anything about to act on the answer (launch / stop), which must not decide from a
  * snapshot a poll tick old.
  *
- * LENIENT: a scan that could not run reads as an empty list, which is right for a table and
- * wrong for a delete. Destructive callers use {@link scanCodexDesktopProcesses}.
+ * LENIENT: a listing (not `fresh`) whose scan could not run reads as the last scan that answered,
+ * if it is under five minutes old, so one timed-out WMI query no longer shows every Codex app
+ * closed; a `fresh` read, which is about to act, never takes that snapshot's pids. Otherwise a
+ * failed scan is an empty list, which is right for a table and wrong for a delete. Destructive
+ * callers use {@link scanCodexDesktopProcesses}.
  */
 export async function listCodexDesktopProcesses(
   options: { fresh?: boolean } = {},
 ): Promise<CodexDesktopRuntime[]> {
   const scan = await scanCodexDesktopProcesses(options)
-  return scan.ok ? scan.runtimes : []
+  if (scan.ok) return scan.runtimes
+  const last = options.fresh ? null : lastGoodScan
+  return last && Date.now() - last.at <= LAST_GOOD_SCAN_MAX_AGE_MS ? last.runtimes : []
 }
 
 /** {@link listCodexDesktopProcesses} without folding failure into empty (audit AH-02). */

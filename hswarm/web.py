@@ -464,8 +464,10 @@ class _PinnedTransport(httpx.AsyncHTTPTransport):
     argument for a network backend, so the pool is replaced right after construction (nothing is open yet)."""
 
     def __init__(self, backend: PinnedBackend) -> None:
-        super().__init__()
-        self._pool = httpcore.AsyncConnectionPool(ssl_context=httpx.create_ssl_context(), network_backend=backend)
+        from .client import tls
+
+        super().__init__(verify=tls())
+        self._pool = httpcore.AsyncConnectionPool(ssl_context=tls(), network_backend=backend)
 
 
 @dataclass

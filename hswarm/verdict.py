@@ -2,7 +2,7 @@
 
 ~/.hswarm/verdict.json is read by the agent_routing_gate hook (claude-memory home/hooks/agent_routing_gate.py):
 a FRESH `usable: false` makes the gate stop recommending the swarm and accept a Claude fan-out that names its
-model. Found 2026-09-21 on Jacob's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s while the
+model. Found 2026-09-21 on the owner's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s while the
 gate kept sending every session there, because nothing it could read said so.
 
 It judges the AUTO routes a plain hswarm_run takes (tool-using, tool-free, and cc's own), from the shared key
@@ -53,8 +53,11 @@ def compute() -> dict:
 
 def write(v: dict | None = None) -> dict:
     """Compute (unless given) and write atomically. Never raises: a verdict that cannot be written is simply absent,
-    and the hook treats absent as "no news", never as dead."""
-    v = v or compute()
+    and the hook treats absent as "no news", never as dead. Safe on any thread: the registry is held still while it
+    is read (config.RELOAD_LOCK), so a reload cannot make it write a false "unusable"."""
+    if v is None:
+        with config.RELOAD_LOCK:
+            v = compute()
     try:
         p = path()
         p.parent.mkdir(parents=True, exist_ok=True)

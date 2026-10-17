@@ -3,7 +3,9 @@
 // AgentHydra has over a hundred tools, about 35k tokens of schemas (measured 2026-10-11), and a client that loads
 // them all pays that on every chat. So only the tools agents actually use are listed (mcp.ts LISTED_TOOLS, picked
 // from the calls in every transcript on the PC), and the rest are reached the way the Connections MCP reaches its
-// catalog: hydra_find searches every tool in plain words, hydra_run runs any of them by name.
+// catalog: hydra_find searches every tool in plain words, hydra_run runs any of them by name. Since 2026-10-16 the
+// search also ranks by meaning (tool-intent.ts) and fuses the two rankings (fuseRanks), so an ask in other words
+// than a tool's own still finds it.
 //
 // desk_chat moves and renames a Hydra Desk chat (the AgentHydra 2.0 window). Until 2026-10-11 that was only a
 // sentence in the Desk system prompt (PATCH /api/chats/:id), and an agent asked to switch its workspace opened a
@@ -14,6 +16,7 @@
 import { statSync } from 'node:fs'
 import { api, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
+import { type IntentHit, sharedToolIntent, type ToolIntent } from './tool-intent'
 
 /** Words an agent says, mapped to the words the tool texts use. */
 export const SYNONYMS: Record<string, string[]> = {
@@ -76,6 +79,31 @@ export function words(text: string): string[] {
     .filter((w) => w.length > 1 && !STOP.has(w))
 }
 
+/** English function words plus the filler of a chat message ("what", "into", "start", "keep going"): words that
+ *  say nothing about which entry or which field a message needs. */
+export const CONTENT_STOP = new Set([
+  ...STOP,
+  ...`about above after again against all almost also am among any anyone anything are aren around as ask asked at
+  away back be because been before being below best better between both but by came cannot could couldn did didn
+  does doesn doing don done down during each else enough etc even ever every everything few first from further
+  get gets getting give go goes going gone good got great had hasn has have haven having he her here hers him his
+  however if into isn its itself just keep kind know last left let lets like ll made make makes making many
+  may maybe might mine more most much must need needs new next no nor not now off ok okay old once one only onto
+  other others our ours out over own please put quite rather re really right said same say see seem seems she
+  should shouldn since so some something soon still such sure take tell than thank thanks that's their theirs them
+  then there these they thing things think those though through thus till too try two under until up upon us use
+  used using ve very via want wants was wasn way we well went were weren what whats when where whether which while
+  who whom whose why will won would wouldn yes yet you your yours yourself start started work working works find
+  found run running stuff continue proceed lot lots time today tomorrow yesterday week day hour long already again`.split(
+    /\s+/,
+  ),
+])
+
+/** The content words of a text: `words` without CONTENT_STOP. */
+export function contentWords(text: string): string[] {
+  return words(text).filter((w) => !CONTENT_STOP.has(w))
+}
+
 /** The first sentence of a description, without the MUTATES: tag, for a one-line summary. */
 function summary(description: string): string {
   const d = description.replace(/^MUTATES:\s*/, '').replace(/^READ-ONLY:\s*/, '')
@@ -121,19 +149,56 @@ export function rankTools(
     }
     if (score <= 0) continue
     if (desk && t.name.startsWith('desk_')) score *= 1.5
-    const schema = t.inputSchema as { required?: string[] } | undefined
-    out.push({
-      name: t.name,
-      score: Math.round(score * 10) / 10,
-      mutates: /^MUTATES:/.test(desc),
-      listed: listed ? listed.has(t.name) : true,
-      summary: summary(desc),
-      required: schema?.required ?? [],
-    })
+    out.push(foundOf(t, Math.round(score * 10) / 10, listed))
   }
   return out
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
     .slice(0, Math.max(1, limit))
+}
+
+function foundOf(t: McpEngineTool, score: number, listed?: ReadonlySet<string>): FoundTool {
+  const desc = t.description ?? ''
+  const schema = t.inputSchema as { required?: string[] } | undefined
+  return {
+    name: t.name,
+    score,
+    mutates: /^MUTATES:/.test(desc),
+    listed: listed ? listed.has(t.name) : true,
+    summary: summary(desc),
+    required: schema?.required ?? [],
+  }
+}
+
+/** Reciprocal-rank fusion of the word and meaning rankings: a tool scores weight / (k + rank) in each list it is in,
+ *  the meaning list cut to its `intentTop` closest tools. Values from the bench (scripts/tool-intent-bench.ts). */
+export const FUSE = { k: 10, intentTop: 12, words: 0.5, intent: 2 }
+
+/** The tools of `byWords` (rankTools, every tool with a word match) and `hits` (closest first) in fused order. */
+export function fuseRanks(
+  tools: McpEngineTool[],
+  byWords: FoundTool[],
+  hits: IntentHit[],
+  limit: number,
+  listed?: ReadonlySet<string>,
+  fuse = FUSE,
+): FoundTool[] {
+  const fused = new Map<string, number>()
+  const add = (name: string, rank: number, weight: number) =>
+    fused.set(name, (fused.get(name) ?? 0) + weight / (fuse.k + rank))
+  byWords.forEach((f, i) => {
+    add(f.name, i + 1, fuse.words)
+  })
+  hits.slice(0, fuse.intentTop).forEach((h, i) => {
+    add(h.name, i + 1, fuse.intent)
+  })
+  const byName = new Map(tools.map((t) => [t.name, t]))
+  return [...fused]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, Math.max(1, limit))
+    .flatMap(([name, score]) => {
+      const t = byName.get(name)
+      return t ? [foundOf(t, Math.round(score * 1000) / 10, listed)] : []
+    })
 }
 
 /** The Desk window's address on this PC. */
@@ -196,9 +261,146 @@ const NOT_RUNNABLE = new Set(['hydra_run', 'hydra_find'])
 const callOf = (name: string, listed: boolean): string =>
   listed ? `${name} { ... }` : `hydra_run { tool: "${name}", args: { ... } }`
 
+/** The tool `hydra_find { tool }` describes, with whether the agent's own list holds it. */
+function describeTool(tools: HydraTool[], listed: ReadonlySet<string>, one: string) {
+  const t = tools.find((x) => x.name === one)
+  if (!t) throw new Error(`no AgentHydra tool named ${one}; search with query instead`)
+  return {
+    name: t.name,
+    listed: listed.has(t.name),
+    description: t.description,
+    inputSchema: t.inputSchema,
+    call: callOf(t.name, listed.has(t.name)),
+  }
+}
+
+/** The runnable tools that match `hydra_find { query }` by meaning and by words, each with the exact call to make.
+ *  `ranking` says which rankings this answer used, and `reason` why meaning was left out when it was. */
+async function searchTools(
+  tools: HydraTool[],
+  listed: ReadonlySet<string>,
+  a: Record<string, unknown>,
+  intent: ToolIntent,
+) {
+  const query = str(a.query).trim()
+  if (!query) throw new Error('pass query (what you want done) or tool (a name to describe)')
+  const limit =
+    Number.isFinite(Number(a.limit)) && Number(a.limit) > 0 ? Math.floor(Number(a.limit)) : 8
+  const pool = tools.filter((t) => !NOT_RUNNABLE.has(t.name))
+  const byWords = rankTools(
+    pool,
+    query,
+    pool.length,
+    listed,
+    !!(str(a.deskChat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim()),
+  )
+  const meant = await intent.search(pool, query)
+  const found =
+    'hits' in meant
+      ? fuseRanks(pool, byWords, meant.hits, limit, listed)
+      : byWords.slice(0, Math.max(1, limit))
+  return {
+    query,
+    ranking: 'hits' in meant ? 'intent+words' : 'words',
+    ...('reason' in meant ? { reason: meant.reason } : {}),
+    tools: found.map((f) => ({ ...f, call: callOf(f.name, f.listed) })),
+    note: found.length
+      ? 'A tool with listed: true is already in your tool list: call it by its name. Any other tool runs through hydra_run { tool, args }. hydra_find { tool } gives its full schema.'
+      : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, session, server).',
+  }
+}
+
+/** Runs the tool `hydra_run { tool, args }` names, with its own arguments. */
+async function runTool(
+  getTools: () => HydraTool[],
+  a: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
+  const name = str(a.tool).trim()
+  if (NOT_RUNNABLE.has(name)) throw new Error(`${name} is called directly, not through hydra_run`)
+  const t = getTools().find((x) => x.name === name)
+  if (!t)
+    throw new Error(
+      `no AgentHydra tool named ${name || '(none)'}; search with hydra_find { query }`,
+    )
+  const args =
+    a.args && typeof a.args === 'object' && !Array.isArray(a.args)
+      ? (a.args as Record<string, unknown>)
+      : {}
+  return (t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown)(args, signal)
+}
+
+/** Desk's chat list from the Desk window at `base`; throws unless Desk answers with a list. */
+async function deskChatList(base: string): Promise<DeskChat[]> {
+  const listed = await fetch(`${base}/api/chats`).catch(() => null)
+  if (!listed?.ok)
+    throw new Error(`the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`)
+  const chats: unknown = await listed.json().catch(() => null)
+  if (!Array.isArray(chats))
+    throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
+  return chats as DeskChat[]
+}
+
+/** The Desk chat a call names with `chat`, else the chat this process runs in. */
+function namedDeskChat(a: Record<string, unknown>, chats: DeskChat[]): DeskChat {
+  const ref = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
+  if (!ref)
+    throw new Error(
+      'this process is not a Desk chat (no HYDRA_DESK_CHAT_ID): name the chat with `chat`',
+    )
+  return pickDeskChat(chats, ref)
+}
+
+/** desk_chat: moves and/or renames the named Desk chat, and reports what it now is. */
+async function patchDeskChat(a: Record<string, unknown>) {
+  const patch = deskChatPatch(a)
+  const base = deskBase()
+  const chats = await deskChatList(base)
+  const chat = namedDeskChat(a, chats)
+  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const body = (await res.json().catch(() => ({}))) as DeskChat & { error?: string }
+  if (!res.ok) throw new Error(`Desk refused the change: ${body.error ?? res.status}`)
+  return {
+    id: body.id ?? chat.id,
+    title: body.title ?? chat.title,
+    cwd: body.cwd ?? chat.cwd,
+    ...(patch.cwd
+      ? { from: chat.cwd, note: "Its tools see the new folder from the chat's next turn." }
+      : {}),
+  }
+}
+
+/** desk_transcript: the named Desk chat's record, the newest `last` items when asked. */
+async function deskTranscript(a: Record<string, unknown>) {
+  const base = deskBase()
+  const chats = await deskChatList(base)
+  const chat = namedDeskChat(a, chats)
+  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}/transcript`).catch(
+    () => null,
+  )
+  if (!res?.ok)
+    throw new Error(
+      `Desk did not give the transcript of ${chat.id} (${res?.status ?? 'no answer'})`,
+    )
+  const items: unknown = await res.json().catch(() => null)
+  if (!Array.isArray(items)) throw new Error('unexpected transcript answer (not a list of items)')
+  const last = Number(a.last)
+  return {
+    id: chat.id,
+    title: chat.title,
+    total: items.length,
+    items: Number.isFinite(last) && last > 0 ? items.slice(-Math.floor(last)) : items,
+  }
+}
+
 export function findTools(
   getTools: () => HydraTool[],
   getListed: () => ReadonlySet<string>,
+  intent: ToolIntent = sharedToolIntent(),
 ): HydraTool[] {
   return [
     {
@@ -207,7 +409,8 @@ export function findTools(
       listed: true,
       description:
         "Searches every AgentHydra tool by what you want done, in plain words, such as 'rename this chat', 'which account " +
-        "has quota left' or 'restart the daemon'. Returns the best matches, each with a one-line summary, its required " +
+        "has quota left' or 'restart the daemon'. It matches by meaning as well as by words, so describe the job, not a " +
+        'guessed tool name. Returns the best matches, each with a one-line summary, its required ' +
         'parameters, whether it is in your tool list, and `call`, the exact call to make. Search here before concluding ' +
         'that something cannot be done.',
       inputSchema: S(
@@ -226,35 +429,7 @@ export function findTools(
         const tools = getTools()
         const listed = getListed()
         const one = str(a.tool).trim()
-        if (one) {
-          const t = tools.find((x) => x.name === one)
-          if (!t) throw new Error(`no AgentHydra tool named ${one}; search with query instead`)
-          return {
-            name: t.name,
-            listed: listed.has(t.name),
-            description: t.description,
-            inputSchema: t.inputSchema,
-            call: callOf(t.name, listed.has(t.name)),
-          }
-        }
-        const query = str(a.query).trim()
-        if (!query) throw new Error('pass query (what you want done) or tool (a name to describe)')
-        const limit =
-          Number.isFinite(Number(a.limit)) && Number(a.limit) > 0 ? Math.floor(Number(a.limit)) : 8
-        const found = rankTools(
-          tools.filter((t) => !NOT_RUNNABLE.has(t.name)),
-          query,
-          limit,
-          listed,
-          !!(str(a.deskChat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim()),
-        )
-        return {
-          query,
-          tools: found.map((f) => ({ ...f, call: callOf(f.name, f.listed) })),
-          note: found.length
-            ? 'A tool with listed: true is already in your tool list: call it by its name. Any other tool runs through hydra_run { tool, args }. hydra_find { tool } gives its full schema.'
-            : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, session, server).',
-        }
+        return one ? describeTool(tools, listed, one) : searchTools(tools, listed, a, intent)
       },
     },
     {
@@ -271,21 +446,7 @@ export function findTools(
         },
         ['tool'],
       ),
-      run: async (a, signal?: AbortSignal) => {
-        const name = str(a.tool).trim()
-        if (NOT_RUNNABLE.has(name))
-          throw new Error(`${name} is called directly, not through hydra_run`)
-        const t = getTools().find((x) => x.name === name)
-        if (!t)
-          throw new Error(
-            `no AgentHydra tool named ${name || '(none)'}; search with hydra_find { query }`,
-          )
-        const args =
-          a.args && typeof a.args === 'object' && !Array.isArray(a.args)
-            ? (a.args as Record<string, unknown>)
-            : {}
-        return (t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown)(args, signal)
-      },
+      run: (a, signal?: AbortSignal) => runTool(getTools, a, signal),
     },
     {
       name: 'desk_chat',
@@ -310,37 +471,7 @@ export function findTools(
             'Another chat: Desk chat id, Claude session id, or a title fragment. Default: this chat.',
         },
       }),
-      run: async (a) => {
-        const patch = deskChatPatch(a)
-        const base = deskBase()
-        const listed = await fetch(`${base}/api/chats`).catch(() => null)
-        if (!listed?.ok)
-          throw new Error(`the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`)
-        const chats: unknown = await listed.json().catch(() => null)
-        if (!Array.isArray(chats))
-          throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
-        const ref = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
-        if (!ref)
-          throw new Error(
-            'this process is not a Desk chat (no HYDRA_DESK_CHAT_ID): name the chat with `chat`',
-          )
-        const chat = pickDeskChat(chats as DeskChat[], ref)
-        const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(patch),
-        })
-        const body = (await res.json().catch(() => ({}))) as DeskChat & { error?: string }
-        if (!res.ok) throw new Error(`Desk refused the change: ${body.error ?? res.status}`)
-        return {
-          id: body.id ?? chat.id,
-          title: body.title ?? chat.title,
-          cwd: body.cwd ?? chat.cwd,
-          ...(patch.cwd
-            ? { from: chat.cwd, note: "Its tools see the new folder from the chat's next turn." }
-            : {}),
-        }
-      },
+      run: (a) => patchDeskChat(a),
     },
     {
       name: 'desk_transcript',
@@ -354,38 +485,7 @@ export function findTools(
         },
         last: { type: 'number', description: 'Only the newest N items.' },
       }),
-      run: async (a) => {
-        const base = deskBase()
-        const listed = await fetch(`${base}/api/chats`).catch(() => null)
-        if (!listed?.ok)
-          throw new Error(`the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`)
-        const chats: unknown = await listed.json().catch(() => null)
-        if (!Array.isArray(chats))
-          throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
-        const ref = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
-        if (!ref)
-          throw new Error(
-            'this process is not a Desk chat (no HYDRA_DESK_CHAT_ID): name the chat with `chat`',
-          )
-        const chat = pickDeskChat(chats as DeskChat[], ref)
-        const res = await fetch(
-          `${base}/api/chats/${encodeURIComponent(chat.id)}/transcript`,
-        ).catch(() => null)
-        if (!res?.ok)
-          throw new Error(
-            `Desk did not give the transcript of ${chat.id} (${res?.status ?? 'no answer'})`,
-          )
-        const items: unknown = await res.json().catch(() => null)
-        if (!Array.isArray(items))
-          throw new Error('unexpected transcript answer (not a list of items)')
-        const last = Number(a.last)
-        return {
-          id: chat.id,
-          title: chat.title,
-          total: items.length,
-          items: Number.isFinite(last) && last > 0 ? items.slice(-Math.floor(last)) : items,
-        }
-      },
+      run: (a) => deskTranscript(a),
     },
     {
       name: 'daemon_restart',

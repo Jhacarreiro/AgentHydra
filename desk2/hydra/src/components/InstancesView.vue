@@ -36,7 +36,6 @@ import { toast } from 'vue-sonner'
 import CliInstanceRows from '@/components/CliInstanceRows.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
-import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
@@ -90,14 +89,16 @@ import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import { activeInstanceCounts } from '@/lib/active-instance-counts'
 import { openSettingsInDesk } from '@/lib/desk-embed'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
   getChatCounts,
   getDesktopInstall,
+  instancesAlive,
 } from '@/lib/api'
-import { freeLogo } from '@/lib/free-instances'
+import { freeLogo, freePlanLabel } from '@/lib/free-instances'
 import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
   accountDisplayName,
@@ -219,8 +220,9 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   plan: inst.account?.planLabel ?? null,
   // `loginUuid`, not `account`: account is resolved lazily and is null for a second after every
   // refresh, which would make signed-in rows flicker out of a filtered table. loginUuid is read
-  // straight off config.json with every list.
-  signedIn: inst.loginUuid != null,
+  // straight off config.json with every list. It is the stored login, which outlives the app's own
+  // sign-out, so a running app whose log says it signed itself out (`appSignedOut`) is not signed in.
+  signedIn: inst.loginUuid != null && !inst.appSignedOut,
   search: searchText(
     inst.num,
     inst.name,
@@ -368,14 +370,20 @@ const { orderStyle } = useMergedOrderSource('claude', {
  * account, and an unlinked one carries no account record at all.)
  */
 const { instances: codexInstances, refresh: refreshCodex, listed: codexListed } = useCodexInstances()
-const presentPlans = computed(() => [
-  ...instances.value.map((i) => i.account?.planLabel),
-  ...codexInstances.value.map((i) => i.account?.planLabel),
-])
+// Every kind the plan facet acts on offers its labels here (owner, 2026-10-16): a CLI login's own plan or its
+// linked desktop's, a Free login's reported plan, and the DeepSeek harness's "API key".
+const presentPlans = computed(() => {
+  const desktopPlan = new Map(instances.value.map((d) => [d.dir, d.account?.planLabel]))
+  return [
+    ...instances.value.map((i) => i.account?.planLabel),
+    ...codexInstances.value.map((i) => i.account?.planLabel),
+    ...cliInstances.value.map((c) => c.planLabel ?? (c.associatedDesktopDir ? desktopPlan.get(c.associatedDesktopDir) : undefined)),
+    ...freeInstances.value.map(freePlanLabel),
+    ...(dshEnabled.value && dshInstances.value.length ? [t('dshInstances.planApiKey')] : []),
+  ]
+})
 
-const createOpen = ref(false)
 const creating = ref(false)
-const createError = ref<string | null>(null)
 
 const deleteOpen = ref(false)
 const deleteTarget = ref<CMInstance | null>(null)
@@ -681,13 +689,14 @@ const totalRows = computed(
     (kindShown('cli') ? cliTotal.value : 0) +
     (kindShown('free') ? freeTotal.value : 0),
 )
-/** The choice's counts: every row each choice has, whether it is the one shown or not. */
-const kindCounts = computed<Record<KindView, number>>(() => {
-  const desktop = desktopTotal.value
-  const cli = cliInstances.value.length
-  const free = freeTotal.value
-  return { all: desktop + cli + free, desktop, cli, free }
-})
+/** Available logins per kind; signed-out rows remain in the table for repair. */
+const kindCounts = computed(() => activeInstanceCounts({
+  desktop: showDesktopInstances.value ? instances.value : [],
+  codex: codexEnabled.value ? codexInstances.value : [],
+  dsh: dshEnabled.value ? dshInstances.value : [],
+  cli: showCliInstances.value ? cliInstances.value : [],
+  free: freeInstances.value,
+}))
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
@@ -773,7 +782,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
         ),
       copy: accountEmail(inst.account),
     },
-    badge: inst.isExternal ? { label: t('instances.external') } : undefined,
+    // Signed out comes first: it is the one a person has to act on (sign in again in that window).
+    badge: inst.appSignedOut
+      ? { label: t('instances.signedOutInApp'), title: t('instances.signedOutInAppHint', { line: inst.appSignedOut }) }
+      : inst.isExternal
+        ? { label: t('instances.external') }
+        : undefined,
     // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
     // missing account is a moment, not a state you act on.
     account: accountName
@@ -896,7 +910,7 @@ async function onCreateFor(id: string) {
   showKind('desktop')
   showProvider(provider)
   if (provider === 'claude') {
-    openCreateDialog()
+    void createNow()
     return
   }
   await nextTick()
@@ -968,9 +982,9 @@ async function onSignInCli(inst: CMInstance) {
     const linked = await linkCliDesktop(id, inst.dir)
     if (!linked?.ok) {
       // The link failed, so this CLI instance was created but never linked — leaving it behind
-      // would orphan it in the CLI Instances table. Clean it up (confirmName mirrors the trim
-      // createCliInstance applies to the name server-side) so a failed chain leaves no residue.
-      await removeCli(id, cliName.trim())
+      // would orphan it in the CLI Instances table. Clean it up (the note says why, as the server
+      // requires one for every delete) so a failed chain leaves no residue.
+      await removeCli(id, 'Link failed right after it was created.')
       toast.error(linked?.message ?? t('instances.toastCliCreateFailed'))
       return
     }
@@ -1229,24 +1243,18 @@ async function onCreateShortcut(inst: CMInstance) {
   else toast.error(result?.message ?? t('instances.toastShortcutFailed'))
 }
 
-function openCreateDialog() {
-  createError.value = null
-  createOpen.value = true
-}
-async function onCreateSubmit(name: string) {
+// A new instance is made at once, its folder named by the daemon: nobody is asked for a name
+// (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are"). The row shows the account once it signs in.
+async function createNow() {
+  if (creating.value) return
   creating.value = true
-  createError.value = null
   try {
-    const result = await create(name)
+    const result = await create()
     if (result?.ok) {
       toast.success(t('instances.toastCreated'))
-      createOpen.value = false
-      if (result.needsBrowserDance) toast.info(t('instances.browserDanceBody'))
       // Same self-heal as onOpen: a successful create disproves a stale "not manageable" verdict.
       if (desktopWarning.value) void refreshDesktopInstall(true)
-    } else {
-      createError.value = result?.message ?? t('instances.toastCreateFailed')
-    }
+    } else toast.error(result?.message ?? t('instances.toastCreateFailed'))
   } finally {
     creating.value = false
   }
@@ -1411,13 +1419,13 @@ function openDeleteDialog(inst: CMInstance) {
   deleteError.value = null
   deleteOpen.value = true
 }
-async function onDeleteConfirm(confirmName: string) {
+async function onDeleteConfirm(note: string) {
   const inst = deleteTarget.value
   if (!inst) return
   deleting.value = true
   deleteError.value = null
   try {
-    const result = await remove(inst.dir, confirmName)
+    const result = await remove(inst.dir, note)
     if (result?.ok) {
       toast.success(t('instances.toastDeleted'))
       deleteOpen.value = false
@@ -1465,6 +1473,38 @@ let stopDesktopInstallPoll: (() => void) | null = null
 // A profile signed into another account shows it within this, not at the next two-minute list poll (useInstances.followLogins).
 const LOGIN_WATCH_MS = 5_000
 let stopLoginWatch: (() => void) | null = null
+/**
+ * The exit watch (2026-10-16, owner: a closed Codex app read open until a manual Refresh; "live means a watcher, a
+ * change event, or a short poll while something is in flight, never only a manual Refresh"). While this tab is on
+ * screen and a row reads open, every EXIT_WATCH_MS the daemon is asked whether the pids those rows show still run
+ * (a signal-0 probe, no process scan), and the kind whose pid is gone is listed again at once: a Desktop or Codex
+ * app, or a CLI login's live session. Opening is already followed (useInstances' open poll); an app opened outside
+ * AgentHydra still waits for the two-minute list.
+ */
+const EXIT_WATCH_MS = 3_000
+let stopExitWatch: (() => void) | null = null
+let watchingExits = false
+async function watchExits(): Promise<void> {
+  if (watchingExits) return
+  const desktop = instances.value.flatMap((i) => (i.isRunning && i.pid ? [i.pid] : []))
+  const codex = codexInstances.value.flatMap((i) => (i.isDesktopRunning && i.desktopPid ? [i.desktopPid] : []))
+  const cli = cliInstances.value.flatMap((i) => i.livePids ?? [])
+  if (!desktop.length && !codex.length && !cli.length) return
+  watchingExits = true
+  try {
+    const { alive } = await instancesAlive([...desktop, ...codex, ...cli])
+    const gone = (pids: number[]) => pids.some((p) => alive[p] === false)
+    await Promise.all([
+      gone(desktop) ? refreshInstances({ silent: true }) : null,
+      gone(codex) ? refreshCodex({ silent: true }) : null,
+      gone(cli) ? refreshCliInstances({ silent: true }) : null,
+    ])
+  } catch {
+    // An unanswered probe changes nothing on screen; the next beat asks again.
+  } finally {
+    watchingExits = false
+  }
+}
 
 onMounted(() => {
   // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop, cli and free kinds).
@@ -1477,6 +1517,7 @@ onMounted(() => {
     if (desktopWarning.value) void refreshDesktopInstall(true)
   }, 60_000)
   stopLoginWatch = visibleInterval(() => void followLogins(), LOGIN_WATCH_MS)
+  stopExitWatch = visibleInterval(() => void watchExits(), EXIT_WATCH_MS)
   // A probe or a resolve that never answers must not hold the order (or the warning) for good.
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
 })
@@ -1487,6 +1528,7 @@ onUnmounted(() => {
   catchupSignal.aborted = true
   stopDesktopInstallPoll?.()
   stopLoginWatch?.()
+  stopExitWatch?.()
   window.clearTimeout(firstDrawTimer)
   window.clearTimeout(loadHoldTimer)
 })
@@ -1534,7 +1576,7 @@ onUnmounted(() => {
               @keydown="onKindViewKey($event, view)"
             >
               {{ $t(KIND_VIEW_LABEL_KEY[view]) }}
-              <span class="tabular-nums text-muted-foreground">{{ kindCounts[view] }}</span>
+              <span class="tabular-nums text-muted-foreground" :title="$t('cliInstances.loggedIn')">{{ kindCounts[view] }}</span>
             </Button>
           </div>
         </template>
@@ -1671,7 +1713,8 @@ onUnmounted(() => {
             :key="inst.dir"
             :columns="columns"
             :row="rowModels.get(inst.dir)!"
-            :style="orderStyle(inst)"
+            class="order-(--row-order)"
+            :style="{ '--row-order': orderStyle(inst)?.order }"
             :menu-open="rowMenuOpen === inst.dir"
             @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >
@@ -1996,7 +2039,7 @@ onUnmounted(() => {
           v-if="freeShown"
           ref="freeRows"
           :columns="columns"
-          @promote="(p) => onCreateFor(p === 'claude' ? CLI_CREATE_ID : 'codex')"
+          @promote="(to) => onCreateFor(to === 'cli' ? CLI_CREATE_ID : to === 'desktop' ? 'claude' : 'codex')"
         />
       </InstanceTable>
     </InstanceCard>
@@ -2058,15 +2101,8 @@ onUnmounted(() => {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    <CreateInstanceDialog
-      v-model:open="createOpen"
-      :submitting="creating"
-      :error-message="createError"
-      @submit="onCreateSubmit"
-    />
     <DeleteInstanceDialog
       v-model:open="deleteOpen"
-      :instance-name="deleteTarget?.name ?? null"
       :submitting="deleting"
       :error-message="deleteError"
       @confirm="onDeleteConfirm"

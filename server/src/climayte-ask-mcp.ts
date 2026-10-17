@@ -41,7 +41,7 @@ export function askTools(workerId: string): McpEngineTool[] {
 }
 
 const ASK_INSTRUCTIONS =
-  'You are a CliMayte worker. climayte_ask puts one question to whoever started you; then end your turn and the answer resumes this session.'
+  'climayte_ask puts one question to whoever started you; then end your turn and the answer resumes this session.'
 
 /** The pid of an attempt's CLI: the attempt's own, or, until the daemon's next poll takes it
  *  (takeRunnerPids, climayte.ts), the one its runner wrote the moment the CLI started. The CLI

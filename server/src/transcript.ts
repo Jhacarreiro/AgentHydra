@@ -12,7 +12,7 @@ import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } fr
 import { codexInstanceStores } from './core/codex-instances'
 import { readCodexTail } from './core/codex-transcript-lineage'
 import { dshInstanceStores } from './core/dsh-instances'
-import { walkFolderTree } from './core/folder-tree'
+import { type Folder, walkFolderTree } from './core/folder-tree'
 import { fsSlot } from './core/fs-slots'
 import { intern } from './core/intern'
 import { timeSlice } from './core/loop-yield'
@@ -585,22 +585,45 @@ async function scanRootGlobAsync(pattern: string, cwd: string): Promise<string[]
   return out
 }
 
+// Folder objects last only while their listing is current. Keep the canonical absolute paths
+// already held by the Claude stat cache, indexed by filename; relative paths remain sweep-local.
+const claudeFolderPaths = new WeakMap<Folder, string[]>()
+
 /** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
  *
  *  A single Bun glob scan held the loop ~270 ms on a 60,000-file Claude store, and scanning one
  *  folder at a time still did on a folder of 28,000 subagent files. So a `**` pattern is matched
  *  over the shared folder tree (core/folder-tree.ts), which is walked a level at a time with pooled
  *  calls and lists again only the folders whose mtime moved; the kit's Claude ingest reads the same
- *  tree. A pattern that does not start with `**` is scanned whole, as before. */
-async function scanRootAsync(pattern: string, cwd: string): Promise<string[]> {
-  if (!pattern.startsWith('**/')) return scanRootGlobAsync(pattern, cwd)
+ *  tree. A pattern that does not start with `**` is scanned whole, as before. Claude can request a
+ *  parallel array of paths, reused while each folder's listing is unchanged. */
+async function scanRootAsync(pattern: string, cwd: string, paths?: string[]): Promise<string[]> {
+  if (!pattern.startsWith('**/')) {
+    const rels = await scanRootGlobAsync(pattern, cwd)
+    if (paths) for (const rel of rels) paths.push(join(cwd, rel))
+    return rels
+  }
   const out: string[] = []
   const matches = nameMatcher(pattern)
-  for (const folder of (await walkFolderTree(cwd)).values())
-    for (const name of folder.files) {
+  for (const folder of (await walkFolderTree(cwd)).values()) {
+    let known = paths ? claudeFolderPaths.get(folder) : undefined
+    for (let i = 0; i < folder.files.length; i++) {
+      const name = folder.files[i] as string
       const rel = folder.rel ? `${folder.rel}/${name}` : name
-      if (matches(rel, name)) out.push(rel)
+      if (!matches(rel, name)) continue
+      out.push(rel)
+      // Re-intern a reused path so it stays canonical across the intern table's rotations.
+      if (paths) {
+        if (!known) {
+          known = new Array<string>(folder.files.length)
+          claudeFolderPaths.set(folder, known)
+        }
+        const path = intern(known[i] ?? join(cwd, rel))
+        known[i] = path
+        paths.push(path)
+      }
     }
+  }
   return out
 }
 
@@ -694,24 +717,31 @@ function claudeSessionId(rel: string, store: ClaudeStore): string {
  * row rather than a sibling of itself.
  */
 export function claudeParentId(rel: string, store: ClaudeStore): string | null {
+  if (!store.sessionFile) {
+    // Ordinary layouts need only the directory below the project. Avoid splitting all of a
+    // nested subagent's components on every history sweep; two separators decide its owner.
+    const projectEnd = nextPathSeparator(rel, 0)
+    const sessionEnd = projectEnd < 0 ? -1 : nextPathSeparator(rel, projectEnd + 1)
+    return sessionEnd < 0 ? null : rel.slice(projectEnd + 1, sessionEnd)
+  }
   const parts = rel.split(/[\\/]/)
   const name = parts[parts.length - 1] ?? ''
 
   // A store that NAMES its session file (Cowork) decides by name, not by depth: its runs sit at
   // several depths, and each run directory also contains a whole Claude Code home of its own —
   // the CLI's transcript and that session's subagents/ tree, which are the same run's spend.
-  if (store.sessionFile) {
-    const owner = lastIndexStartingWith(parts, store.idPrefix)
-    if (owner < 0) return null
-    // The session file, directly inside the run's own directory, IS the session.
-    if (name === store.sessionFile && owner === parts.length - 2) return null
-    const raw = parts[owner] as string
-    return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
-  }
+  const owner = lastIndexStartingWith(parts, store.idPrefix)
+  if (owner < 0) return null
+  // The session file, directly inside the run's own directory, IS the session.
+  if (name === store.sessionFile && owner === parts.length - 2) return null
+  const raw = parts[owner] as string
+  return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
+}
 
-  // `<project>/<session>.jsonl` is a session; anything deeper is a subagent of parts[1].
-  if (parts.length <= 2) return null
-  return parts[1] ?? null
+function nextPathSeparator(path: string, start: number): number {
+  const slash = path.indexOf('/', start)
+  const backslash = path.indexOf('\\', start)
+  return slash < 0 ? backslash : backslash < 0 ? slash : Math.min(slash, backslash)
 }
 
 /** Index of the last path segment beginning with `prefix`, or -1. An empty prefix matches nothing,
@@ -722,11 +752,17 @@ function lastIndexStartingWith(parts: string[], prefix: string): number {
   return -1
 }
 
-function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: ClaudeStore) {
+function claudeRecord(
+  rel: string,
+  mtimeMs: number,
+  sizeBytes: number,
+  store: ClaudeStore,
+  path = join(store.root, rel),
+) {
   return {
     session_id: claudeSessionId(rel, store),
     source: 'claude' as const,
-    path: join(store.root, rel),
+    path,
     project: rel.split(/[\\/]/)[0] ?? store.tool,
     mtime_ms: mtimeMs,
     size_bytes: sizeBytes,
@@ -750,6 +786,7 @@ function promoteOrphans(
   pending: Array<{
     parentId: string
     rel: string
+    path?: string
     store: ClaudeStore
     mtimeMs: number
     size: number
@@ -768,11 +805,11 @@ function promoteOrphan(
   c: PendingChild,
 ): void {
   if (known.has(c.parentId)) {
-    rememberChild(children, c.parentId, join(c.store.root, c.rel))
+    rememberChild(children, c.parentId, c.path ?? join(c.store.root, c.rel))
     return
   }
   const orphan = { ...c.store, idFrom: 'basename' as const, idPrefix: '' }
-  files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan))
+  files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan, c.path))
 }
 
 /** {@link promoteOrphans} for the async build: tens of thousands of subagent files, so it hands the
@@ -1369,20 +1406,37 @@ async function buildClaudeRecordsAsync(
   statSeen: Set<string>,
 ): Promise<void> {
   for (const store of claudeStores()) {
-    const claudeRels = await scanRootAsync(store.glob, store.root)
-    const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
-      const path = join(store.root, rel)
+    const claudePaths: string[] = []
+    const claudeRels = await scanRootAsync(store.glob, store.root, claudePaths)
+    const scanned = new Array<{ rel: string; path: string; mtimeMs: number; size: number } | null>(
+      claudeRels.length,
+    )
+    const needsStat: Array<{ index: number; rel: string; path: string }> = []
+    // A quiet cache hit needs no asynchronous work. Pooling it still created and awaited one
+    // resolved callback promise per historical file on every sweep (tens of thousands of them).
+    // Keep the exact freshness test and input order, yielding while inspecting cached entries;
+    // only new, active or full-restat files enter the existing bounded filesystem pool.
+    // Carry this same absolute path into records and child promotion: a second join of every
+    // historical path normalizes and allocates it again without discovering anything new.
+    const cachedSlice = timeSlice()
+    for (let index = 0; index < claudeRels.length; index++) {
+      if (cachedSlice.due()) await cachedSlice.pause()
+      const rel = claudeRels[index] as string
+      const path = claudePaths[index] as string
       statSeen.add(path)
       const known = claudeStatCache.get(path)
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
-        return { rel, mtimeMs: known.mtimeMs, size: known.size }
+        scanned[index] = { rel, path, mtimeMs: known.mtimeMs, size: known.size }
+      else needsStat.push({ index, rel, path })
+    }
+    await mapPool(needsStat, INDEX_SCAN_WIDTH, async ({ index, rel, path }) => {
       try {
         const st = await fsSlot(() => statAsync(path))
         claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
-        return { rel, mtimeMs: st.mtimeMs, size: st.size }
+        scanned[index] = { rel, path, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         claudeStatCache.delete(path)
-        return null
+        scanned[index] = null
       }
     })
     const tops: Array<{ record: TranscriptFile; mtimeMs: number; size: number }> = []
@@ -1395,7 +1449,7 @@ async function buildClaudeRecordsAsync(
         pendingChildren.push({ parentId: parent, ...f, store })
         continue
       }
-      const record = claudeRecord(f.rel, f.mtimeMs, f.size, store)
+      const record = claudeRecord(f.rel, f.mtimeMs, f.size, store, f.path)
       files.push(record)
       tops.push({ record, mtimeMs: f.mtimeMs, size: f.size })
     }

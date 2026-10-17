@@ -50,6 +50,7 @@ export type BadgeVariant =
   | 'primary'
   | 'success'
   | 'warning'
+  | 'limited'
   | 'info'
   | 'outline'
   | 'ghost'
@@ -71,7 +72,8 @@ const QUEUE_STATUS: Record<QueueStatus, StatusMeta> = {
   // red.
   unverified: { label: 'Unverified', icon: CircleQuestionMark, variant: 'warning' },
   failed: { label: 'Failed', icon: XCircle, variant: 'destructive' },
-  rate_limited: { label: 'Rate limited', icon: TriangleAlert, variant: 'warning' },
+  // A limit resets by itself, so the usage-limit pink, not the yellow that means it waits on you (owner, 2026-10-17).
+  rate_limited: { label: 'Rate limited', icon: TriangleAlert, variant: 'limited' },
   // Anthropic's servers were saturated (529) — NOT your usage limit, and not a broken run. It is
   // retried automatically first, so a row only reads this once the overload outlasted the backoff.
   // 'info', not 'warning': nothing is wrong with the user's account or their prompt.
@@ -156,29 +158,4 @@ export function formatUptime(startTime: string | null | undefined): string {
   if (hours > 0) return `${hours}h ${minutes}m`
   if (minutes > 0) return `${minutes}m`
   return `${seconds}s`
-}
-
-/**
- * How live a session is, from the timestamp the list already sorts on.
- *
- * WHY THRESHOLDS AND NOT A PROCESS CHECK. The only signal available for a session someone else's
- * terminal is driving is when its transcript was last written, and a CLI writes a turn the moment
- * it produces one. So "working" means a turn landed within the last couple of minutes, which is
- * true of a session mid-reply and false of one waiting on a person. There is no way to tell a
- * long-running tool call from an abandoned window, and pretending otherwise would put a green dot
- * on a session nobody is in.
- *
- * The boundaries are deliberately wide apart, because the value of the dot is telling "someone is
- * in this right now" from "this has been sitting for a week" — not minute-accurate.
- */
-export type SessionActivity = 'working' | 'idle' | 'stale'
-
-const WORKING_MS = 2 * 60 * 1000
-const IDLE_MS = 60 * 60 * 1000
-
-export function sessionActivity(lastActivityAt: number, now = Date.now()): SessionActivity {
-  const age = now - lastActivityAt
-  if (age < WORKING_MS) return 'working'
-  if (age < IDLE_MS) return 'idle'
-  return 'stale'
 }

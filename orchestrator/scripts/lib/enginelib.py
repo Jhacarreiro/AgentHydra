@@ -303,6 +303,16 @@ BG_SCAN_MAX_BYTES = 24 * 1024 * 1024
 def _blocks_text(ev: dict) -> list[tuple[str, str]]:
     """(kind, text) for every content block that can carry a launch or a notification."""
     out: list[tuple[str, str]] = []
+    # A NOTICE TAKEN IN MID-TURN IS NO USER MESSAGE (measured 2026-10-15). When a job ends while a turn
+    # runs, the CLI files its <task-notification> as a `queue-operation` record (the text in its own
+    # `content`, reason "absorbed_mid_turn") and an `attachment` record (`attachment.prompt`), never
+    # under `message`. Read from `message` alone, one live chat's 18 finished jobs were all still
+    # "outstanding", so it could never take the fast move window.
+    if isinstance(ev.get("content"), str):
+        out.append(("text", ev["content"]))
+    att = ev.get("attachment")
+    if isinstance(att, dict) and isinstance(att.get("prompt"), str):
+        out.append(("text", att["prompt"]))
     msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
     content = msg.get("content") if msg else None
     if isinstance(content, str):

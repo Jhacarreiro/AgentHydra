@@ -3,12 +3,13 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
+import { loadAddon } from "./addon.mjs";
 
 export const EVENTS = ["UserPromptSubmit", "SessionStart", "Stop"];
 const CORE_COMMAND = /[\\/]hydra-core[\\/]hook\.mjs"?\s*$/;
-const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/;
-const RECORD_FILE = "router-entry.json";
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ENTRY_MODULE = path.join("people", "router", "entry.mjs");
+const NO_ADDON = { matches: () => false, detach: () => [], reattach: (groups) => groups, SAVED_FILE: null };
 
 export function defaultSettingsPath(env = process.env) {
   return env.AGENTHYDRA_CLAUDE_SETTINGS || path.join(os.homedir(), ".claude", "settings.json");
@@ -23,9 +24,12 @@ export function defaultHookPath() {
 }
 
 const isCore = (hook) => typeof hook?.command === "string" && CORE_COMMAND.test(hook.command);
-const isRouter = (hook) => typeof hook?.command === "string" && ROUTER_COMMAND.test(hook.command);
 const listOf = (value) => (Array.isArray(value) ? value : []);
 const hasHook = (group, test) => Array.isArray(group?.hooks) && group.hooks.some(test);
+
+async function loadEntry(env) {
+  return (await loadAddon(ENTRY_MODULE, APP_ROOT, env)) ?? NO_ADDON;
+}
 
 function removeHooks(groups, test) {
   const kept = [];
@@ -40,39 +44,21 @@ function removeHooks(groups, test) {
   return kept;
 }
 
-function routerRecords(groups) {
-  const records = [];
-  groups.forEach((group, index) => {
-    if (!hasHook(group, isRouter)) return;
-    const rest = group.hooks.filter((hook) => !isRouter(hook));
-    records.push({ index, original: group, trimmed: rest.length ? { ...group, hooks: rest } : null });
-  });
-  return records;
-}
-
+// The first core entry, from whichever checkout, takes this checkout's command; every later one goes.
 function upsertCore(groups, command) {
-  if (!groups.some((group) => hasHook(group, isCore))) return [...groups, { hooks: [{ type: "command", command }] }];
-  return groups.map((group) =>
-    hasHook(group, isCore)
-      ? { ...group, hooks: group.hooks.map((hook) => (isCore(hook) ? { ...hook, command } : hook)) }
-      : group,
-  );
-}
-
-function restoreRouter(groups, records) {
-  const list = [...groups];
-  for (const { index, original, trimmed } of records) {
-    const at = trimmed ? list.findIndex((group) => isDeepStrictEqual(group, trimmed)) : -1;
-    if (at >= 0) {
-      list[at] = original;
-      continue;
-    }
-    const routerOnly = { ...original, hooks: original.hooks.filter(isRouter) };
-    if (!list.some((group) => isDeepStrictEqual(group, routerOnly))) {
-      list.splice(Math.min(index, list.length), 0, routerOnly);
-    }
-  }
-  return list;
+  let placed = false;
+  const keepFirst = (hook) => {
+    if (!isCore(hook)) return [hook];
+    if (placed) return [];
+    placed = true;
+    return [{ ...hook, command }];
+  };
+  const kept = groups.flatMap((group) => {
+    if (!hasHook(group, isCore)) return [group];
+    const hooks = group.hooks.flatMap(keepFirst);
+    return hooks.length ? [{ ...group, hooks }] : [];
+  });
+  return placed ? kept : [...kept, { hooks: [{ type: "command", command }] }];
 }
 
 function readSettings(file) {
@@ -100,53 +86,65 @@ function writeSettings(file, { existed, data }, next) {
   return { changed: true, backup };
 }
 
-function readRecords(dir) {
-  const file = path.join(dir, RECORD_FILE);
-  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+function savedFile(coreDir, addon) {
+  return addon.SAVED_FILE ? path.join(coreDir, addon.SAVED_FILE) : null;
 }
 
-function writeRecords(dir, records) {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, RECORD_FILE), `${JSON.stringify(records, null, 2)}\n`);
+function readRecords(file) {
+  return file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
 }
 
-export function install({
+function writeRecords(file, records) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(records, null, 2)}\n`);
+}
+
+export async function install({
   settingsPath = defaultSettingsPath(),
   coreDir = defaultCoreDir(),
   hookPath = defaultHookPath(),
+  env = process.env,
 } = {}) {
   const file = path.resolve(settingsPath);
+  const addon = await loadEntry(env);
   const settings = readSettings(file);
   const hooks = { ...(settings.data.hooks ?? {}) };
   const command = `node "${hookPath}"`;
-  const saved = readRecords(coreDir);
+  const recordFile = savedFile(coreDir, addon);
+  const saved = readRecords(recordFile);
   const found = {};
   for (const event of EVENTS) {
     const groups = listOf(hooks[event]);
-    const records = routerRecords(groups);
-    if (records.length) found[event] = records;
-    hooks[event] = upsertCore(removeHooks(groups, isRouter), command);
+    const detached = addon.detach(groups);
+    if (detached.length) found[event] = detached;
+    hooks[event] = upsertCore(removeHooks(groups, addon.matches), command);
   }
-  const routerRemoved = Object.values(found).reduce((count, records) => count + records.length, 0);
+  const addonRemoved = Object.values(found).reduce((count, records) => count + records.length, 0);
   const write = writeSettings(file, settings, { ...settings.data, hooks });
-  if (routerRemoved) writeRecords(coreDir, { ...saved, [file]: { ...(saved[file] ?? {}), ...found } });
-  return { settingsPath: file, ...write, routerRemoved };
+  if (addonRemoved) writeRecords(recordFile, { ...saved, [file]: { ...(saved[file] ?? {}), ...found } });
+  return { settingsPath: file, ...write, addonRemoved };
 }
 
-export function uninstall({ settingsPath = defaultSettingsPath(), coreDir = defaultCoreDir() } = {}) {
+export async function uninstall({
+  settingsPath = defaultSettingsPath(),
+  coreDir = defaultCoreDir(),
+  env = process.env,
+} = {}) {
   const file = path.resolve(settingsPath);
   const settings = readSettings(file);
-  if (!settings.existed) return { settingsPath: file, changed: false, backup: null, routerRestored: 0 };
+  if (!settings.existed) return { settingsPath: file, changed: false, backup: null, addonRestored: 0 };
+  const addon = await loadEntry(env);
   const hooks = { ...(settings.data.hooks ?? {}) };
-  const saved = readRecords(coreDir);
+  const recordFile = savedFile(coreDir, addon);
+  const saved = readRecords(recordFile);
   const records = saved[file] ?? {};
-  let routerRestored = 0;
+  let addonRestored = 0;
   for (const event of EVENTS) {
     if (!Array.isArray(hooks[event]) && !records[event]) continue;
     const before = listOf(hooks[event]);
     const entries = listOf(records[event]);
-    routerRestored += entries.length;
-    const groups = restoreRouter(removeHooks(before, isCore), entries);
+    addonRestored += entries.length;
+    const groups = addon.reattach(removeHooks(before, isCore), entries);
     if (groups.length || !before.length) hooks[event] = groups;
     else delete hooks[event];
   }
@@ -154,19 +152,25 @@ export function uninstall({ settingsPath = defaultSettingsPath(), coreDir = defa
   if (Object.keys(hooks).length || settings.data.hooks !== undefined) next.hooks = hooks;
   else delete next.hooks;
   const write = writeSettings(file, settings, next);
-  if (saved[file]) {
+  if (recordFile && saved[file]) {
     delete saved[file];
-    writeRecords(coreDir, saved);
+    writeRecords(recordFile, saved);
   }
-  return { settingsPath: file, ...write, routerRestored };
+  return { settingsPath: file, ...write, addonRestored };
 }
 
-export function status({ settingsPath = defaultSettingsPath(), coreDir = defaultCoreDir() } = {}) {
+export async function status({
+  settingsPath = defaultSettingsPath(),
+  coreDir = defaultCoreDir(),
+  env = process.env,
+} = {}) {
   const file = path.resolve(settingsPath);
+  const addon = await loadEntry(env);
   const hooks = readSettings(file).data.hooks ?? {};
   const core = EVENTS.every((event) => listOf(hooks[event]).some((group) => hasHook(group, isCore)));
-  const router = EVENTS.some((event) => listOf(hooks[event]).some((group) => hasHook(group, isRouter)));
-  return { settingsPath: file, core, router, routerSaved: Boolean(readRecords(coreDir)[file]) };
+  const addonInstalled = EVENTS.some((event) => listOf(hooks[event]).some((group) => hasHook(group, addon.matches)));
+  const addonSaved = Boolean(readRecords(savedFile(coreDir, addon))[file]);
+  return { settingsPath: file, core, addon: addonInstalled, addonSaved };
 }
 
 const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -182,21 +186,21 @@ if (isMain) {
     const given = flag("--settings");
     const settingsPath = given ? path.resolve(given) : defaultSettingsPath();
     if (argv.includes("--status")) {
-      const s = status({ settingsPath });
+      const s = await status({ settingsPath });
       console.log(`core: ${s.core ? "installed" : "not installed"}`);
-      const saved = s.routerSaved ? " (entry saved, --uninstall puts it back)" : "";
-      console.log(`router: ${s.router ? "installed" : "not installed"}${saved}`);
+      const saved = s.addonSaved ? " (entry saved, --uninstall puts it back)" : "";
+      console.log(`add-on: ${s.addon ? "installed" : "not installed"}${saved}`);
     } else if (argv.includes("--uninstall")) {
-      const r = uninstall({ settingsPath });
+      const r = await uninstall({ settingsPath });
       const state = r.changed ? "updated" : "already clean";
       const backup = r.backup ? ` (backup ${r.backup})` : "";
-      console.log(`uninstall: ${state} ${settingsPath}${backup}; router entries restored: ${r.routerRestored}`);
+      console.log(`uninstall: ${state} ${settingsPath}${backup}; add-on entries restored: ${r.addonRestored}`);
     } else {
-      const r = install({ settingsPath });
+      const r = await install({ settingsPath });
       const state = r.changed ? "updated" : "already up to date";
       const backup = r.backup ? ` (backup ${r.backup})` : "";
-      const router = r.routerRemoved ? `; router entries removed: ${r.routerRemoved}` : "";
-      console.log(`install: ${state} ${settingsPath}${backup}${router}`);
+      const removed = r.addonRemoved ? `; add-on entries removed: ${r.addonRemoved}` : "";
+      console.log(`install: ${state} ${settingsPath}${backup}${removed}`);
     }
   } catch (error) {
     console.error(`hydra-core install: ${error.message}`);

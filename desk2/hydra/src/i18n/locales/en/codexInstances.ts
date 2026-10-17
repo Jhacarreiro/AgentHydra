@@ -50,11 +50,6 @@ export default {
   delete: 'Delete',
   nameLabel: 'Instance name',
   namePlaceholder: 'e.g. work, personal, client-a',
-  createDialogTitle: 'New Codex instance',
-  createDialogDescription:
-    'Create a new isolated CODEX_HOME and Codex Desktop profile for this OpenAI login.',
-  createDialogSubmit: 'Create',
-  createDialogCreating: 'Creating…',
   renameDialogTitle: 'Rename Codex instance',
   renameDialogDescription: "Change this Codex instance's display name.",
   renameDialogSubmit: 'Save',
@@ -62,10 +57,8 @@ export default {
   deleteDialogTitle: 'Delete Codex instance',
   deleteDialogDescription:
     'This permanently removes the Codex instance, desktop profile, and local CODEX_HOME. This cannot be undone.',
-  deleteDialogPlaceholder: 'Instance name',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
-  deleteDialogMismatch: "Name doesn't match.",
   toastCreated: 'Codex instance created.',
   toastCreateFailed: 'Failed to create Codex instance.',
   toastRenamed: 'Codex instance renamed.',

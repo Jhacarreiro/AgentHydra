@@ -9,11 +9,13 @@ import {
   acctLabel,
   isActive,
   JOURNAL_PATH,
+  leanTextOf,
   listeners,
   load,
   workers,
 } from './climayte-core'
 import { cpuShort } from './climayte-cpu'
+import { doingOf } from './climayte-doing'
 import {
   type EtaBandCalibration,
   type EtaCalibration,
@@ -39,15 +41,19 @@ import {
   type CliMayteWorkerBrief,
   type CliMayteWorkerReport,
   type CliMayteWorkerView,
+  projectWorkerView,
   recentWorkers,
   toBrief,
   toReport,
   toView,
+  verdictCoversNewestWork,
+  type WorkerViewProjection,
 } from './climayte-lib'
-import { memoryShort } from './climayte-memory'
+import { GROWTH_REUSE_MS, memoryShort } from './climayte-memory'
 import type { OriginLookup } from './climayte-origin'
 import { roomNow, tickState } from './climayte-schedule'
 import {
+  attemptUnits,
   climayteKind,
   ladderIndex,
   ladderModel,
@@ -100,7 +106,7 @@ export async function climayteCapacity(now = Date.now()): Promise<{
     running++
     if (w.accountId) busy.add(w.accountId)
   }
-  const state = tickState(accounts, now)
+  const state = tickState(accounts, now, null, GROWTH_REUSE_MS)
   const idle = roomNow(state).filter((a) => !busy.has(a.id)).length
   return {
     idle,
@@ -162,15 +168,24 @@ export function matches(
   )
 }
 
+function hasSession(w: CliMayteWorker, want: ReadonlySet<string>): boolean {
+  const current = w.sessionId
+  if (current && want.has(current)) return true
+  return w.sessions?.some((s) => !!s && want.has(s)) ?? false
+}
+
 /**
  * The workers these chat sessions dispatched: each whose origin is one of them, each a worker of theirs
  * dispatched (through any depth, cycle-safe), and each task of a wave whose manager is theirs (a wave's
  * tasks carry no origin, only their `wave`). A chat that is itself a worker (the session is that worker's,
  * current or earlier) counts the workers that worker dispatched, never the worker itself.
+ * `trace`: a worker with no ping origin is also placed by its trace (climayte-trace.ts), as the From column
+ * places it: a CliMayte-routed HSwarm task's worker names the chat that called HSwarm only there.
  */
 export function dispatchedFrom(
   all: Iterable<CliMayteWorker>,
   sessions: readonly string[],
+  opts: { trace?: boolean } = {},
 ): Set<string> {
   const want = new Set(sessions)
   const list = [...all]
@@ -179,22 +194,24 @@ export function dispatchedFrom(
   const children = new Map<string, string[]>()
   const seeds: string[] = []
   for (const w of list) {
+    const traced = opts.trace && !w.origin ? w.trace : undefined
     const up =
       w.origin?.kind === 'worker'
         ? w.origin.workerId
-        : !w.origin && w.wave && w.kind !== 'manage'
-          ? managers.get(w.wave)
-          : undefined
+        : traced?.workerId
+          ? traced.workerId
+          : !w.origin && w.wave && w.kind !== 'manage'
+            ? managers.get(w.wave)
+            : undefined
     if (up && up !== w.id) {
       const list = children.get(up)
       if (list) list.push(w.id)
       else children.set(up, [w.id])
     }
     if (w.origin?.kind === 'chat' && want.has(w.origin.sessionId)) seeds.push(w.id)
+    else if (traced?.sessionId && want.has(traced.sessionId)) seeds.push(w.id)
   }
-  for (const w of list)
-    if ([w.sessionId, ...(w.sessions ?? [])].some((s) => s && want.has(s)))
-      seeds.push(...(children.get(w.id) ?? []))
+  for (const w of list) if (hasSession(w, want)) seeds.push(...(children.get(w.id) ?? []))
   const mine = new Set<string>()
   for (let queue = seeds; queue.length; ) {
     const next: string[] = []
@@ -206,6 +223,13 @@ export function dispatchedFrom(
     queue = next
   }
   return mine
+}
+
+/** Every worker on record, the store read first: where a session's delegated tokens find the workers it
+ *  started (session-usage.ts). */
+export function climayteWorkers(): Iterable<CliMayteWorker> {
+  load()
+  return workers.values()
 }
 
 /** `limit`: keep every active worker and only the `limit` most recently finished ones
@@ -222,8 +246,29 @@ export interface CliMayteListFilter {
   origin?: string[]
   limit?: number
   brief?: boolean
+  /** The list row's text counts and prompt preview, without unpacking finished reports. */
+  lean?: boolean
+  /** Desk's bridge contract only; additive to lean so older daemons can ignore it. */
+  bridge?: boolean
+  /** With lean, the Hydra pane's fields, without unused raw launch and ETA records. */
+  pane?: boolean
   /** With `brief`: also list finished work a verdict already covers (left out by default). */
   all?: boolean
+}
+
+/** Membership is compiled for this synchronous read only. A later read sees every filter and
+ *  worker mutation; exported matches and wait subscriptions keep their ordinary live predicates. */
+function listMatcher(f: CliMayteListFilter): ((w: CliMayteWorker) => boolean) | null {
+  if (!f.ids && !f.sessions) return null
+  // A single id needs one comparison, so it gains nothing from building a Set.
+  const ids = f.ids && f.ids.length > 1 ? new Set(f.ids) : null
+  const sessions = f.sessions ? new Set(f.sessions) : null
+  return (w) =>
+    (!f.id || w.id === f.id) &&
+    (!f.ids || (ids ? ids.has(w.id) : f.ids.includes(w.id))) &&
+    (!sessions || hasSession(w, sessions)) &&
+    (!f.group || w.group === f.group) &&
+    (!f.active || isActive(w))
 }
 
 /** Who dispatched a worker, for the list and detail: a worker origin's session, and a chat origin's
@@ -235,26 +280,149 @@ const originLookup: OriginLookup = {
 
 export function climayteList(filter: CliMayteListFilter & { brief: true }): CliMayteWorkerBrief[]
 
+export function climayteList(filter: CliMayteListFilter & { bridge: true }): CliMayteWorkerBridge[]
+
+export function climayteList(filter: CliMayteListFilter & { lean: true }): CliMayteWorkerLean[]
+
 export function climayteList(filter?: CliMayteListFilter): CliMayteWorkerView[]
 
 export function climayteList(
   filter: CliMayteListFilter = {},
-): CliMayteWorkerView[] | CliMayteWorkerBrief[] {
+): CliMayteWorkerView[] | CliMayteWorkerBrief[] | CliMayteWorkerLean[] | CliMayteWorkerBridge[] {
   load()
   const now = Date.now()
   const mine = filter.origin?.length ? dispatchedFrom(workers.values(), filter.origin) : null
-  const views = recentWorkers(
-    [...workers.values()].filter((w) => matches(w, filter) && (!mine || mine.has(w.id))),
+  const matchesRow = listMatcher(filter) ?? ((w: CliMayteWorker) => matches(w, filter))
+  const recent = recentWorkers(
+    [...workers.values()].filter(mine ? (w) => matchesRow(w) && mine.has(w.id) : matchesRow),
     filter.limit,
-  ).map((w) => toView(w, now, originLookup))
-  if (!filter.brief) return views
+  )
   // An orchestrator's default list is what it may act on: live work and unjudged results. Judged
-  // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02).
+  // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02). Filter before
+  // toView spreads and unpacks their long fields, but after the recent limit: judged work still
+  // occupies the same recent slots as before.
   const keep =
-    filter.all || filter.id || filter.ids?.length
-      ? views
-      : views.filter((v) => isLiveStatus(v.status) || !v.judged)
-  return keep.map(toBrief)
+    !filter.brief || filter.all || filter.id || filter.ids?.length
+      ? recent
+      : recent.filter((w) => isLiveStatus(w.status) || !verdictCoversNewestWork(w))
+  if (filter.brief)
+    return keep.map((w) => {
+      // Briefs return no report text. Reuse its exact cached count rather than unpacking
+      // a finished worker's prompt and reports just to discard them in toBrief.
+      const text = leanTextOf(w)
+      const brief = toBrief(toView(w, now, originLookup, text))
+      if (text.resultChars) brief.resultChars = text.resultChars
+      return brief
+    })
+  if (filter.bridge && !filter.brief)
+    return keep.map((w) => climayteBridgeWorker(w, leanTextOf(w).prompt))
+  if (filter.lean && !filter.brief) {
+    const projection = filter.pane ? PANE_VIEW_PROJECTION : LEAN_VIEW_PROJECTION
+    return keep.map((w) => {
+      const text = leanTextOf(w)
+      return Object.assign(projectWorkerView(w, now, projection, originLookup, text), {
+        result: null,
+        resultChars: text.resultChars,
+      })
+    })
+  }
+  return keep.map((w) => toView(w, now, originLookup))
+}
+
+/** Only the fields Desk's bridge consumes, built without full-view spreads, attempt reports or
+ *  verdict notes. Full and lean list readers keep their existing shapes. */
+export type CliMayteWorkerBridge = Pick<
+  CliMayteWorkerView,
+  | 'id'
+  | 'group'
+  | 'title'
+  | 'cwd'
+  | 'pendingCwd'
+  | 'prompt'
+  | 'status'
+  | 'sessionId'
+  | 'sessions'
+  | 'accountId'
+  | 'account'
+  | 'model'
+  | 'effort'
+  | 'reportedModel'
+  | 'kind'
+  | 'chat'
+  | 'result'
+  | 'error'
+  | 'lastActivity'
+  | 'doing'
+  | 'doingSince'
+  | 'doingKind'
+  | 'lastStepAt'
+  | 'waitUntil'
+  | 'notBefore'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'tokens'
+  | 'origin'
+  | 'wave'
+  | 'hold'
+  | 'question'
+  | 'eta'
+> & {
+  attempts: Array<Pick<CliMayteWorkerView['attempts'][number], 'account' | 'outcome' | 'tokens'>>
+  verdicts?: Array<Pick<NonNullable<CliMayteWorkerView['verdicts']>[number], 'verdict'>>
+  used: { pct: number }
+}
+
+export function climayteBridgeWorker(w: CliMayteWorker, prompt: string): CliMayteWorkerBridge {
+  let account: string | null = null
+  let reportedModel: string | null = null
+  let used = 0
+  const attempts = w.attempts.map((a) => {
+    if (a.account.id === w.accountId)
+      account = a.account.num === null ? a.account.name : `#${a.account.num} ${a.account.name}`
+    if (a.model) reportedModel = a.model
+    used += attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)
+    return {
+      account: { id: a.account.id, num: a.account.num, name: a.account.name },
+      outcome: a.outcome,
+      tokens: a.tokens,
+    }
+  })
+  return {
+    id: w.id,
+    group: w.group,
+    title: w.title,
+    cwd: w.cwd,
+    pendingCwd: w.pendingCwd,
+    prompt,
+    status: w.status,
+    sessionId: w.sessionId,
+    sessions: w.sessions,
+    accountId: w.accountId,
+    account,
+    model: w.model,
+    effort: w.effort,
+    reportedModel,
+    kind: w.kind,
+    chat: w.chat,
+    result: null,
+    error: w.error,
+    lastActivity: w.lastActivity,
+    ...doingOf(w),
+    lastStepAt: Math.max(w.stepAt ?? 0, w.stateAt?.at ?? w.createdAt),
+    waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
+    notBefore: w.notBefore,
+    createdAt: w.createdAt,
+    updatedAt: w.updatedAt,
+    tokens: w.tokens,
+    attempts,
+    used: { pct: Math.round((used / UNITS_PER_PRO_PERCENT) * 10) / 10 },
+    verdicts: w.verdicts?.map(({ verdict }) => ({ verdict })),
+    origin: w.origin,
+    wave: w.wave,
+    hold: w.hold,
+    question: w.question,
+    eta: w.eta,
+  }
 }
 
 /** `lean=1` on the workers list (Desk 2's server and pane): the same rows without the long text no list
@@ -262,7 +430,7 @@ export function climayteList(
  *  each attempt keeps its account, outcome, ceiling flag and tokens; each verdict keeps who, what and
  *  the first line of its note (the row's hover). Everything else, the 300-character prompt included,
  *  stays. */
-export function climayteLeanWorker(v: CliMayteWorkerView): Omit<
+export type CliMayteWorkerLean = Omit<
   CliMayteWorkerView,
   'results' | 'reports' | 'attempts' | 'verdicts'
 > & {
@@ -275,13 +443,57 @@ export function climayteLeanWorker(v: CliMayteWorkerView): Omit<
     Omit<NonNullable<CliMayteWorkerView['verdicts']>[number], 'note'> & { note: string | null }
   >
   resultChars: number
-} {
+}
+
+const LEAN_VIEW_PROJECTION: WorkerViewProjection<
+  CliMayteWorkerLean['attempts'][number],
+  NonNullable<CliMayteWorkerLean['verdicts']>[number]
+> = {
+  attempts: (w) =>
+    w.attempts.map((a) => ({
+      account: { id: a.account.id, num: a.account.num, name: a.account.name },
+      outcome: a.outcome,
+      tokens: a.tokens,
+      ...(a.ceiling ? { ceiling: true as const } : {}),
+    })),
+  verdicts: (w) =>
+    w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+      note: v.note ? (v.note.split('\n', 1)[0] ?? '').slice(0, 200) : null,
+    })),
+}
+
+// None of these raw records is part of Hydra's CliMayteWorkerView contract or read by its list,
+// tooltips, actions or detail placeholder. The From fields and role still derive from origin,
+// trace and desk above; the full detail and every existing list contract keep their original data.
+const PANE_VIEW_PROJECTION: typeof LEAN_VIEW_PROJECTION = {
+  ...LEAN_VIEW_PROJECTION,
+  omitWorkerFields: new Set([
+    'eta',
+    'pastEtas',
+    'message',
+    'origin',
+    'trace',
+    'sealed',
+    'check',
+    'desk',
+    'handoffNote',
+    'requestId',
+  ]),
+}
+
+export function climayteLeanWorker(v: CliMayteWorkerView): CliMayteWorkerLean {
+  return leanWorkerView(v)
+}
+
+function leanWorkerView(v: CliMayteWorkerView, resultChars?: number): CliMayteWorkerLean {
   const { results, reports: _reports, ...row } = v
   const text = results?.length ? results : v.result ? [v.result] : []
   return {
     ...row,
     result: null,
-    resultChars: text.reduce((n, r) => n + r.length, 0),
+    resultChars: resultChars ?? text.reduce((n, r) => n + r.length, 0),
     attempts: v.attempts.map((a) => ({
       account: a.account,
       outcome: a.outcome,
@@ -313,7 +525,9 @@ export function climayteReports(
   filter: CliMayteListFilter = {},
   chars?: number,
 ): CliMayteWorkerReport[] {
-  return climayteList({ ...filter, brief: false }).map((v) => toReport(v, chars))
+  return climayteList({ ...filter, brief: false, lean: false, bridge: false }).map((v) =>
+    toReport(v, chars),
+  )
 }
 
 /** `fullPrompt`: the whole brief instead of the views' first 300 characters, for a window showing the
@@ -346,7 +560,9 @@ export function climayteGet(
 export function climayteWait(
   filter: CliMayteListFilter,
   timeoutMs: number,
-): Promise<CliMayteWorkerView[] | CliMayteWorkerBrief[]> {
+): Promise<
+  CliMayteWorkerView[] | CliMayteWorkerBrief[] | CliMayteWorkerLean[] | CliMayteWorkerBridge[]
+> {
   load()
   if (![...workers.values()].some((w) => matches(w, filter) && isActive(w)))
     return Promise.resolve(climayteList(filter))

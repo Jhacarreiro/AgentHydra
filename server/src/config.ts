@@ -120,6 +120,22 @@ if (
   appEnv('DB') === undefined &&
   !appEnv('DATA_DIR')?.trim()
 ) {
+  // Sweep the homes earlier processes could not remove at their own exit (see below). The 24h age
+  // floor keeps a concurrently running process's home safe, as tests/setup.ts does for the suite.
+  try {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith('agenthydra-test-')) continue
+      const old = join(tmpdir(), name)
+      try {
+        if (Date.now() - statSync(old).mtimeMs > 24 * 60 * 60 * 1000)
+          rmSync(old, { recursive: true, force: true })
+      } catch {
+        // In use or already gone: the next process's sweep gets another chance.
+      }
+    }
+  } catch {
+    // Housekeeping never stops a process from starting.
+  }
   const scratch = mkdtempSync(join(tmpdir(), 'agenthydra-test-'))
   process.env.AGENTHYDRA_HOME = scratch
   process.env.AGENTHYDRA_DB = join(scratch, 'agenthydra-test.db')
@@ -130,8 +146,15 @@ if (
   )
   // Outcome-independent reap: this module-scope block runs once per test process (bun caches the
   // module), so process exit is the only hook that always fires, matching setup.ts's own pattern.
+  // A sqlite handle in the home is still open when 'exit' fires and Windows refuses to remove an open
+  // file (EBUSY), which used to exit the process non-zero after its output: the home is left for the
+  // next process's sweep above instead.
   process.on('exit', () => {
-    rmSync(scratch, { recursive: true, force: true })
+    try {
+      rmSync(scratch, { recursive: true, force: true })
+    } catch {
+      // Left for the next start's sweep.
+    }
   })
 }
 
@@ -141,6 +164,8 @@ if (
  *  out a 5 s test that CI, with an empty home, passed). */
 export const CLAUDE_PROJECTS_ROOT =
   appEnv('CLAUDE_PROJECTS_ROOT')?.trim() || join(HOME, '.claude', 'projects')
+/** The main config folder that holds it (~/.claude): its `.claude.json` names who is signed in to the default login. */
+export const CLAUDE_MAIN_DIR = dirname(CLAUDE_PROJECTS_ROOT)
 
 /**
  * The DEFAULT Codex install's home. Active rollouts live in date folders under `sessions/`,

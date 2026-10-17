@@ -12,6 +12,7 @@ export const badgeVariants = cva(
         primary: 'bg-primary/10 text-primary dark:bg-primary/20',
         success: 'bg-success/10 text-success dark:bg-success/20',
         warning: 'bg-warning/10 text-warning dark:bg-warning/20',
+        limited: 'bg-limited/10 text-limited dark:bg-limited/20',
         info: 'bg-info/10 text-info dark:bg-info/20',
         outline: 'border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground bg-input/20 dark:bg-input/30',
         ghost: 'hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50',
@@ -26,6 +27,10 @@ export const badgeVariants = cva(
       tabular: {
         true: 'tabular-nums',
         false: '',
+      },
+      tone: {
+        default: '',
+        muted: 'text-muted-foreground',
       },
       dimmed: {
         true: 'opacity-60',
@@ -50,6 +55,7 @@ export const badgeVariants = cva(
       variant: "default",
       size: "default",
       tabular: false,
+      tone: "default",
       dimmed: false,
       interactive: false,
     },

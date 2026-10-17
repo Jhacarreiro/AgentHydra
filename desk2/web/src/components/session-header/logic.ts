@@ -1,6 +1,7 @@
 // What the session header says, worked out from AgentHydra's answers (ah.ts): the same wording and
 // rules as AgentHydra's Sessions tab (hydra/src/components/SessionsView.vue and its composables), which
 // Desk 2's header replaces. Pure, so the window and the tests share it.
+import { searchItems } from '@shared/find'
 import type { TranscriptItem } from '@shared/protocol'
 
 /** AgentHydra's SessionSummary, the fields the header reads (server/src/types.ts). */
@@ -22,13 +23,19 @@ export interface AhSessionRow {
   effort?: string | null
 }
 
-/** AgentHydra's SessionUsage (GET /api/sessions/:id/usage). */
+/** AgentHydra's SessionUsage (GET /api/sessions/:id/usage). `delegated` and `grand` come from a daemon that counts the
+ *  HSwarm and CliMayte work a session handed off (server/src/session-usage.ts); an older one sends neither. */
 export interface AhUsage {
   status: string
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number; total: number; turns: number }
   costUsd: number | null
   unpricedModels: string[]
   pricesAsOf: string
+  delegated?: {
+    hswarm: { tokens: number; costUsd: number | null; calls: number }
+    climayte: { tokens: number; costUsd: number | null; workers: number }
+  }
+  grand?: { tokens: number; costUsd: number | null }
 }
 
 /** AgentHydra's SessionSecretScan: redacted always; the daemon has no way to reveal one. */
@@ -73,15 +80,6 @@ const SOURCE_NAME: Record<string, string> = {
   zswarm: 'HSwarm',
   foreign: 'Other'
 }
-/** Each product's own colour, as AgentHydra's source badge wears it. */
-export const SOURCE_TONE: Record<string, string> = {
-  claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#E9A287]',
-  codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#65D4B3]',
-  opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#9AA6FF]',
-  hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#F5C067]',
-  dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]',
-  zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]'
-}
 
 /** Where the account chip takes you in AgentHydra: the row's instance by its number, on the CLI table for
  *  a CLI instance's session and the desktop table (Claude Desktop, Codex) otherwise; null without one. */
@@ -122,23 +120,41 @@ export function formatUsd(n: number): string {
   return usd.format(n)
 }
 
-/** "1.2M tokens · $3.40", a "+" when a model has no published price (the total is then a floor). Null with nothing counted. */
+/** "1.2M tokens · $3.40": the session's total total, its own work and the HSwarm and CliMayte work it handed off (owner,
+ *  2026-10-16: "I just want the total total"), a "+" when a model has no published price (the total is then a floor). Null
+ *  with nothing counted. */
 export function usageSummary(u: AhUsage | null): string | null {
-  if (!u || u.status !== 'ok' || u.tokens.turns <= 0) return null
-  const tokens = `${formatCompact(u.tokens.total)} tokens`
-  if (u.costUsd === null) return tokens
-  return `${tokens} · ${formatUsd(u.costUsd)}${u.unpricedModels.length ? '+' : ''}`
+  if (!u || u.status !== 'ok' || (u.tokens.turns <= 0 && !u.grand?.tokens)) return null
+  const tokens = `${formatCompact(u.grand?.tokens ?? u.tokens.total)} tokens`
+  const cost = u.grand ? u.grand.costUsd : u.costUsd
+  if (cost === null) return tokens
+  return `${tokens} · ${formatUsd(cost)}${u.unpricedModels.length ? '+' : ''}`
+}
+
+/** "HSwarm 1.2M over 40 calls", "CliMayte 3.4M in 6 workers": each delegated part with tokens, for the tooltip. */
+function delegatedParts(u: AhUsage): string[] {
+  const d = u.delegated
+  if (!d) return []
+  const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`
+  const parts: string[] = []
+  if (d.hswarm.tokens > 0) parts.push(`HSwarm ${formatCompact(d.hswarm.tokens)} over ${count(d.hswarm.calls, 'call', 'calls')}`)
+  if (d.climayte.tokens > 0) parts.push(`CliMayte ${formatCompact(d.climayte.tokens)} in ${count(d.climayte.workers, 'worker', 'workers')}`)
+  return parts
 }
 
 export function usageDetail(u: AhUsage | null): string {
   if (!u || u.status !== 'ok') return ''
   const t = u.tokens
-  const parts = [
-    `In ${formatCompact(t.input)} · out ${formatCompact(t.output)} · cache read ${formatCompact(t.cacheRead)} · cache write ${formatCompact(t.cacheCreation)}, over ${t.turns} replies.`
-  ]
+  const handed = delegatedParts(u)
+  const parts = handed.length
+    ? [`This chat ${formatCompact(t.total)} · ${handed.join(' · ')}: the work it handed off counts too, the workers those started included.`]
+    : []
+  parts.push(
+    `${handed.length ? "This chat's own: in" : 'In'} ${formatCompact(t.input)} · out ${formatCompact(t.output)} · cache read ${formatCompact(t.cacheRead)} · cache write ${formatCompact(t.cacheCreation)}, over ${t.turns} replies.`
+  )
   if (u.unpricedModels.length) {
     const models = u.unpricedModels.join(', ')
-    parts.push(u.costUsd === null ? `No published price for ${models}, so no cost is shown.` : `No published price for ${models}, so the real total is higher.`)
+    parts.push((u.grand ? u.grand.costUsd : u.costUsd) === null ? `No published price for ${models}, so no cost is shown.` : `No published price for ${models}, so the real total is higher.`)
   }
   parts.push(`Priced at published list rates as of ${u.pricesAsOf}. A subscription plan is not billed per token.`)
   return parts.join(' ')
@@ -231,28 +247,9 @@ export interface FindHit {
   nth: number
 }
 
-function searchable(i: TranscriptItem): string | null {
-  if (i.parentToolUseId) return null
-  if (i.kind === 'user' || i.kind === 'note' || i.kind === 'assistant_text' || i.kind === 'thinking' || i.kind === 'system') return i.text
-  return null
-}
-
 /** Every match of `query` in what the transcript says, in order; case-insensitive, nothing for a blank query. */
 export function findHits(items: readonly TranscriptItem[], query: string): FindHit[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
-  const hits: FindHit[] = []
-  for (const i of items) {
-    const text = searchable(i)?.toLowerCase()
-    if (!text) continue
-    let at = text.indexOf(q)
-    let nth = 0
-    while (at !== -1) {
-      hits.push({ itemId: i.id, nth: nth++ })
-      at = text.indexOf(q, at + q.length)
-    }
-  }
-  return hits
+  return searchItems(items, query).map(({ itemId, nth }) => ({ itemId, nth }))
 }
 
 /** The match `n` steps along, wrapping both ways. */

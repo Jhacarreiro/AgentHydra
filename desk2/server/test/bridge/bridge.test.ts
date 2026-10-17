@@ -51,18 +51,18 @@ describe('client', () => {
 })
 
 describe('bridge', () => {
-  test('lists accounts through AgentHydra; the pick is the default login (CliMayte places chats)', async () => {
+  test('lists accounts through AgentHydra; the pick is one of them, never a default login', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })
-    expect((await b.listAccounts()).length).toBe(6)
-    expect((await b.pickAccount()).id).toBe('default')
+    expect((await b.listAccounts()).length).toBe(5)
+    expect((await b.pickAccount())?.id).toMatch(/^cli-/)
   })
 
-  test('AgentHydra down: the default login, no sessions, no workers, never a throw', async () => {
+  test('AgentHydra down: no accounts, no pick, no sessions, no workers, never a throw', async () => {
     const b = createBridge({ url: deadUrl(), now: () => NOW })
     expect(await b.status()).toEqual({ up: false, url: b.url })
-    expect((await b.listAccounts()).map((a) => a.id)).toEqual(['default'])
-    expect((await b.pickAccount()).id).toBe('default')
+    expect(await b.listAccounts()).toEqual([])
+    expect(await b.pickAccount()).toBeNull()
     expect(await b.externalSessions()).toEqual([])
     expect(await b.workers()).toEqual([])
     expect(await b.activeWorkersFor(sid(1))).toEqual([])
@@ -190,11 +190,11 @@ describe('bridge', () => {
     const say = (t: string, text: string) => ({ kind: 'text', role: 'assistant', text, timestamp: t })
     const page = (history_start: number, events: unknown[]) => ({ session_id: id, source: 'codex', title: '', cwd: 'C:/Users/me/repo', events, has_more: history_start > 0, history_start })
     f.state.tailPages = {
-      '': page(900, [say('2026-10-13T10:00:03.000Z', 'Third.')]),
-      '900': page(400, [say('2026-10-13T10:00:02.000Z', 'Second.')]),
-      '400': page(0, [say('2026-10-13T10:00:01.000Z', 'First.')]),
+      '': page(900, [say('2019-10-22T10:00:03.000Z', 'Third.')]),
+      '900': page(400, [say('2019-10-22T10:00:02.000Z', 'Second.')]),
+      '400': page(0, [say('2019-10-22T10:00:01.000Z', 'First.')]),
     }
-    const b = createBridge({ url: f.url, now: () => NOW })
+    const b = createBridge({ url: f.url, now: () => NOW - 364 * 7 * 24 * 3600_000 })
     const text = (items: { kind: string; text?: string }[]) => items.map((i) => i.text)
     expect(text(await b.externalHistory(id))).toEqual(['First.', 'Second.', 'Third.'])
   })
@@ -427,7 +427,7 @@ describe('poller', () => {
       expect.objectContaining({ type: 'accounts.update' }),
     ])
     const acc = h.events[3] as Extract<ServerEvent, { type: 'accounts.update' }>
-    expect(acc.accounts.map((a) => a.id)).toEqual(['default'])
+    expect(acc.accounts).toEqual([])
 
     // still down: nothing new to say
     h.events.length = 0
@@ -539,6 +539,47 @@ ${line('assistant', 4, 'second answer')}
     m.copy()
     m.answer()
     expect(await m.texts('new-acct')).toEqual(['first answer', 'second answer'])
+  })
+
+  test('a turn in flight whose file appears is found on the very next look, with no miss back-off', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-in-flight-'))
+    temps.push(home)
+    const dir = join(home, 'old')
+    const folder = join(dir, 'projects', encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const f = await fake()
+    f.state.instances = [{ num: 1, id: 'old-acct', name: 'Example 1', configDir: dir, loggedIn: true, lastUsageCheck: null }]
+    const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(dir, 'projects')] })
+    const writing = { sessionId: SESSION, accountId: 'old-acct' }
+    expect(await b.workerItems([SESSION], CWD, { writing })).toEqual([])
+    writeFileSync(join(folder, `${SESSION}.jsonl`), `${line('user', 1, 'first question')}
+${line('assistant', 2, 'first answer')}
+`)
+    // The same instant as the miss: a session not in flight would wait out its back-off here.
+    const again = await b.workerItems([SESSION], CWD, { writing })
+    expect(again.filter((i) => i.kind === 'assistant_text')).toHaveLength(1)
+  })
+
+  test("a failed read of the CLI instances is not kept: the next look finds the worker's own folder", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-dirs-failed-'))
+    temps.push(home)
+    const dir = join(home, 'old')
+    const folder = join(dir, 'projects', encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const f = await fake()
+    f.state.instances = [{ num: 1, id: 'old-acct', name: 'Example 1', configDir: dir, loggedIn: true, lastUsageCheck: null }]
+    f.state.instancesError = 'instances unavailable'
+    const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(dir, 'projects')] })
+    const writing = { sessionId: SESSION, accountId: 'old-acct' }
+    expect(await b.workerItems([SESSION], CWD, { writing })).toEqual([])
+    f.state.instancesError = undefined
+    writeFileSync(join(folder, `${SESSION}.jsonl`), `${line('user', 1, 'first question')}
+${line('assistant', 2, 'first answer')}
+`)
+    // The same instant: an empty map kept from the failed read leaves the account's folder unknown for 30 s,
+    // and the miss back-off hides the file.
+    const again = await b.workerItems([SESSION], CWD, { writing })
+    expect(again.filter((i) => i.kind === 'assistant_text')).toHaveLength(1)
   })
 })
 

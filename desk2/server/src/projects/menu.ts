@@ -15,6 +15,8 @@ export const STATS_TTL_MS = 5 * 60_000
  * (a project sweep running git on every project; 2026-10-10 a cold server answered empty after 18 s) is read again
  * at the next right-click after this, not five minutes later. A folder that is no checkout costs one stat to re-read. */
 export const PARTIAL_TTL_MS = 30_000
+/** How many folders' stats are kept; past this the one read first is dropped. */
+const STATS_KEPT = 200
 /** How long Project Hydra gets to name the folder's project and to show its Architect summary. */
 export const PH_TIMEOUT_MS = 5_000
 /** How much of a transcript's end is read for paths. */
@@ -148,6 +150,7 @@ export class ProjectMenu {
       architect,
     }
     this.stat.set(id, { at: this.now(), value })
+    if (this.stat.size > STATS_KEPT) this.stat.delete(this.stat.keys().next().value!)
     return value
   }
 

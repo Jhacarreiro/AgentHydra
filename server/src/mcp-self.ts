@@ -1,9 +1,10 @@
 // server/src/mcp-self.ts - which instance is calling, split out of mcp.ts: the self-
 // identification that has to run in the MCP server process, the caller-pid plumbing the HTTP
 // transport feeds it, and the `nextStep` line every usage tool attaches.
+import { type CliMayteRole, roleOf } from './climayte-lib'
 import type { OwnTranscript } from './compaction-history'
 import type { SelfIdentityDetection } from './core/self-identity'
-import { apiOrLocal, qs, type ResolvedInstanceRow } from './mcp-client'
+import { api, apiOrLocal, qs, type ResolvedInstanceRow } from './mcp-client'
 import type { UsageAdvice, UsageSnapshot } from './types'
 
 // --- self-identification ------------------------------------------------------
@@ -135,6 +136,8 @@ export const CALLER_AWARE_TOOLS = new Set([
   'climayte_manage',
   'climayte_status',
   'climayte_cancel',
+  'core_use',
+  'fan_out',
 ])
 
 /** The HTTP caller's pid; null when the route bound a caller but the lookup named nobody (or
@@ -243,11 +246,36 @@ export async function callerOrigin(
       why: null,
     }
   } catch (err) {
-    const msg = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim()
+    // The process walk's own words end by asking for a session_id, which this trace never reads (see above).
+    const msg = (err instanceof Error ? err.message : String(err))
+      .split('\n')[0]
+      .replace(/\s*Pass session_id\b.*$/, '')
+      .trim()
     return { origin: null, why: msg || 'the calling chat could not be identified' }
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** The CliMayte role of the calling chat: the worker that session belongs to (the match climayte.ts
+ *  originFor makes). The MCP runs inside the daemon, so this process's env names no worker; the env id
+ *  is read only when no caller is traced (a stdio MCP, where this process is the caller). Undefined:
+ *  no worker is that chat's. */
+export async function callerRole(a: Record<string, unknown>): Promise<CliMayteRole | undefined> {
+  const { origin } = await callerOrigin(a)
+  if (origin) {
+    const rows = await api(
+      `/api/corch/workers?session=${encodeURIComponent(origin.sessionId)}&all=1`,
+    ).catch(() => null)
+    const first = Array.isArray(rows) ? (rows[0] as { role?: CliMayteRole } | undefined) : undefined
+    return first?.role
+  }
+  const id = process.env.AGENTHYDRA_CLIMAYTE_WORKER?.trim()
+  if (!id) return undefined
+  const w = (await api(`/api/corch/workers/${encodeURIComponent(id)}`).catch(() => null)) as
+    | Parameters<typeof roleOf>[0]
+    | null
+  return w ? roleOf(w) : undefined
 }
 
 /** Identity as the tools report it: the instance (when it is a managed one), the evidence, and an

@@ -393,7 +393,7 @@ async def cmd_maintain(a) -> int:
         raise SystemExit("hswarm maintain --keep-days: 0 keeps every job (the default), N >= 1 deletes jobs older than N days")
     savings.lower_priority()
     packed = await asyncio.to_thread(archive.archive_old, a.archive_hours, True)
-    # Kept by default and packed by day (owner, Michael, 2026-10-02: "Ideally, we would keep all of it, and you would
+    # Kept by default and packed by day (owner, 2026-10-02: "Ideally, we would keep all of it, and you would
     # just figure out a way to properly compress"); --keep-days N is the one way left to delete jobs.
     pruned = await asyncio.to_thread(archive.prune_old, a.keep_days) if a.keep_days else {"jobs": 0, "freed": 0}
     indexed = await asyncio.to_thread(taskstore.index_jobs)  # before packing: a warm zip reads in milliseconds
@@ -999,8 +999,14 @@ async def cmd_service(a) -> int:
     return await call_service(a)
 
 
+async def cmd_image(a) -> int:
+    from .image import cmd_image as run_image
+
+    return await run_image(a)
+
+
 COMMANDS = {
-    "service": cmd_service,
+    "service": cmd_service, "image": cmd_image,
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
     "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "index": cmd_index, "survival": cmd_survival, "backfill-free-misses": cmd_backfill_free_misses, "prefix": cmd_prefix, "egress": cmd_egress,

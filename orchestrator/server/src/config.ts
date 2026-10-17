@@ -85,7 +85,7 @@ export interface RemoteConfig {
 /**
  * The "Orchestrator" Sign-in-with-Connections app, registered 2026-09-02 through Studio's
  * /v1/oauth-apps (public client, PKCE, scopes openid profile email photo). Its redirect
- * allow-list is both named-tunnel hostnames' /oauth/callback (orch-michael / orch-jacob on
+ * allow-list is both named-tunnel hostnames' /oauth/callback (one orch-<name> per owner on
  * lunarwerx.com), the relay callback, and loopback (registered as :7790; the IdP accepts any
  * loopback port per RFC 8252 section 7.3, so DEFAULT_PORT can move without touching the app); a
  * Quick Tunnel completes through the relay, loopback completes directly on the gateway.

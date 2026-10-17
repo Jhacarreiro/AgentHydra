@@ -4,7 +4,7 @@
 // in Unassigned while an account runs it.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ExternalSession } from '@shared/protocol'
@@ -54,6 +54,26 @@ test('an Unassigned chat stays listed and is drawn Unassigned while no account s
   now += UNASSIGN_GRACE_MS - 1
   expect(again.apply([session('s-1')], new Set(['s-1']))[0]?.unassigned).toBe(false)
   expect(again.get('s-1')?.unassigned).toBe(true)
+})
+
+test('a chat archived here stays archived until it is used again, after a restart too, an older mark dating from the file', () => {
+  const dir = home()
+  const now = 1_000_000
+  const store = new SessionMetaStore(dir, () => now)
+  store.patch('s-1', { archived: true })
+  store.flushSync()
+
+  const again = new SessionMetaStore(dir, () => now)
+  expect(again.apply([{ ...session('s-1'), lastActivityAt: now - 1 }])[0]?.archived).toBe(true)
+  expect(again.apply([{ ...session('s-1'), lastActivityAt: now + 1 }])[0]?.archived).toBe(false)
+  expect(again.get('s-1')).toBeNull()
+
+  // Marked before the time was kept: the file's last write stands in for it.
+  writeFileSync(join(dir, 'session-meta.json'), JSON.stringify({ 's-2': { archived: true } }))
+  utimesSync(join(dir, 'session-meta.json'), now / 1000, now / 1000)
+  const old = new SessionMetaStore(dir, () => now)
+  expect(old.apply([{ ...session('s-2'), lastActivityAt: now - 1000 }])[0]?.archived).toBe(true)
+  expect(old.apply([{ ...session('s-2'), lastActivityAt: now + 1000 }])[0]?.archived).toBe(false)
 })
 
 test('a mark older than the grace is dropped once an account shows the chat (moved there some other way)', () => {

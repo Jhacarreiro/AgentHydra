@@ -24,9 +24,7 @@ import {
   DEEP_CONTEXT_TOKENS,
   emptySinks,
   foldSinkLine,
-  mcpServerOfTool,
   type SinkScan,
-  type StoredSinks,
   storedSinks,
 } from './analytics-sinks'
 import { timeSlice, yieldToLoop } from './core/loop-yield'
@@ -39,19 +37,16 @@ import {
   measureEditSurvival,
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
-import { findDesktopChat, instanceSessionMap } from './instance-sessions'
+import { findDesktopChat } from './instance-sessions'
 import { sharedKitStore, type UsageRow, usageQueryAsync } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf } from './pricing'
+import { isAbsoluteCwd, type RepoRef, reposOf } from './project-repo'
 import { anyDiscount, atYourRate, type Discounts, readRoutingSettings } from './routing-cost'
+import { defaultCwdSources, learnedSessionCwds, learnSessionCwdsInBackground } from './session-cwds'
 import { streamLines } from './session-search'
-import {
-  decodeProjectKey,
-  ensureTranscriptIndex,
-  listTranscriptFiles,
-  type TranscriptFile,
-} from './transcript'
+import { decodeProjectKey, ensureTranscriptIndex, type TranscriptFile } from './transcript'
 import type {
   ActivityReport,
   AnalyticsCoverage,
@@ -63,8 +58,6 @@ import type {
   SpendReport,
   TokenBreakdown,
   TokenDaySource,
-  TokenSink,
-  TokenSinkReport,
   TokensByDay,
 } from './types'
 import {
@@ -77,14 +70,9 @@ import {
 import {
   accumulateUsageLine,
   emptySpend,
-  modelMultiplier,
   newUsageSeen,
   parseUsageLine,
   reweighModels,
-  W_CACHE_READ,
-  W_CACHE_WRITE_1H,
-  W_CACHE_WRITE_5M,
-  W_OUTPUT,
   weighCounts,
 } from './usage-tokens'
 
@@ -223,7 +211,7 @@ function emptyAnalytics(): SessionAnalytics {
 
 /** Local date key. Local, not UTC: a chart of "what did I spend on Tuesday" has to agree with the
  *  reader's own calendar, and the daemon runs on the reader's machine. */
-function dayKey(ms: number): string {
+export function dayKey(ms: number): string {
   const d = new Date(ms)
   const m = `${d.getMonth() + 1}`.padStart(2, '0')
   const day = `${d.getDate()}`.padStart(2, '0')
@@ -936,7 +924,7 @@ function dominantModel(tokens: Record<string, ModelSpend>): string | null {
 // why there is no separate staleness bookkeeping here: there is only one notion of "this row
 // describes this file as it is now", and it already existed.
 
-interface AnalyticsRow {
+export interface AnalyticsRow {
   cache_key: string
   session_id: string
   source: string
@@ -962,7 +950,7 @@ interface AnalyticsRow {
   sinks_json: string | null
 }
 
-const selectRows = db.query<AnalyticsRow, []>(
+export const selectRows = db.query<AnalyticsRow, []>(
   'select cache_key, session_id, source, project, cwd, analytics_at, analytics_version, ' +
     'tokens_json, days_json, hours_json, tools_json, tool_errors, tool_error_streak, ' +
     'edit_count, compactions, active_ms, first_ts, last_ts, provider_cost_usd, sinks_json, ' +
@@ -1302,7 +1290,7 @@ export function warmAnalyticsInBackground(budgetMs = 120_000): void {
 
 // --- aggregates --------------------------------------------------------------------------------
 
-function parseJson<T>(raw: string | null, fallback: T): T {
+export function parseJson<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback
   try {
     return JSON.parse(raw) as T
@@ -1312,7 +1300,7 @@ function parseJson<T>(raw: string | null, fallback: T): T {
 }
 
 /** Which account dispatched a given session, when we dispatched it at all. */
-function accountBySession(): Map<string, string> {
+export function accountBySession(): Map<string, string> {
   const out = new Map<string, string>()
   try {
     const rows = db
@@ -1343,7 +1331,7 @@ const NON_MODELS = new Set(['<synthetic>', 'unknown'])
  * zero-dollar row in a chart of models, where a reader has to work out that it is not one. The
  * stored row keeps it, because that is what the transcript said; only the report leaves it out.
  */
-function storedModelSpend(json: string | null): Record<string, ModelSpend> {
+export function storedModelSpend(json: string | null): Record<string, ModelSpend> {
   const out: Record<string, ModelSpend> = {}
   for (const [k, v] of Object.entries(
     reweighModels(parseJson<Record<string, ModelSpend>>(json, {})),
@@ -1360,21 +1348,23 @@ function storedModelSpend(json: string | null): Record<string, ModelSpend> {
  * folder. Grouping on the raw string put one project on the chart twice, which is exactly the kind
  * of mistake a chart makes look authoritative. Caught on real data, not in review.
  */
-function projectKeyOf(display: Map<string, string>, path: string): string {
+function projectKeyOf(display: Map<string, ProjectShown>, path: string, label?: string): string {
   const key = path.toLowerCase()
-  if (!display.has(key)) display.set(key, path)
+  if (!display.has(key)) display.set(key, label ? { key: path, label } : { key: path })
   return key
 }
+/** A project row's key as first spelt, and the name to show for a repository. */
+type ProjectShown = { key: string; label?: string }
 
 /** The four categories, zeroed. */
-function emptyTokens(): TokenBreakdown {
+export function emptyTokens(): TokenBreakdown {
   return { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0 }
 }
 
 /** Fold one model's counts into a running breakdown. The two cache-write TTL slots are summed:
  *  only Anthropic distinguishes them, and a reader asking "how much did I write to cache" wants
  *  one number. */
-function addTokens(into: TokenBreakdown, m: ModelSpend): void {
+export function addTokens(into: TokenBreakdown, m: ModelSpend): void {
   const write = m.cacheCreation5m + m.cacheCreation1h
   into.input += m.input
   into.cacheRead += m.cacheRead
@@ -1394,18 +1384,38 @@ const KIT_PROVIDER: Record<string, SessionSource> = {
   dsh: 'dsh',
   hermes: 'hermes',
   hswarm: 'zswarm',
+  // VS Code Copilot is one of the tools foreign-sessions.ts reads.
+  'vscode-copilot': 'foreign',
 }
 
-/** cwd (else the decoded store folder) of every session either stored table knows, by session id. */
-async function sessionProjects(): Promise<Map<string, string>> {
+/** cwd (else the decoded store folder) of every session either stored table knows, by session id, and
+ *  of the sessions session-cwds.ts learned from the sources' own files. `learnFrom` is the ledger whose
+ *  sessions a background pass may look up (the shared one; a test's own store reads only the tables). */
+async function sessionProjects(learnFrom: KitStore | null = null): Promise<Map<string, string>> {
   // Sessions change slowly and reading the scan cache costs ~100 us a row, so a minute's answer is kept.
-  if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) return projectsCache.map
+  if (projectsCache && projectsCache.at > Date.now() - PROJECTS_TTL_MS) {
+    if (learnFrom) learnBehind(learnFrom, projectsCache.map)
+    return projectsCache.map
+  }
   if (!projectsInflight) {
     projectsInflight = readSessionProjects().finally(() => {
       projectsInflight = null
     })
   }
-  return projectsInflight
+  const map = await projectsInflight
+  if (learnFrom) learnBehind(learnFrom, map)
+  return map
+}
+
+/** Look up the sessions `map` cannot place, without waiting: what a pass finds is in the next read. */
+function learnBehind(kit: KitStore, map: Map<string, string>): void {
+  learnSessionCwdsInBackground(
+    defaultCwdSources(kit),
+    () => new Set(map.keys()),
+    () => {
+      projectsCache = null
+    },
+  )
 }
 const PROJECTS_TTL_MS = 60_000
 let projectsCache: { at: number; map: Map<string, string> } | null = null
@@ -1429,7 +1439,9 @@ async function readSessionProjects(): Promise<Map<string, string>> {
         (rows) => {
           for (const r of rows) {
             const path = r.cwd || (r.project ? decodeProjectKey(r.project) : '')
-            if (r.session_id && path) out.set(r.session_id, path)
+            // A decoded store key with no real cwd ("codex" on every Codex session) places nothing:
+            // the session is looked up in its own files instead (session-cwds.ts).
+            if (r.session_id && isAbsoluteCwd(path)) out.set(r.session_id, path)
           }
         },
       )
@@ -1439,6 +1451,12 @@ async function readSessionProjects(): Promise<Map<string, string>> {
   }
   await read('session_stats', '1')
   await read('session_scan_cache', 'analytics_at is not null')
+  try {
+    for (const [session, cwd] of await learnedSessionCwds())
+      if (!out.has(session)) out.set(session, cwd)
+  } catch {
+    // a store from before session_cwd_seen: the tables alone place what they place
+  }
   projectsCache = { at: Date.now(), map: out }
   return out
 }
@@ -1566,7 +1584,8 @@ export async function spendReport(opts: SpendReportOptions = {}): Promise<SpendR
   // Too old to show while a rebuild runs: a card opened after a long pause waits once rather than draw old spend.
   if (kept.report && clock - kept.at >= SPEND_STALE_MAX_MS) kept.report = null
   const entry = kept
-  entry.rebuild ??= buildSpendReport({ ...opts, store })
+  // Only the daemon's own ledger looks up sessions in their files; a store passed in is a test's.
+  entry.rebuild ??= buildSpendReport({ ...opts, store }, opts.store ? null : store)
     .then((report) => {
       entry.report = report
       entry.at = clock
@@ -1643,7 +1662,9 @@ interface SpendTally {
   /** The session ledger's share of the totals. */
   attributed: SpendTotals
   projects: Map<string, string>
-  projectDisplay: Map<string, string>
+  /** The repository each project cwd is in (project-repo.ts); null for a folder in none. */
+  repos: Map<string, RepoRef | null>
+  projectDisplay: Map<string, ProjectShown>
 }
 
 function sumTokens(into: TokenBreakdown, t: TokenBreakdown): void {
@@ -1704,7 +1725,12 @@ function foldSessions(rows: UsageRow[], t: SpendTally): void {
       t.sessions.add(session)
     }
     const path = (session && t.projects.get(session)) || 'unknown'
-    t.byProject.add(projectKeyOf(t.projectDisplay, path), x.r, session)
+    // A cwd in a repository (a worktree or subfolder included) counts as that repository.
+    const repo = t.repos.get(path)
+    const key = repo
+      ? projectKeyOf(t.projectDisplay, repo.key, repo.label)
+      : projectKeyOf(t.projectDisplay, path)
+    t.byProject.add(key, x.r, session)
     addSpend(t.attributed, x.r)
   }
 }
@@ -1758,7 +1784,10 @@ function spendFilter(sources: readonly string[] | null, pc: SpendReportOptions['
     : undefined
 }
 
-async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> {
+async function buildSpendReport(
+  opts: SpendReportOptions,
+  learnFrom: KitStore | null = null,
+): Promise<SpendReport> {
   const sources = opts.sources ?? null
   const measures = [
     'tokens',
@@ -1795,7 +1824,8 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   const hourRes = hourly
     ? await usageQueryAsync({ window, filter, groupBy: ['hour'], measures: [...measures] }, qopts)
     : null
-  const projects = await sessionProjects()
+  const projects = await sessionProjects(learnFrom)
+  const repos = await reposOf(new Set(projects.values()))
   const t: SpendTally = {
     byModel: new BucketSet(),
     byProject: new BucketSet(),
@@ -1810,6 +1840,7 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     discounts: readRoutingSettings().discounts,
     attributed: { weighted: 0, cost: null, calls: 0, tokens: emptyTokens() },
     projects,
+    repos,
     projectDisplay: new Map(),
   }
   const { byModel, byProject, byDay, byAccount, bySource, byProvider, totals, discounts } = t
@@ -1853,11 +1884,15 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
       ...b,
       costAtRateUsd: b.costUsd === null ? null : atYourRate(b.key, b.costUsd, discounts),
     })),
-    // Re-labelled with the spelling the reader will recognise, now that grouping is done.
+    // Re-labelled with the spelling the reader will recognise, now that grouping is done. A repository
+    // is keyed `owner/name` (its root folder without a remote) and carries the name to show.
     byProject: byProject
       .list()
       .slice(0, 25)
-      .map((b) => ({ ...b, key: t.projectDisplay.get(b.key) ?? b.key })),
+      .map((b) => {
+        const shown = t.projectDisplay.get(b.key)
+        return { ...b, key: shown?.key ?? b.key, ...(shown?.label ? { label: shown.label } : {}) }
+      }),
     byDay: days,
     ...(byHour ? { byHour } : {}),
     byAccount: byAccount.list(),
@@ -2022,349 +2057,6 @@ export function activityReport(opts: { sinceMs?: number | null } = {}): Activity
       average: survivalSessions > 0 ? survivalSum / survivalSessions : null,
       overdue: survivalOverdue,
     },
-    coverage: analyticsCoverage(),
-  }
-}
-
-// --- token sinks -------------------------------------------------------------------------------
-// WHY: the spend report says how much and where; this says WHY a session was expensive. Five
-// lenses on the same weighted total, each tagged structural (configuration) or behavioral (how the
-// sessions were run), with the evidence basis and a one-line fix.
-// The idea (dead-skill load, deep-context turns, subagent pressure, cache efficiency) comes from
-// the learn report in JuliusBrussee/caveman; no code was copied, this is written fresh against
-// AgentHydra's own stored per-session totals.
-
-const SINK_FIXES: Record<TokenSink['id'], string> = {
-  'dead-skills':
-    'Uninstall the skills these sessions never invoke, or scope them to the projects that do: each one is re-read on every call.',
-  'dead-mcp':
-    'Disable MCP servers these sessions never call, or scope them per project: their instructions and tool names ride along on every call.',
-  'deep-context': `Compact or start a fresh session before the prompt passes ${DEEP_CONTEXT_TOKENS / 1000}k tokens: every call past it re-reads the whole history. Counted: only the part read past the line.`,
-  // The largest kind on the meter (31x a cache read per token; 43% of the weight on 2026-10-06)
-  // and in no other sink, so without it the list hid where most of the weight went.
-  output:
-    'Use a lower effort and a smaller model for routine work, and ask for short replies: reply and thinking tokens weigh the most per token of anything on the meter.',
-  subagents:
-    'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
-  // Every cache write, each session's first unavoidable one included, so this is an upper bound on
-  // what the fix can save, not the avoidable part alone.
-  'cache-writes':
-    'Keep gaps between turns inside the cache window and avoid editing instructions mid-session: each session pays one cache write it cannot avoid, and every rewrite after it is billed at a premium.',
-}
-
-const selectListing = db.query<{ entries_json: string }, [string]>(
-  'select entries_json from skill_listings where hash = ?',
-)
-
-interface LoadAcc {
-  loadTokens: number
-  sessionsLoaded: number
-  sessionsUsed: number
-  uses: number
-  deadTokens: number
-}
-
-function foldLoad(
-  into: Map<string, LoadAcc>,
-  key: string,
-  loadTokens: number,
-  uses: number,
-  calls: number,
-): void {
-  const r = into.get(key) ?? {
-    loadTokens: 0,
-    sessionsLoaded: 0,
-    sessionsUsed: 0,
-    uses: 0,
-    deadTokens: 0,
-  }
-  r.loadTokens = Math.max(r.loadTokens, loadTokens)
-  r.sessionsLoaded++
-  r.uses += uses
-  if (uses > 0) r.sessionsUsed++
-  else r.deadTokens += loadTokens * calls
-  into.set(key, r)
-}
-
-const rankLoad = (m: Map<string, LoadAcc>) =>
-  [...m.entries()]
-    .map(([key, r]) => ({ key, ...r, deadTokens: Math.round(r.deadTokens) }))
-    .sort((a, b) => b.deadTokens - a.deadTokens || b.loadTokens - a.loadTokens)
-    .slice(0, 30)
-
-/**
- * Where the window's tokens went, ranked.
- *
- * Windowed per session, on its last turn (like the activity report): a session counts whole when
- * it was active inside the window. The spend panel reads the toolkit per call instead, so the two
- * totals can differ at the window's edge. Dead load is an ESTIMATE: the injected text's length at
- * four characters a token, re-read on every call at the cache-read rate of the model that made the
- * call. The rest is measured off recorded usage.
- */
-export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkReport {
-  const since = opts.sinceMs ?? null
-  const listings = new Map<string, Record<string, number>>()
-  const listing = (hash: string): Record<string, number> => {
-    let entries = listings.get(hash)
-    if (!entries) {
-      entries = parseJson<Record<string, number>>(selectListing.get(hash)?.entries_json ?? null, {})
-      listings.set(hash, entries)
-    }
-    return entries
-  }
-  const accounts = accountBySession()
-  let instances = new Map<string, string>()
-  try {
-    instances = instanceSessionMap()
-  } catch {
-    // No desktop instances to attribute to: every session falls in the unlinked bucket.
-  }
-  const lookups: SinkLookups = { listing, accounts, instances }
-
-  const acc: SinkAcc = {
-    skills: new Map(),
-    servers: new Map(),
-    cache: new Map(),
-    sessions: 0,
-    calls: 0,
-    totalWeighted: 0,
-    deadSkills: 0,
-    deadMcp: 0,
-    cacheWrites: 0,
-    deepCalls: 0,
-    deepWeighted: 0,
-    deepExcess: 0,
-    output: 0,
-    subWeighted: 0,
-    spawns: 0,
-  }
-
-  for (const row of selectRows.all()) {
-    const windowed = sinkRowInWindow(row, since)
-    if (windowed) foldSinkRow(row, windowed.scale, windowed.tokens, acc, lookups)
-  }
-
-  return sinkReportOf(acc)
-}
-
-/** Every running total sinkReport builds across the window's sessions. */
-interface SinkAcc {
-  skills: Map<string, LoadAcc>
-  servers: Map<string, LoadAcc>
-  cache: Map<string | null, { sessions: number; cacheRead: number; prompt: number }>
-  sessions: number
-  calls: number
-  totalWeighted: number
-  deadSkills: number
-  deadMcp: number
-  cacheWrites: number
-  deepCalls: number
-  deepWeighted: number
-  deepExcess: number
-  output: number
-  subWeighted: number
-  spawns: number
-}
-
-/** What sinkReport looks a session up in: skill listings by hash, and its account. */
-interface SinkLookups {
-  listing: (hash: string) => Record<string, number>
-  accounts: Map<string, string>
-  instances: Map<string, string>
-}
-
-/** The share of the session's weighted tokens spent on days inside the window (null: no day data). */
-function sinkDayShare(daysJson: string | null, since: number | null): number | null {
-  if (since === null) return 1
-  const sinceDay = dayKey(since)
-  let total = 0
-  let inWindow = 0
-  for (const [day, weighted] of Object.entries(parseJson<Record<string, number>>(daysJson, {}))) {
-    total += weighted
-    if (day >= sinceDay) inWindow += weighted
-  }
-  return total > 0 ? inWindow / total : null
-}
-
-/** The row's in-window share with its per-model spend scaled to it, or null when the row is out of
- *  the window or has no sink data. A row without day data falls back to its last turn. */
-function sinkRowInWindow(
-  row: AnalyticsRow,
-  since: number | null,
-): { scale: number; tokens: Record<string, ModelSpend> } | null {
-  if (row.analytics_version !== ANALYTICS_VERSION || !row.sinks_json) return null
-  const share = sinkDayShare(row.days_json, since)
-  if (share === null) {
-    if (since !== null && (row.last_ts ?? 0) < since) return null
-  } else if (share <= 0) return null
-  const scale = share ?? 1
-  const stored = storedModelSpend(row.tokens_json)
-  if (Object.keys(stored).length === 0) return null
-  const tokens: Record<string, ModelSpend> = {}
-  for (const [model, m] of Object.entries(stored))
-    tokens[model] =
-      scale >= 1
-        ? m
-        : {
-            ...m,
-            weighted: m.weighted * scale,
-            output: m.output * scale,
-            turns: Math.round(m.turns * scale),
-            input: m.input * scale,
-            cacheRead: m.cacheRead * scale,
-            cacheCreation5m: m.cacheCreation5m * scale,
-            cacheCreation1h: m.cacheCreation1h * scale,
-          }
-  return { scale, tokens }
-}
-
-/** Fold one in-window session into every sink total. */
-function foldSinkRow(
-  row: AnalyticsRow,
-  scale: number,
-  tokens: Record<string, ModelSpend>,
-  acc: SinkAcc,
-  lookups: SinkLookups,
-): void {
-  const s = parseJson<Partial<StoredSinks>>(row.sinks_json, {})
-  acc.sessions++
-
-  const { sessionCalls, prefixRate, t } = foldSinkModels(tokens, acc)
-  acc.calls += sessionCalls
-
-  foldSkillSinks(s, lookups.listing, sessionCalls, prefixRate, acc)
-  const tools = parseJson<Record<string, number>>(row.tools_json, {})
-  foldMcpSinks(s, tools, sessionCalls, prefixRate, acc)
-
-  acc.deepCalls += (s.deepCalls ?? 0) * scale
-  acc.deepWeighted += (s.deepWeighted ?? 0) * scale
-  acc.deepExcess += (s.deepExcess ?? 0) * scale
-  acc.subWeighted += (s.subWeighted ?? 0) * scale
-  // Task is the older name of the Agent tool; both spawn a subagent.
-  acc.spawns += ((tools.Task ?? 0) + (tools.Agent ?? 0)) * scale
-
-  const account =
-    lookups.accounts.get(row.session_id) ?? lookups.instances.get(row.session_id) ?? null
-  const c = acc.cache.get(account) ?? { sessions: 0, cacheRead: 0, prompt: 0 }
-  c.sessions++
-  c.cacheRead += t.cacheRead
-  c.prompt += t.input + t.cacheRead + t.cacheWrite
-  acc.cache.set(account, c)
-}
-
-/**
- * A session's calls and prefix rate, and its token breakdown. Per model, because a prefix token
- * re-read by Opus costs more than one re-read by Sonnet (modelMultiplier).
- */
-function foldSinkModels(
-  tokens: Record<string, ModelSpend>,
-  acc: SinkAcc,
-): { sessionCalls: number; prefixRate: number; t: TokenBreakdown } {
-  let sessionCalls = 0
-  let prefixRate = 0 // weighted cost of carrying ONE prefix token through this session
-  const t = emptyTokens()
-  for (const [model, m] of Object.entries(tokens)) {
-    const mult = modelMultiplier(model)
-    sessionCalls += m.turns
-    prefixRate += m.turns * W_CACHE_READ * mult
-    acc.cacheWrites +=
-      (m.cacheCreation5m * W_CACHE_WRITE_5M + m.cacheCreation1h * W_CACHE_WRITE_1H) * mult
-    acc.output += m.output * W_OUTPUT * mult
-    acc.totalWeighted += m.weighted
-    addTokens(t, m)
-  }
-  return { sessionCalls, prefixRate, t }
-}
-
-/** Each skill the session's listings loaded, and the dead load of the ones it never used. */
-function foldSkillSinks(
-  s: Partial<StoredSinks>,
-  listing: (hash: string) => Record<string, number>,
-  sessionCalls: number,
-  prefixRate: number,
-  acc: SinkAcc,
-): void {
-  const loaded = new Map<string, number>()
-  for (const hash of s.listings ?? [])
-    for (const [name, n] of Object.entries(listing(hash)))
-      loaded.set(name, Math.max(loaded.get(name) ?? 0, n))
-  for (const [name, n] of loaded) {
-    const uses = s.skillUses?.[name] ?? 0
-    foldLoad(acc.skills, name, n, uses, sessionCalls)
-    if (uses === 0) acc.deadSkills += n * prefixRate
-  }
-}
-
-/** Each MCP server the session loaded, and the dead load of the ones it never called. */
-function foldMcpSinks(
-  s: Partial<StoredSinks>,
-  tools: Record<string, number>,
-  sessionCalls: number,
-  prefixRate: number,
-  acc: SinkAcc,
-): void {
-  const serverCalls = new Map<string, number>()
-  for (const [tool, n] of Object.entries(tools)) {
-    const server = mcpServerOfTool(tool)
-    if (server) serverCalls.set(server, (serverCalls.get(server) ?? 0) + n)
-  }
-  for (const [server, n] of Object.entries(s.mcpLoad ?? {})) {
-    const uses = serverCalls.get(server) ?? 0
-    foldLoad(acc.servers, server, n, uses, sessionCalls)
-    if (uses === 0) acc.deadMcp += n * prefixRate
-  }
-}
-
-function tokenSink(
-  id: TokenSink['id'],
-  kind: TokenSink['kind'],
-  basis: TokenSink['basis'],
-  weighted: number,
-  totalWeighted: number,
-): TokenSink {
-  return {
-    id,
-    kind,
-    basis,
-    weighted: Math.round(weighted),
-    share: totalWeighted > 0 ? weighted / totalWeighted : 0,
-    fix: SINK_FIXES[id],
-  }
-}
-
-/** The report the folded totals make, sinks ranked by weight. */
-function sinkReportOf(acc: SinkAcc): TokenSinkReport {
-  const total = acc.totalWeighted
-  return {
-    sessions: acc.sessions,
-    calls: Math.round(acc.calls),
-    totalWeighted: Math.round(total),
-    sinks: [
-      tokenSink('dead-skills', 'structural', 'estimated', acc.deadSkills, total),
-      tokenSink('dead-mcp', 'structural', 'estimated', acc.deadMcp, total),
-      tokenSink('deep-context', 'behavioral', 'measured', acc.deepExcess, total),
-      tokenSink('output', 'behavioral', 'measured', acc.output, total),
-      tokenSink('subagents', 'behavioral', 'measured', acc.subWeighted, total),
-      tokenSink('cache-writes', 'behavioral', 'measured', acc.cacheWrites, total),
-    ].sort((a, b) => b.weighted - a.weighted),
-    skills: rankLoad(acc.skills),
-    mcpServers: rankLoad(acc.servers),
-    deepContext: {
-      threshold: DEEP_CONTEXT_TOKENS,
-      calls: Math.round(acc.deepCalls),
-      weighted: Math.round(acc.deepWeighted),
-      excess: Math.round(acc.deepExcess),
-    },
-    subagents: { weighted: Math.round(acc.subWeighted), spawns: Math.round(acc.spawns) },
-    cacheByAccount: [...acc.cache.entries()]
-      .map(([key, c]) => ({
-        key,
-        sessions: c.sessions,
-        cacheRead: Math.round(c.cacheRead),
-        prompt: Math.round(c.prompt),
-        ratio: c.prompt > 0 ? c.cacheRead / c.prompt : 0,
-      }))
-      .sort((a, b) => b.prompt - a.prompt),
     coverage: analyticsCoverage(),
   }
 }

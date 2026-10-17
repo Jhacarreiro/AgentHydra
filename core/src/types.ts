@@ -41,6 +41,8 @@ export interface Task {
   thread?: ServiceThread
   permissionMode: string
   model: string | null
+  /** How hard the model thinks (Desk's Effort); none named leaves it to the service. */
+  effort?: string | null
 }
 
 /** What a turn says while it runs. */
@@ -60,7 +62,7 @@ export interface TurnEnd {
   durationMs?: number
   /** The account ran into a usage limit: held until then (epoch ms), and the message goes on another account. */
   limitedUntil?: number
-  /** The provider is throttling this account for now (a 429): this message goes on another account, and the account is
+  /** The provider is throttling this account at the moment (a 429): this message goes on another account, and the account is
    *  not held, since a hold on every throttled login left none to pick (2026-10-14, probe round 4). */
   throttled?: boolean
 }
@@ -81,7 +83,10 @@ export interface Backend {
 /** Every account, who has room for a service, and the one a thread lives on. */
 export interface Accounts {
   pick(service: Service, avoid: ReadonlySet<string>): Promise<Account | { why: string }>
+  /** A signed-in account by id, someone else on it or not: a thread or the owner's pin goes where it is. */
   find(service: Service, id: string): Promise<Account | null>
+  /** Until when (epoch ms) the account is held after a limit; 0 when it is not. */
+  heldUntil(id: string): number
   /** The account ran into a limit: no picks until `until` (epoch ms). */
   hold(id: string, until: number): void
   /** Every account of every service as it reads now (the usage tool). */

@@ -1,5 +1,5 @@
 // What Hydra Desk 2 and its copy of AgentHydra's window (hydra/, in a frame at /ah/?embed=desk) say to each
-// other, as postMessage on the one origin. Desk owns the sidebar (Michael, 2026-10-04: "the left sidebar
+// other, as postMessage on the one origin. Desk owns the sidebar (the other owner, 2026-10-04: "the left sidebar
 // needs to essentially be the sidebar that exists for everything ... we only have two things, the sidebar
 // and the content"): a tab of the copy that had a sidebar of its own (HSwarm's tree, CliMayte and Routing
 // among its nodes) describes it as a SidebarModel instead, Desk draws it in its own sidebar in its own
@@ -33,8 +33,13 @@ export type EmbedIcon =
   | 'circle-check'
   | 'circle-x'
   | 'ban'
+  | 'pause'
+  | 'play'
+  | 'wrench'
 
-export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'danger' | 'accent'
+// 'warning' is yellow, only for what waits on the owner; 'limited' is a usage limit that resets by itself, drawn in
+// Desk's --status-limited pink (owner, 2026-10-17).
+export type EmbedTone = 'muted' | 'info' | 'success' | 'warning' | 'limited' | 'danger' | 'accent'
 
 export interface SidebarRow {
   /** Unique in the model; what a click sends back. */
@@ -93,8 +98,9 @@ export interface SidebarModel {
   search?: { value: string; placeholder: string; label: string }
   legend?: { dot: EmbedTone | 'hollow'; label: string }[]
   legendNote?: string
-  /** Groups of rows; a group's label is a small header over them. */
-  sections: { key: string; label?: string; hint?: string; rows: SidebarRow[] }[]
+  /** Groups of rows; a group's label is a small header over them, and its count (default: its rows) is
+   *  shown beside the label. */
+  sections: { key: string; label?: string; count?: number; hint?: string; rows: SidebarRow[] }[]
   selected?: string | null
   /** Said where the rows would be when there are none. */
   empty?: string
@@ -102,8 +108,9 @@ export interface SidebarModel {
   footer?: SidebarButton[]
 }
 
-/** The Settings pages the copy opens Desk's Settings on: Updates, Managers (the HSwarm Managers node's pages), and each Instances table's page. */
-export const AH_SETTINGS_PAGES = ['updates', 'managers', 'cli', 'desktop', 'free'] as const
+/** The Settings pages the copy opens Desk's Settings on: Updates, and each Instances table's page. The Tools tab's manager
+ *  switches are on the tab itself now (owner, 2026-10-17), so there is no Managers page to open. */
+export const AH_SETTINGS_PAGES = ['updates', 'cli', 'desktop', 'free'] as const
 export type AhSettingsPage = (typeof AH_SETTINGS_PAGES)[number]
 
 /** The copy to Desk. */
@@ -136,6 +143,9 @@ export type DeskMessage =
   | { type: 'desk:open-worker'; id: string; pc?: string }
   /** Open the HSwarm tab, on that job of its Jobs node when one is named. */
   | { type: 'desk:open-hswarm'; job?: string }
+  /** Open the Tools tab on one of its sidebar keys: overview, m:babysitter, m:orchestrator, m:instances, m:routines,
+   *  r:<routine id>, p:<proposal id>; the overview when none (Desk's routine views and Open in Tools). */
+  | { type: 'desk:open-tools'; key?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
    *  polls rest until it slides back in; the frame stays loaded either way. Desk says it when the frame
    *  is ready and each time the pane slides in or out; on true the copy sends its current sidebar again. */

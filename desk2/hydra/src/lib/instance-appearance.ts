@@ -178,42 +178,6 @@ export function accountDisplayName(account: CMAccount | null | undefined): strin
   return accountHandle(account) ?? account?.name?.trim() ?? null
 }
 
-/**
- * The instance row a SESSION belongs to, from the instance LABEL the session carries.
- *
- * `SessionSummary.instance` is what server/src/instance-sessions.ts stamped on the chat: the dir
- * NAME of an isolated instance, or the literal `'default'` for the regular non-isolated Claude
- * Desktop. Those are two different kinds of name. A dir name matches `CMInstance.name`; `'default'`
- * normally cannot, because the regular install's row is named after its folder ("Claude" on
- * Windows) — so it is matched on `isDefault`, which the server sets from the same dir comparison
- * it uses to refuse quitting and deleting that profile.
- *
- * ⛔ THE TWO KINDS CAN COLLIDE, and that is why this returns AT MOST ONE match rather than the
- * first. Creating an instance folder literally called "default" is refused now
- * (server/src/core/lifecycle.ts RESERVED_INSTANCE_LABELS), but that guard only covers NEW folders —
- * one made before it existed, or dropped in by hand, is still there. scanAll then stamps ITS chats
- * with the same string the regular install's chats carry. When both exist the server itself cannot
- * say which store a given chat came from, so neither can this: two candidates means the answer is
- * unknown, and unknown is returned as null.
- *
- * Null is also the answer for an unknown label, an instance folder deleted since the chat ran, the
- * regular install simply not running (its row exists only while a process for it does), and two
- * rows sharing a folder name. A caller must treat null as "no account known", NEVER as a reason to
- * fall back to another row — one account's address against another account's chat is the exact
- * failure `loginChanged` exists to prevent, and it is worse than saying nothing.
- */
-export function instanceForSessionLabel<T extends Pick<CMInstance, 'name' | 'isDefault'>>(
-  instances: readonly T[],
-  label: string | null | undefined,
-): T | null {
-  if (!label) return null
-  // A row qualifies by NAME always, and additionally by `isDefault` for the 'default' sentinel —
-  // so an isolated folder actually named "default" is a candidate alongside the regular install
-  // rather than being silently outranked by it.
-  const matches = instances.filter((i) => i.name === label || (label === 'default' && i.isDefault))
-  return matches.length === 1 ? (matches[0] ?? null) : null
-}
-
 /** The name to show for an instance: the user's own label, else the ACCOUNT it is signed into
  *  (its Anthropic profile NAME — "kestrel" — falling back to the email handle when the account has
  *  no name, see accountName), else the folder name.
@@ -287,18 +251,6 @@ export function shortDisplayName(name: string, max: number = NAME_DISPLAY_MAX): 
   if (max < 1) return '…'
   const kept = chars.slice(0, max - 1).join('')
   return `${kept.trimEnd()}…`
-}
-
-/** Native `title` for a name cell that has no rich tooltip to hang the full name on — the CLI and
- *  Codex tables. Undefined when nothing was cut, so a cell showing the whole name does not sprout a
- *  hover box repeating itself. The desktop table uses IconTooltip instead (it already has a hover
- *  carrying the profile folder), which is why this returns a string rather than rendering. */
-export function nameOverflowTitle(
-  name: string,
-  max: number = NAME_DISPLAY_MAX,
-): string | undefined {
-  const trimmed = name.trim()
-  return shortDisplayName(trimmed, max) === trimmed ? undefined : trimmed
 }
 
 /**

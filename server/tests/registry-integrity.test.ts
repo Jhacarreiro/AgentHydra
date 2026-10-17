@@ -120,7 +120,7 @@ describe('AH-01: a registry that cannot be read is never overwritten', () => {
     expect(created.ok).toBe(true)
     const id = created.data?.id as string
     expect(getCliInstance(id)?.name).toBe('from-nothing')
-    expect(deleteCliInstance(id, 'from-nothing').ok).toBe(true)
+    expect(deleteCliInstance(id, 'Created by mistake in a test').ok).toBe(true)
   })
 
   test('reconciliation reports a directory no record claims', () => {
@@ -149,7 +149,7 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
     const id = created.data?.id as string
     const configDir = created.data?.configDir as string
     try {
-      const failed = deleteCliInstance(id, name, {
+      const failed = deleteCliInstance(id, 'Registry integrity test', {
         removeDir: () => {
           throw new Error('EBUSY: resource busy or locked (injected)')
         },
@@ -162,12 +162,12 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
       expect(existsSync(configDir)).toBe(true)
 
       // A remove that throws nothing but leaves the dir is caught by the absence check.
-      const silent = deleteCliInstance(id, name, { removeDir: () => {} })
+      const silent = deleteCliInstance(id, 'Registry integrity test', { removeDir: () => {} })
       expect(silent.ok).toBe(false)
       expect(silent.message).toContain('still exists')
       expect(getCliInstance(id)).not.toBeNull()
     } finally {
-      const real = deleteCliInstance(id, name)
+      const real = deleteCliInstance(id, 'Registry integrity test')
       expect(real.ok).toBe(true)
       expect(getCliInstance(id)).toBeNull()
       expect(existsSync(configDir)).toBe(false)
@@ -181,7 +181,7 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
     const id = created.data?.id as string
     const codexHome = created.data?.codexHome as string
     try {
-      const failed = await deleteCodexInstance(id, name, {
+      const failed = await deleteCodexInstance(id, 'Registry integrity test', {
         ...NO_PROCESSES,
         removeDir: () => {
           throw new Error('EPERM: operation not permitted (injected)')
@@ -193,12 +193,15 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
       expect(getCodexInstance(id)).not.toBeNull()
       expect(existsSync(codexHome)).toBe(true)
 
-      const silent = await deleteCodexInstance(id, name, { ...NO_PROCESSES, removeDir: () => {} })
+      const silent = await deleteCodexInstance(id, 'Registry integrity test', {
+        ...NO_PROCESSES,
+        removeDir: () => {},
+      })
       expect(silent.ok).toBe(false)
       expect(silent.message).toContain('still exists')
       expect(getCodexInstance(id)).not.toBeNull()
     } finally {
-      const real = await deleteCodexInstance(id, name, NO_PROCESSES)
+      const real = await deleteCodexInstance(id, 'Registry integrity test', NO_PROCESSES)
       expect(real.ok).toBe(true)
       expect(getCodexInstance(id)).toBeNull()
       expect(existsSync(codexHome)).toBe(false)
@@ -217,10 +220,12 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
     writeFileSync(join(codexHome, 'auth.json'), '{}')
     writeFileSync(join(codexHome, '.codex-provisioning-30aa2a3ad5e8ebfa.guard'), '')
     try {
-      const result = await deleteCodexInstance(id, name, {
+      const result = await deleteCodexInstance(id, 'Registry integrity test', {
         ...NO_PROCESSES,
         removeDir: (dir) => {
-          rmSync(join(dir, 'auth.json'), { force: true })
+          for (const entry of readdirSync(dir))
+            if (!entry.endsWith('.guard'))
+              rmSync(join(dir, entry), { recursive: true, force: true })
           throw new Error('EBUSY: resource busy or locked (injected)')
         },
       })

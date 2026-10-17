@@ -18,8 +18,21 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
-import { CHAT_NOTE, cliArgv, writeWorkerMcp, writeWorkerSettings } from '../src/climayte-launch'
-import { type CliMayteAccount, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
+import { SEAT_ETA_INSTRUCTION } from '../src/climayte-eta'
+import {
+  CHAT_NOTE,
+  cliArgv,
+  workerEnv,
+  writeWorkerMcp,
+  writeWorkerSettings,
+} from '../src/climayte-launch'
+import {
+  type CliMayteAccount,
+  type CliMayteWorker,
+  DRONE_BRIEF,
+  LIGHT_BRIEF,
+  WORKER_BRIEF,
+} from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -67,6 +80,20 @@ const valueAfter = (argv: string[], flag: string): string | undefined =>
   argv[argv.indexOf(flag) + 1]
 
 describe('chat workers', () => {
+  test('every worker launches with its role, so the Hydra Core hook can skip seats and drones', () => {
+    const chat = dispatch({ title: 'a chat', chat: true })
+    const prime = workerEnv(chat, 'C:/Users/me/.claude')
+    expect(prime.AGENTHYDRA_ROLE).toBe('prime')
+    expect(prime.AGENTHYDRA_CLIMAYTE_CHAT).toBe('1')
+    expect(
+      workerEnv({ ...chat, role: 'seat', persona: 'person:example' }, 'C:/Users/me/.claude')
+        .AGENTHYDRA_ROLE,
+    ).toBe('seat')
+    expect(workerEnv(dispatch({ title: 'a drone' }), 'C:/Users/me/.claude').AGENTHYDRA_ROLE).toBe(
+      'drone',
+    )
+  })
+
   test('a chat gets no worker brief, the owner instructions and skills, and Opus xhigh', () => {
     const w = dispatch({ title: 'a chat', chat: true })
     expect(w).toMatchObject({ chat: true, effort: 'xhigh' })
@@ -82,6 +109,22 @@ describe('chat workers', () => {
     expect(prompt.startsWith(CHAT_NOTE)).toBe(true)
     expect(prompt).toContain(OWNER_RULES)
     expect(prompt).not.toContain('a CliMayte worker')
+  })
+
+  test("a Hydra Core seat's prompt asks for an ETA line each message; a Prime's and a manager chat's do not", () => {
+    const prime = dispatch({ title: 'a prime chat', chat: true })
+    const promptOf = (w: CliMayteWorker) =>
+      readFileSync(
+        valueAfter(cliArgv(w, 'sid', false, 'hooks.json', null), '--append-system-prompt-file') ??
+          '',
+        'utf8',
+      )
+    expect(promptOf(prime)).not.toContain(SEAT_ETA_INSTRUCTION)
+    expect(promptOf({ ...prime, role: 'seat', persona: 'person:example' })).toContain(
+      SEAT_ETA_INSTRUCTION,
+    )
+    // A Desk chat pinned to a manager is a seat by roleOf, but no Prime shows its estimate: no persona, no line.
+    expect(promptOf({ ...prime, role: 'seat' })).not.toContain(SEAT_ETA_INSTRUCTION)
   })
 
   test("a Desk chat's add-ons: its servers (the owner's of a name win) and its append, once", () => {
@@ -192,7 +235,7 @@ describe('chat workers', () => {
       '--settings',
       'hooks.json',
       '--append-system-prompt',
-      WORKER_BRIEF,
+      `${WORKER_BRIEF} ${DRONE_BRIEF}`,
     ])
   })
 
@@ -220,32 +263,19 @@ describe('chat workers', () => {
     rmSync(join(HOME, '.claude.json'))
   })
 
-  // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
-  // account folder has settings of its own, and the launch carried only the guards.
-  test("a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
-    // As managers/install.mjs writes it on Windows.
+  // The owner's Manager Hydra router comes from the people add-on only: without it no chat carries a router hook.
+  test('without the people add-on a chat carries no Manager Hydra router hook', () => {
     const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
     writeFileSync(
       join(OWNER, 'settings.json'),
-      JSON.stringify({
-        hooks: {
-          UserPromptSubmit: [
-            { hooks: [{ type: 'command', command: 'python other_hook.py' }] },
-            { hooks: [router] },
-          ],
-        },
-      }),
+      JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [router] }] } }),
     )
     const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
     const prompts = (file: string) =>
       JSON.parse(readFileSync(file, 'utf8')).hooks.UserPromptSubmit as unknown
-    const chat = dispatch({ title: 'a routed chat', chat: true })
-    expect(prompts(writeWorkerSettings(chat, acct))).toEqual([{ hooks: [router] }])
-    const worker = dispatch({ title: 'a task' })
-    expect(prompts(writeWorkerSettings(worker, acct))).toBeUndefined()
+    const chat = dispatch({ title: 'a chat', chat: true })
+    expect(prompts(writeWorkerSettings(chat, acct))).toBeUndefined()
     rmSync(join(OWNER, 'settings.json'))
-    const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
-    expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
   })
 
   // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a

@@ -225,7 +225,6 @@ export const getRecentEdits = (limit = 200) =>
 /** Recurring command mistakes, mined from transcripts on demand. Slower than the totals above
  *  (it opens transcripts), so the view asks for it on a click rather than on every visit. */
 export const getCommandCorrections = () => j<CorrectionReport>('/api/analytics/corrections')
-export const getAnalyticsStatus = () => j<AnalyticsCoverage>('/api/analytics')
 /** Which coding agents are installed here — including ones whose conversations we cannot read yet.
  *  Listing those is the point: silence would read as "AgentHydra looked and found nothing". */
 export const getAgentTools = () => j<{ tools: AgentPresence[] }>('/api/agent-tools')
@@ -236,8 +235,6 @@ export const refreshAnalytics = () =>
       method: 'POST',
     },
   )
-export const deleteAnalytics = () =>
-  j<AnalyticsCoverage & { ok: boolean }>('/api/analytics', { method: 'DELETE' })
 /** What one queued run cost. Computed on demand, never stored — see server/src/session-usage.ts. */
 export const getRunCost = (id: string) => j<RunCost>(`/api/queue/${encodeURIComponent(id)}/cost`)
 
@@ -269,8 +266,6 @@ export const getSessions = (
       `${othersPass ? '&othersPass=1' : ''}` +
       `${title ? `&title=${encodeURIComponent(title)}` : ''}`,
   )
-/** Every folder with conversations in it, for a "where has work happened" overview. */
-export const getSessionProjects = () => j<ProjectSummary[]>('/api/sessions/projects')
 /**
  * ONE desktop instance's chats, read straight from that account's own chat store.
  *
@@ -289,8 +284,6 @@ export const getInstanceChats = (ref: string, archived: ArchivedScope = 'hide', 
   )
 export const getSession = (id: string, source: SessionSource, locator?: string) =>
   j<SessionSummary>(`/api/sessions/${encodeURIComponent(id)}${sourceQuery(source, locator)}`)
-/** Set the user's own "done" mark on a session (distinct from Claude Desktop's read-only
- *  `archived` flag). Mark only: never affects which sessions getSessions() returns. */
 // `locator` (audit AH-35), alongside `source`: two products sharing a format (Kilo/MiMo Code,
 // both `opencode`; two Hermes profiles) can hold the same session id, and `source` alone cannot
 // tell the server which one a caller means. Every function below takes it optionally — a row
@@ -299,54 +292,11 @@ export const getSession = (id: string, source: SessionSource, locator?: string) 
 const sourceQuery = (source: SessionSource, locator?: string) =>
   `?source=${source}${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`
 
-export const setSessionDone = (
-  id: string,
-  source: SessionSource,
-  done: boolean,
-  locator?: string,
-) =>
-  j<{ session_id: string; source: SessionSource; done: boolean }>(
-    `/api/sessions/${encodeURIComponent(id)}/done${sourceQuery(source, locator)}`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ done }),
-    },
-  )
 /** Browser download URL for the raw transcript (save-as copy). API_BASE prefix: this
  *  URL lands in a plain <a href>, which unlike j() would otherwise resolve against the
  *  Vite dev origin instead of the daemon. */
 export const sessionFileUrl = (id: string, source: SessionSource, locator?: string) =>
   `${API_BASE}/api/sessions/${encodeURIComponent(id)}/file${sourceQuery(source, locator)}`
-/** Get the original transcript's absolute path on the daemon's machine. */
-export const getSessionFileLocation = (id: string, source: SessionSource, locator?: string) =>
-  j<{ path: string }>(
-    `/api/sessions/${encodeURIComponent(id)}/file-location${sourceQuery(source, locator)}`,
-  )
-/** Open the transcript on the daemon's machine with the OS default handler. */
-export const openSessionFile = (id: string, source: SessionSource, locator?: string) =>
-  j<{ ok: boolean }>(
-    `/api/sessions/${encodeURIComponent(id)}/open-file${sourceQuery(source, locator)}`,
-    { method: 'POST' },
-  )
-/** Put the transcript FILE (not its text) on the clipboard of the daemon's machine, named after the
- *  session. The browser cannot do this — no ClipboardItem type maps to a native file-drop — so it's
- *  a daemon round-trip. `reason: 'unsupported'` comes back on Linux, which has no such convention. */
-export const copySessionFile = (id: string, source: SessionSource, locator?: string) =>
-  j<{ ok: boolean; filename?: string; reason?: string }>(
-    `/api/sessions/${encodeURIComponent(id)}/copy-file${sourceQuery(source, locator)}`,
-    { method: 'POST' },
-  )
-/** Download URL for a readable export. A plain <a href> like sessionFileUrl above, so it carries
- *  the API_BASE prefix; the daemon sets the filename via content-disposition. */
-export const sessionExportUrl = (
-  id: string,
-  source: SessionSource,
-  format: 'markdown' | 'html',
-  thinking = false,
-  locator?: string,
-) =>
-  `${API_BASE}/api/sessions/${encodeURIComponent(id)}/export?source=${source}&format=${format}` +
-  `${thinking ? '&thinking=1' : ''}${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`
 /** Open a terminal sitting in this session (`claude --resume <id>`). Always returns the command
  *  line, working launch or not, so the copy fallback is never unavailable. */
 export const resumeSessionInTerminal = (id: string, source: SessionSource, locator?: string) =>
@@ -359,43 +309,6 @@ export const branchSession = (id: string, uuid: string, title: string, locator?:
   j<{ session_id: string; source: 'claude' }>(
     `/api/sessions/${encodeURIComponent(id)}/branch${locator ? `?locator=${encodeURIComponent(locator)}` : ''}`,
     { method: 'POST', body: JSON.stringify({ uuid, title }) },
-  )
-/** What credentials this session printed, as a count and a REDACTED list. There is no reveal
- *  parameter on the daemon and there should not be one — see server/src/session-export.ts. */
-export const getSessionSecrets = (id: string, source: SessionSource, locator?: string) =>
-  j<SessionSecretScan>(
-    `/api/sessions/${encodeURIComponent(id)}/secrets${sourceQuery(source, locator)}`,
-  )
-/** Token totals and a dollar cost for one session, computed on demand from its transcript.
- *  Never throws for an unsupported provider — the result carries a `status` saying why it is
- *  empty, which the UI shows instead of an unexplained zero. */
-export const getSessionUsage = (id: string, source: SessionSource, locator?: string) =>
-  j<SessionUsage>(`/api/sessions/${encodeURIComponent(id)}/usage${sourceQuery(source, locator)}`)
-export const getTail = (
-  id: string,
-  source: SessionSource,
-  opts: { limit?: number; textOnly?: boolean; thinking?: boolean; humanOnly?: boolean } = {},
-  locator?: string,
-) => {
-  const flag = (on: boolean | undefined) => (on ? '1' : '0')
-  return j<TailResult>(
-    `/api/sessions/${id}/tail?limit=${opts.limit ?? 40}&textOnly=${flag(opts.textOnly)}` +
-      `&thinking=${flag(opts.thinking)}&humanOnly=${flag(opts.humanOnly)}&source=${source}` +
-      `${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`,
-  )
-}
-/** A subagent's own run, by the id of the Agent call that started it (Claude only). The whole run
- *  up to the route's 200-message ceiling: a nested view has no "load older". */
-export const getSubagentTail = (
-  id: string,
-  toolUseId: string,
-  opts: { thinking?: boolean } = {},
-  locator?: string,
-) =>
-  j<TailResult>(
-    `/api/sessions/${encodeURIComponent(id)}/subagents/${encodeURIComponent(toolUseId)}/tail` +
-      `?limit=200&thinking=${opts.thinking ? '1' : '0'}` +
-      `${locator ? `&locator=${encodeURIComponent(locator)}` : ''}`,
   )
 /** Advanced BODY search: streams every transcript's raw content server-side (substring or
  *  regex, optionally case-sensitive). Deliberately separate from getSessions() above (slower,
@@ -433,19 +346,8 @@ const queryPairs = (q: Record<string, string | undefined>) =>
     .map(([k, v]) => `&${k}=${encodeURIComponent(v as string)}`)
     .join('')
 
-// --- search index -----------------------------------------------------------
-/** The conversation index behind the fast search path. It stores no text of its own and rebuilds
- *  itself from the transcripts, so deleting it loses nothing but the time to build it again. */
-export const getSearchIndex = () => j<SearchIndexStatus>('/api/search-index')
-export const deleteSearchIndex = () =>
-  j<SearchIndexStatus & { ok: boolean }>('/api/search-index', { method: 'DELETE' })
-
 // --- accounts ---------------------------------------------------------------
 export const getAccounts = () => j<Account[]>('/api/accounts')
-export const createAccount = (b: { label: string; auth_type: AuthType; secret: string }) =>
-  j<Account>('/api/accounts', { method: 'POST', body: JSON.stringify(b) })
-export const deleteAccount = (id: string) =>
-  j<{ ok: boolean }>(`/api/accounts/${id}`, { method: 'DELETE' })
 
 // --- queue ------------------------------------------------------------------
 /** `instance_ref` value meaning "deliberately unpinned — run on the ambient CLI login", as opposed
@@ -479,9 +381,6 @@ export const deleteQueueItem = (id: string) =>
   j<{ ok: boolean }>(`/api/queue/${id}`, { method: 'DELETE' })
 export const runQueueItem = (id: string) =>
   j<{ ok: boolean }>(`/api/queue/${id}/run`, { method: 'POST' })
-/** Dispatch every due queued item now (ignores scheduler limits, honors the session lock). */
-export const runDueQueueItems = () =>
-  j<{ ok: boolean; started: number; skipped: number }>('/api/queue/run-due', { method: 'POST' })
 export const cancelQueueItem = (id: string) =>
   j<{ ok: boolean }>(`/api/queue/${id}/cancel`, { method: 'POST' })
 export const getRunEvents = (id: string) => j<RunEvent[]>(`/api/queue/${id}/events`)
@@ -498,7 +397,8 @@ export const streamUrl = (id: string) => `${API_BASE}/api/queue/${id}/stream`
 export const sendSessionMessage = async (id: string, text: string): Promise<{ detail: string }> => {
   const r = await j<{ ok: boolean; detail?: string; error?: string }>(
     `/api/sessions/${encodeURIComponent(id)}/message`,
-    { method: 'POST', body: JSON.stringify({ text }) },
+    // A person's own words: the one caller the route lets type into the app's window (session-message.ts).
+    { method: 'POST', body: JSON.stringify({ text, allow_typing: true }) },
   )
   if (!r.ok) throw new Error(r.error || r.detail || 'Failed to deliver the message.')
   return { detail: r.detail ?? '' }
@@ -535,7 +435,11 @@ export const updateScheduler = (b: Partial<SchedulerState>) =>
 // dispatch). See server/src/core/shared.ts for the DTO shapes.
 export const listInstances = () => j<CMInstance[]>('/api/instances')
 /** Each profile's signed-in login off disk, without the list's process scan: cheap enough to ask every few seconds. */
-export const listInstanceLogins = () => j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
+export const listInstanceLogins = () =>
+  j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
+/** Which of these app pids still run, by a signal-0 probe and no process scan; a gone one makes the next list scan fresh. */
+export const instancesAlive = (pids: number[]) =>
+  j<{ alive: Record<string, boolean> }>(`/api/instances/alive?pids=${pids.join(',')}`)
 export interface ClaudeNativeProfileConfig {
   port: number
   mode: 'native-only' | 'prefer-native'
@@ -562,7 +466,10 @@ export const getInstanceLoginHistory = (dir: string) =>
 /** The person's own Open: `raise` brings the new window in front of AgentHydra's (the daemon launches it from the
  *  background, so Windows would leave it behind; owner 2026-10-09: Open "just sitting there"). */
 export const openInstance = (dir: string) =>
-  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, { method: 'POST', body: JSON.stringify({ raise: true }) })
+  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, {
+    method: 'POST',
+    body: JSON.stringify({ raise: true }),
+  })
 /** `confirmExternal` is the explicit opt-in required to quit the DEFAULT (non-isolated) Claude
  *  Desktop — the server refuses that dir without it (see core/instances.ts quitInstance guard). */
 export const quitInstance = (dir: string, opts: { confirmExternal?: boolean } = {}) =>
@@ -586,10 +493,10 @@ export const createInstanceShortcut = (dir: string) =>
 /** Add the lightweight Instances chooser to the user's Desktop. */
 export const createInstanceModeShortcut = () =>
   j<CMActionResult>('/api/instance-mode/shortcut', { method: 'POST' })
-export const deleteInstance = (dir: string, confirmName: string) =>
+export const deleteInstance = (dir: string, note: string) =>
   j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Update an instance's UI metadata: display label (a pure relabel — never touches the folder,
  *  so it works while the instance runs), icon glyph, and icon color. A field present in the
@@ -607,8 +514,9 @@ export const setInstanceMeta = (
     method: 'POST',
     body: JSON.stringify(patch),
   })
-export const createInstance = (name: string) =>
-  j<CMActionResult>('/api/instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** A new Desktop instance; the daemon names its folder (nobody is asked for a name). */
+export const createInstance = () =>
+  j<CMActionResult>('/api/instances', { method: 'POST', body: '{}' })
 export const getDesktopInstall = (opts: { fresh?: boolean } = {}) =>
   j<CMDesktopInstall>(`/api/desktop-install${opts.fresh ? '?fresh=1' : ''}`)
 
@@ -711,20 +619,6 @@ export interface AutoUpdateSettings {
   enabled: boolean
   intervalSecs: number
 }
-export const getAutoUpdateSettings = () => j<AutoUpdateSettings>('/api/update/settings')
-export const updateAutoUpdateSettings = (b: Partial<AutoUpdateSettings>) =>
-  j<AutoUpdateSettings>('/api/update/settings', { method: 'POST', body: JSON.stringify(b) })
-
-// --- app shutdown -------------------------------------------------------------
-/** Full app shutdown from the UI. The daemon drops the tray's shutdown sentinel and exits, so the
- *  tray tears the WHOLE app down (window + daemon + tray icon) rather than reviving the daemon.
- *  Same-origin and token-free by design: the `-shutdown-source: ui` header (no tray token) is what
- *  the daemon treats as a user "Shut down" (see server/src/index.ts /api/shutdown). */
-export const shutdownApp = () =>
-  j<{ ok: boolean }>('/api/shutdown', {
-    method: 'POST',
-    headers: { 'x-agenthydra-shutdown-source': 'ui' },
-  })
 
 // --- app settings (hide tray icon, usage auto-refresh + section visibility) -------
 /** Everything /api/settings returns: tray, usage, provider, editor, and notification settings. */
@@ -772,8 +666,6 @@ export interface SyncErrorResult {
 }
 export type SyncResult = SyncStatus | SyncErrorResult
 
-/** Read the current sync status (enabled/connected/email/appearance/etc). */
-export const getSyncStatus = () => j<SyncStatus>('/api/settings/sync')
 /**
  * Turn sync on/off, disconnect, or push an updated appearance blob.
  * `{ enabled: true, appearance }` seeds/pulls; `{ enabled: false }` turns off (keeps the
@@ -784,10 +676,6 @@ export const setSync = (b: {
   forget?: boolean
   appearance?: Record<string, unknown>
 }) => j<SyncResult>('/api/settings/sync', { method: 'PUT', body: JSON.stringify(b) })
-/** Force a pull of the remote synced settings now. */
-export const syncPull = () => j<SyncResult>('/api/settings/sync/pull', { method: 'POST' })
-/** Force a push of the current local settings now. */
-export const syncPush = () => j<SyncResult>('/api/settings/sync/push', { method: 'POST' })
 
 // --- usage-check subsystem (Feature B) -----------------------------------------
 // Read an account's remaining Claude quota. A check is a ~300ms call to the same quota endpoint the
@@ -822,6 +710,9 @@ export const clearUsage = (keys: string[]) =>
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })
+/** Someone is looking at this page: the daemon keeps its usage sweep at the set interval (lib/usage-seen.ts). */
+export const reportUsageSeen = () =>
+  j<{ ok: boolean; intervalMin: number }>('/api/usage/seen', { method: 'POST' })
 /** MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account
  *  (`desktop:<dir>` / `cli:<id>`), so it stops at its limits instead of billing. */
 export const turnOffExtraUsage = (instanceRef: string) =>
@@ -907,10 +798,10 @@ export const linkCliInstanceToDesktop = (
     method: 'POST',
     body: JSON.stringify({ desktopDir, desktopLabel }),
   })
-export const deleteCliInstance = (id: string, confirmName: string) =>
+export const deleteCliInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/cli-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 /** Copy CLI logins to another PC: one encrypted bundle in Downloads; `signOut` also signs this PC
  *  out of each (a move). See server/src/core/cli-login-move.ts. The passphrase is made here and
@@ -1217,6 +1108,8 @@ export const listCliMayteWorkers = (
   if (filter.limit !== undefined) q.set('limit', String(filter.limit))
   // `lean`: no result, reports or whole attempts (the open task's detail route has them); an older daemon ignores it.
   q.set('lean', '1')
+  // Only this pane omits raw launch/ETA records it never reads. Older daemons keep their lean answer.
+  q.set('pane', '1')
   return j<CliMayteWorkerView[]>(`/api/corch/workers?${q}`)
 }
 /** A worker from another PC that shares the queue (GET /api/corch/remote): the row's fields only. */
@@ -1259,17 +1152,6 @@ export const getCliMayteWorker = (id: string) =>
   j<(CliMayteWorkerView & { events: string[] }) | null>(
     `/api/corch/workers/${encodeURIComponent(id)}?prompt=full`,
   )
-export const runCliMayte = (input: {
-  tasks: CliMayteTask[]
-  group?: string
-  accounts?: string[]
-  perAccount?: number
-  perAccountStrict?: boolean
-}) =>
-  j<{ group: string; workers: CliMayteWorkerView[] }>('/api/corch/workers', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
 /** `urgent`: stop a running task's work and continue its session with this message first. */
 export const sendCliMayteWorker = (id: string, text: string, urgent = false) =>
   j<{ ok: boolean; message: string; urgent?: boolean }>(
@@ -1436,10 +1318,11 @@ export const checkCodexInstanceUsage = (id: string, refresh = false) =>
   j<UsageCheckResult>(
     `/api/codex-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
   )
-export const createCodexInstance = (name: string) =>
+/** A new Codex instance; the daemon names it until its account does. */
+export const createCodexInstance = () =>
   j<CMActionResult>('/api/codex-instances', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: '{}',
   })
 export const launchCodexInstance = (id: string, opts: { model?: string; effort?: string } = {}) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/launch`, {
@@ -1480,10 +1363,10 @@ export const renameCodexInstance = (id: string, name: string | null) =>
     method: 'POST',
     body: JSON.stringify({ name }),
   })
-export const deleteCodexInstance = (id: string, confirmName: string) =>
+export const deleteCodexInstance = (id: string, note: string) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ confirmName }),
+    body: JSON.stringify({ note }),
   })
 
 // --- auto-resume monitor (Feature E) -------------------------------------------
@@ -1589,8 +1472,9 @@ export interface DshInstance {
   createdAt: number
 }
 export const listDshInstances = () => j<DshInstance[]>('/api/dsh-instances')
-export const createDshInstance = (name: string) =>
-  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** A new DeepSeek home; the daemon names it. */
+export const createDshInstance = () =>
+  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: '{}' })
 /** Start a server for this home (or open a window against one already running) — both are this. */
 export const launchDshInstance = (id: string) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/launch`, { method: 'POST' })
@@ -1603,7 +1487,7 @@ export const renameDshInstance = (id: string, name: string) =>
   })
 export const deleteDshInstance = (
   id: string,
-  opts: { deleteFiles?: boolean; confirmName?: string } = {},
+  opts: { deleteFiles?: boolean; note?: string } = {},
 ) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}`, {
     method: 'DELETE',

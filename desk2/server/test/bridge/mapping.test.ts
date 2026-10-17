@@ -11,9 +11,9 @@ const sid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0'
 describe('accounts', () => {
   const accounts = mapAccounts(fixture('cli-instances'), fixture('corch-workers'))
 
-  test('the default login comes first, then every CLI instance', () => {
-    expect(accounts.map((a) => a.id)).toEqual(['default', 'cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
-    expect(accounts[0]).toMatchObject({ id: 'default', configDir: null, signedIn: true, inUse: false, fiveHourPct: null })
+  test('lists every CLI instance and never the default login', () => {
+    expect(accounts.map((a) => a.id)).toEqual(['cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
+    expect(mapAccounts([], [])).toEqual([])
   })
 
   test('an instance maps its plan, usage, resets and live sessions', () => {
@@ -81,6 +81,9 @@ describe('CliMayte workers', () => {
       id: 'w-00000001',
       title: 'Worker task 1',
       description: 'Build the thing. Done means the tests pass.',
+      doing: null,
+      doingKind: null,
+      doingSince: null,
       group: 'g-abc123',
       status: 'running',
       active: true,
@@ -96,6 +99,7 @@ describe('CliMayte workers', () => {
       startedAt: 1791069626312,
       endedAt: null,
       lastActivityAt: 1791069687692,
+      lastStepAt: null,
       lastActivity: 'Bash bun test ./server/test',
       usedPct: 0,
       tokens: null,
@@ -167,6 +171,20 @@ describe('external sessions', () => {
     expect(row(false)).toMatchObject({ source: 'desktop', status: 'idle', unread: false })
   })
 
+  // Owner, 2026-10-16: a Desktop chat whose turn had ended while its background shell ran for 18 minutes was drawn idle.
+  test('a Desktop chat whose live engine runs a background task after its turn ended carries it; one its engine did not start does not', () => {
+    const started = NOW - 20 * 60_000
+    const chat = { instance: 'Claude-9', chatId: 'local_chat7', sessionId: sid(887), title: 'Example chat', archived: false, lastActivityAt: new Date(NOW - 5 * 60_000).toISOString(), cwd: null, live: true, unread: false }
+    const engine = { pid: 4242, sessionId: sid(887), cwd: 'C:/Users/me/project', name: 'Example chat', startedAt: started, transcriptPath: 'C:/Users/me/.claude/projects/x.jsonl', hostSessionId: 'local_chat7' }
+    const task = (at: number) => new Map([[sid(887), [{ taskId: 'b1', startedAt: at }]]])
+    const row = (o: { live: boolean; at: number }) =>
+      mapExternal({ ...inputs, chats: [chat], live: o.live ? [engine] : [], background: task(o.at) }, new Set(), NOW).find((x) => x.id === sid(887))
+    expect(row({ live: true, at: NOW - 18 * 60_000 })).toMatchObject({ status: 'idle', backgroundActive: 1, activity: '1 background task running' })
+    // Started by an earlier engine of the session, or with no engine running: it ended with its process.
+    expect(row({ live: true, at: started - 60_000 })?.backgroundActive).toBeUndefined()
+    expect(row({ live: false, at: NOW - 18 * 60_000 })?.backgroundActive).toBeUndefined()
+  })
+
   // With the cloud off the list is all of this PC's chats (owner, 2026-10-08), not only the ones whose engine runs.
   test('a Desktop chat whose engine is not running is still listed; an archived one is not', () => {
     const chat = (n: number, archived: boolean) => ({
@@ -200,6 +218,18 @@ describe('external sessions', () => {
     ]
     const row = mapExternal({ ...inputs, codexChats }, new Set(), NOW).find((x) => x.id === sid(892))
     expect(row).toMatchObject({ source: 'codex', title: 'Invented Codex chat', instance: 'codex-1', cwd: 'C:/Users/me/project', status: 'stale' })
+  })
+
+  // Owner, 2026-10-14: a Codex chat's composer "keeps disappearing. And reappearing": a command that ran a minute wrote nothing.
+  test('a Codex chat is working while its rollout holds an open turn, however long since it wrote, and idle once it closed', () => {
+    const codexChats = [{ instance: 'codex-1', instanceNum: 61, instanceId: 'b0000000-0000-4000-8000-000000000001', threadId: sid(893),
+      title: 'Invented Codex chat', cwd: null, lastActivityAt: new Date(NOW - 60_000).toISOString() }]
+    const at = (turns?: Map<string, boolean>, ago = 60_000) => mapExternal({ ...inputs, codexChats: [{ ...codexChats[0]!, lastActivityAt: new Date(NOW - ago).toISOString() }], codexTurns: turns }, new Set(), NOW)
+      .find((x) => x.id === sid(893))
+    expect(at(new Map([[sid(893), true]]))).toMatchObject({ status: 'working', canResume: false })
+    expect(at(new Map([[sid(893), false]]), 5_000)).toMatchObject({ status: 'idle', canResume: true })
+    expect(at(new Map([[sid(893), true]]), 40 * 60_000)).toMatchObject({ status: 'idle' })  // an app closed mid-turn wrote no end
+    expect(at(undefined)).toMatchObject({ status: 'idle' })  // no rollout read: by how recently it wrote, as before
   })
 
   test('a chat started from a chip is parented to the chat it names; an unknown parent leaves it out', () => {

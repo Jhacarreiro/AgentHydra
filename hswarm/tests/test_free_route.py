@@ -40,9 +40,11 @@ class _Fake:
     does: the message is taken, then its batch is forgotten."""
 
     def __init__(self, accounts=None, reply="free answer", state="done", status_delays=(), cut=(), threads=(), read=(),
-                 chat_error=False, model="gpt-5-6-mini"):
+                 chat_error=False, model="gpt-5-6-mini", error=None, health=None):
         self.accounts = ACCOUNTS if accounts is None else accounts
-        self.reply, self.state = reply, state
+        self.health = health or {}  # free_status's providerHealth, per provider
+        self.reply, self.state = reply, state  # a list of either answers each sent message in turn
+        self.error = error  # a failed message's error, as AgentHydra words it ("<code>: <message>")
         self.cut, self.cutting = set(cut), False
         self.threads, self.read = list(threads), list(read)
         self.chat_error = chat_error  # free_chat answers with a tool error, as for a request it refuses
@@ -67,7 +69,7 @@ class _Fake:
                 if name == "free_status":
                     if fake.status_delays:
                         time.sleep(fake.status_delays.pop(0))
-                    out = {"ready": True, "accounts": fake.accounts, "running": 0}
+                    out = {"ready": True, "accounts": fake.accounts, "running": 0, "providerHealth": fake.health}
                 elif name == "free_chat" and fake.chat_error:
                     return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": [{"type": "text", "text": "bad task"}]}})
                 elif name == "free_chat":
@@ -102,9 +104,12 @@ class _Fake:
 
     def batch(self):
         # A list of replies answers each sent message in turn: a tool task's thread is several messages long.
-        reply = self.reply[min(len(self.chats), len(self.reply)) - 1] if isinstance(self.reply, list) else self.reply
-        one = {"task": 0, "state": self.state, "account": "a1", "chat_id": "c1", "response": reply, "model": self.model, "seconds": 1.0}
-        return {"batch": "b1", "finished": self.state == "done", "done": 1, "tasks": [one]}
+        nth = lambda v: v[min(len(self.chats), len(v)) - 1] if isinstance(v, list) else v  # noqa: E731
+        reply, state = nth(self.reply), nth(self.state)
+        one = {"task": 0, "state": state, "account": "a1", "chat_id": "c1", "response": reply, "model": self.model, "seconds": 1.0}
+        if state == "failed" and self.error:
+            one["error"] = self.error
+        return {"batch": "b1", "finished": state == "done", "done": 1, "tasks": [one]}
 
     @property
     def url(self):
@@ -165,11 +170,12 @@ def test_a_turn_the_daemon_dropped_is_read_back_from_its_thread(fake):
     assert res.selection["route"]["chat_id"] == "c9" and res.selection["route"]["recovered"] == 1 and len(f.chats) == 1
 
 
-def test_a_message_the_daemon_refuses_fails_over_at_once(fake):
-    # The daemon answered: nothing is in flight, so no thread is waited for.
-    f = fake(chat_error=True, threads=[{"chat_id": "c9", "name": "hswarm j1 t0", "status": "done", "account": "a1"}])
+def test_a_tool_error_on_a_new_thread_is_read_from_its_thread_not_sent_again(fake):
+    # A tool error is a cut too (free_client._recover): the thread under the name is found and read, never sent again.
+    f = fake(chat_error=True, threads=[{"chat_id": "c9", "name": "hswarm j1 t0", "status": "done", "account": "a1"}],
+             read=[{"role": "assistant", "text": "free answer"}])
     res, note = _consult(_task())
-    assert res is None and note["fallback"] == "free send failed" and "free_threads" not in f.names
+    assert note is None and res.answer == "free answer" and "free_threads" in f.names and not f.chats
 
 
 def test_a_message_sent_while_no_daemon_listened_is_sent_again_once_one_does(fake, monkeypatch):
@@ -337,6 +343,37 @@ def test_a_failed_free_task_hands_the_task_back(fake):
     assert res is None and note["via"] == "api"
 
 
+GENERATION = "generation_error: ChatGPT generation failed (no reason given; event keys: conversation_id, error, type); read the chat before sending again."
+
+
+@pytest.mark.parametrize("error, sent, served", [
+    (GENERATION, 2, True),
+    # Another failure (a limit, a rejected request) is the account's, and goes to the API route as before.
+    ("rate_limited: ChatGPT's account or request limit was reached. Wait for the limit to reset.", 1, False),
+])
+def test_a_new_thread_chatgpt_failed_to_answer_is_sent_again_on_a_new_one_once(fake, error, sent, served):
+    # 76 of the 101 ChatGPT Free chats that failed on 2026-10-13/14 were "generation failed", each a paid API call after.
+    f = fake(state=["failed", "done"], reply=["", "free answer"], error=error)
+    res, note = _consult(_task())
+    assert len(f.chats) == sent and (res is not None and res.answer == "free answer") == served
+    if served:
+        first, again = (c["tasks"][0] for c in f.chats)
+        assert again["prompt"] == first["prompt"] and again["name"] == first["name"] + " g2" and note is None
+    f2 = fake(state="failed", reply="", error=GENERATION)  # a second failed generation goes to the API route
+    res, note = _consult(_task())
+    assert res is None and note["via"] == "api" and len(f2.chats) == 1 + free_client.REDO
+
+
+def test_a_tool_task_whose_new_thread_chatgpt_failed_to_answer_opens_another(fake, tmp_path):
+    read = '<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>'
+    f = fake(state=["failed", "done", "done"], reply=["", read, "It is 42."], error=GENERATION)
+    res, note = _consult(_read_task(tmp_path))
+    assert note is None and res.status == "ok" and res.answer == "It is 42."
+    first, again, last = (c["tasks"][0] for c in f.chats)
+    assert again["prompt"] == first["prompt"] and "chat_id" not in again and again["name"] == first["name"] + " g2"
+    assert last["chat_id"] == "c1" and last["prompt"].startswith('<tool_result name="read_file">')
+
+
 @pytest.mark.parametrize("kw,after", [
     ({"tools": "edit"}, {}),
     # Web tools only for research (2026-10-13 A/B): general and decision work offered them keeps its API route.
@@ -422,18 +459,18 @@ def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake,
     assert note is None and res.status == "ok" and res.data == {"n": 42}
 
 
-@pytest.mark.parametrize("claude_usage, asks, sent", [
-    ("5h 40%, week 3%", ("sonnet@claude", "gpt-6"), {"model": "sonnet", "provider": "claude"}),
-    ("5h 95%, week 3%", ("sonnet@claude", "gpt-6"), {"model": "gpt-6", "provider": "chatgpt"}),
-    ("5h 95%, week 3%", ("sonnet@claude",), None),
+@pytest.mark.parametrize("five_hour, asks, sent", [
+    (40, ("sonnet@claude", "gpt-6"), {"model": "sonnet", "provider": "claude"}),
+    (95, ("sonnet@claude", "gpt-6"), {"model": "gpt-6", "provider": "chatgpt"}),
+    (95, ("sonnet@claude",), None),
 ])
-def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path, monkeypatch, claude_usage, asks, sent):
+def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path, monkeypatch, five_hour, asks, sent):
     # A Claude account near the end of its 5-hour window is passed over: a thread of several messages there hits its limit.
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_PROFILES", ("general", "decision"))
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_ASKS", {"decision": asks})
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_CHECK_PROFILES", ())  # which model is asked, not the claim check
     chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
-    f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt],
+    f = fake(accounts=[{**ACCOUNTS[0], "five_hour_pct": five_hour}, chatgpt],
              reply=['<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>', "It is 42."])
     task = _read_task(tmp_path)
     task.profile = "decision"
@@ -455,19 +492,25 @@ def test_ask_provider_is_chatgpt_for_any_name_but_the_claude_families(ask, expec
     assert free_route._ask(ask) == expected
 
 
-@pytest.mark.parametrize("claude_usage, profile, sent", [
-    ("5h 40%, week 3%", "research", {"model": "sonnet", "provider": "claude"}),
-    ("5h 95%, week 3%", "research", {"model": None, "provider": "chatgpt"}),
-    ("5h 95%, week 3%", "decision", None),
-    ("5h 40%, week 3%", "critical", {"model": "luna-thinking", "provider": "chatgpt"}),
-    ("5h 40%, week 3%", "code", {"model": "luna-thinking", "provider": "chatgpt"}),
+@pytest.mark.parametrize("five_hour, profile, sent", [
+    (40, "research", {"model": "sonnet", "provider": "claude"}),
+    (95, "research", {"model": None, "provider": "chatgpt"}),
+    (95, "decision", None),
+    (40, "critical", {"model": "luna-thinking", "provider": "chatgpt"}),
+    (40, "code", {"model": "luna-thinking", "provider": "chatgpt"}),
+    # ChatGPT resting (a provider the daemon found failing): critical and code read work goes to Sonnet on Claude.
+    (40, "critical-chatgpt-down", {"model": "sonnet", "provider": "claude"}),
+    (40, "code-chatgpt-down", {"model": "sonnet", "provider": "claude"}),
+    (95, "code-chatgpt-down", None),
 ])
-def test_each_tool_profile_goes_to_the_free_model_that_held_level_with_the_api(fake, claude_usage, profile, sent):
+def test_each_tool_profile_goes_to_the_free_model_that_held_level_with_the_api(fake, five_hour, profile, sent):
     # By default: Sonnet on a Claude account with room for both; with none, research goes to a ChatGPT account (mini,
     # which checks its claims, 8 to 4 against the API), and decision is a shortfall (it lost there even when checked).
     # Critical and code read work go to Luna Thinking whatever Claude has left (13-15-1 and 7-5 against the API).
-    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
-    f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt], reply="I could not finish.")
+    profile, down = profile.removesuffix("-chatgpt-down"), profile.endswith("-chatgpt-down")
+    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text",
+               **({"resting": "until later after chatgpt down: not_found (x1)"} if down else {})}
+    f = fake(accounts=[{**ACCOUNTS[0], "five_hour_pct": five_hour}, chatgpt], reply="I could not finish.")
     task = _task(tools="web" if profile == "research" else "read", cwd=".")
     task.profile = profile
     res, note = _consult(task)

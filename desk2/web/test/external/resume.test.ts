@@ -188,7 +188,7 @@ describe('the first message imports the session and resumes it', () => {
     const ok = g.fetch as (path: string, init?: RequestInit) => Promise<Response>
     const why = 'No folder on this machine has session x1, so it cannot be resumed.'
     // The server wrote its refusal into the transcript too.
-    const serverLine = { kind: 'system', id: 'seed:1', ts: 1, level: 'warn', text: why }
+    const serverLine = { kind: 'system' as const, id: 'seed:1', ts: 1, level: 'warn' as const, text: why }
     g.fetch = async (path: string, init?: RequestInit) =>
       path.endsWith('/messages')
         ? new Response(JSON.stringify({ error: why }), { status: 409 })
@@ -201,8 +201,10 @@ describe('the first message imports the session and resumes it', () => {
       await expect(desk.send('ext:x1', { text: 'carry on' })).rejects.toThrow(new Error(why))
       expect(desk.selected.value).toEqual({ kind: 'chat', id: 'new-1' })
       expect(drafts.get('hydra-desk:draft:new-1')).toBe('carry on')
-      // said once: the window adds no second line for what the server's line already says
-      expect(await desk.loadItems('new-1')).toEqual([serverLine as TranscriptItem])
+      // the user's bubble stays in the chat, marked as not sent; the server's line is said once
+      const items = await desk.loadItems('new-1')
+      expect(items.find((i) => i.kind === 'user' && i.text === 'carry on' && i.sendFailed)).toMatchObject({ sendFailed: why })
+      expect(items.filter((i): i is Extract<TranscriptItem, { kind: 'system' }> => i.kind === 'system')).toEqual([serverLine])
     } finally {
       g.fetch = ok
       delete g.localStorage
@@ -229,12 +231,13 @@ describe('the first message imports the session and resumes it', () => {
       // the chat's history loads from the server and keeps the window's line after it
       const items = await desk.loadItems('new-2')
       expect(items[0]).toEqual(earlier as TranscriptItem)
-      expect(items[1]).toMatchObject({
+      expect(items[1]).toMatchObject({ kind: 'user', text: 'carry on', sendFailed: why })
+      expect(items[2]).toMatchObject({
         kind: 'system',
         level: 'warn',
         text: `Not sent: ${why} Your message is back in the box. The 2 attached images were dropped: attach them again.`
       })
-      expect(items).toHaveLength(2)
+      expect(items).toHaveLength(3)
     } finally {
       g.fetch = ok
     }
@@ -343,5 +346,28 @@ describe('the row menu through the store', () => {
     await desk.updateSessionMeta('m1', { pinned: true, group: 'Ops', title: 'Renamed here' })
     expect(calls).toEqual([{ path: '/api/external/sessions/m1/meta', method: 'PATCH', body: { pinned: true, group: 'Ops', title: 'Renamed here' } }])
     expect(desk.external.value.find((s) => s.id === 'm1')).toMatchObject({ title: 'Renamed here', pinned: true, group: 'Ops', archived: false })
+  })
+})
+
+describe('a message typed into an outside chat at work elsewhere', () => {
+  test('is held while it works, then carried on the moment it is idle there, the rest sent after it in order', async () => {
+    push({ type: 'external.update', sessions: [session({ id: 'h1', source: 'cli', status: 'working', canResume: false })] })
+    calls.length = 0
+    await desk.holdFor('h1', 'first')
+    await desk.holdFor('h1', 'second')
+    expect(calls).toEqual([])
+    expect(desk.heldFor('h1').map((m) => m.text)).toEqual(['first', 'second'])
+
+    push({ type: 'external.update', sessions: [session({ id: 'h1', source: 'cli', status: 'idle', canResume: true })] })
+    for (let i = 0; i < 50 && calls.filter((c) => c.path.endsWith('/messages')).length < 2; i++) await new Promise((r) => setTimeout(r, 0))
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /api/chats/import',
+      'GET /api/chats/new-1/items',
+      'POST /api/chats/new-1/messages',
+      'POST /api/chats/new-1/messages'
+    ])
+    expect(calls.filter((c) => c.path.endsWith('/messages')).map((c) => c.body)).toEqual([{ text: 'first' }, { text: 'second' }])
+    expect(desk.heldFor('h1')).toEqual([])
+    expect(desk.heldError('h1')).toBeNull()
   })
 })

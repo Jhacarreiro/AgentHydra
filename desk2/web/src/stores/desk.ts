@@ -2,6 +2,8 @@ import { ref, shallowRef, computed, reactive, shallowReactive, isReactive, toRaw
 import type {
   ChatSummary,
   TranscriptItem,
+  TranscriptIndex,
+  ChatItemsPage,
   ExternalSession,
   HomeStats,
   ProjectChoiceKind,
@@ -47,7 +49,7 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { sameFolder } from '@/components/composer/folders'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
-import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
+import { accountRefOf, externalChat, externalChatId, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
 import { chatViewOf, sameView, type View } from '@/components/shell/logic'
 import { loadDraft, saveDraft } from '@/components/composer/logic'
 import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from '@/components/composer/draft-images'
@@ -141,6 +143,46 @@ const itemsByChat = shallowReactive(new Map<string, TranscriptItem[]>())
 const KEEP_CHATS = 12
 const recentChats: string[] = []
 
+/** The window per chat: where its first item sits in the whole transcript (0 = nothing older), and its index (kept
+ *  when the pages are dropped). */
+const windowStart = new Map<string, number>()
+const indexByChat = shallowReactive(new Map<string, TranscriptIndex>())
+const WINDOW_SIZE = 200
+const INDEX_EVERY_MS = 1000
+const indexTimers = new Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>()
+const INDEX_TIMERS_MAX = 200
+
+/** Fetches a chat's index at most once a second; a call inside the second runs when it is up. */
+function refreshIndex(chatId: string) {
+  if (indexTimers.size > INDEX_TIMERS_MAX) {
+    // A slot with no run pending and its second gone by behaves as no slot at all, so it is dropped.
+    for (const [id, old] of indexTimers) if (!old.timer && Date.now() - old.at >= INDEX_EVERY_MS) indexTimers.delete(id)
+  }
+  const slot = indexTimers.get(chatId) ?? { at: 0, timer: null }
+  indexTimers.set(chatId, slot)
+  if (slot.timer) return
+  const run = () => {
+    slot.timer = null
+    slot.at = Date.now()
+    fetchJson<TranscriptIndex>(`/chats/${chatId}/index`)
+      .then((idx) => {
+        if (idx && typeof idx === 'object' && Array.isArray(idx.userMessages)) indexByChat.set(chatId, idx)
+      })
+      .catch(() => {}) // floor-ok: the index is a convenience, the window still shows
+  }
+  const wait = slot.at + INDEX_EVERY_MS - Date.now()
+  if (wait <= 0) run()
+  else slot.timer = setTimeout(run, wait)
+}
+
+const hasIndexFacts = (item: TranscriptItem) => item.kind === 'user' || item.kind === 'todos' || item.kind === 'task'
+
+/** The answer of GET /chats/:id/items as a page: an old server answers the whole list as an array. */
+function asPage(raw: ChatItemsPage | TranscriptItem[]): { items: TranscriptItem[]; olderBefore: number; paged: boolean } {
+  if (Array.isArray(raw)) return { items: raw, olderBefore: 0, paged: false }
+  return { items: raw.items ?? [], olderBefore: raw.olderBefore ?? 0, paged: true }
+}
+
 function touchChat(id: string) {
   const at = recentChats.indexOf(id)
   if (at >= 0) recentChats.splice(at, 1)
@@ -152,9 +194,16 @@ function touchChat(id: string) {
       i++
       continue
     }
+    // A chat with a running turn keeps its window: its stream is landing in it.
+    const run = store.chats.find((c) => c.id === old)
+    if (run && TURN_RUNNING.has(run.status)) {
+      i++
+      continue
+    }
     recentChats.splice(i, 1)
     itemsByChat.delete(old)
     indexes.delete(old)
+    windowStart.delete(old)
   }
 }
 
@@ -225,6 +274,12 @@ function reconcile<T extends { id: string }>(old: T[], next: T[]): T[] {
     return kept
   })
   return out.length === old.length && out.every((o, i) => o === old[i]) ? old : out
+}
+
+/** Stores a split list pair, each side keeping its old array (and rows) when the push changed nothing in it: a push that moved only
+ *  the other PCs' workers, or one task's tokens, then leaves every list the sidebar derives from the rest alone. */
+function keepSplit<K extends 'workers' | 'remoteWorkers' | 'swarmJobs' | 'remoteSwarmJobs'>(next: Pick<DeskStoreState, K>): void {
+  for (const key of Object.keys(next) as K[]) store[key] = reconcile(store[key] as { id: string }[], next[key] as { id: string }[]) as DeskStoreState[K]
 }
 
 // The lists' browser copies are written once things settle, not on every broadcast; leaving the page writes them at once.
@@ -325,12 +380,13 @@ const placeholderAlias = new Map<string, string>()
 const placeholderMakes = new Map<string, { req: CreateChatRequest; made: Promise<ChatSummary | null> }>()
 
 /** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
-function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
+function landItems(id: string, snapshot: TranscriptItem[], olderBefore = 0): TranscriptItem[] {
   const since = [...(unloadedUpserts.get(id) ?? []), ...(itemsByChat.get(id) ?? [])]
   unloadedUpserts.delete(id)
-  const items = keepNewer(withWindowNotes(id, snapshot), since)
+  const items = withWindowNotes(id, keepNewer(snapshot, since))
   const kept = shallowReactive(items)
   itemsByChat.set(id, kept)
+  windowStart.set(id, olderBefore)
   itemsError.delete(id)
   reloadTries = 0
   indexes.delete(id)
@@ -440,6 +496,7 @@ function onItemUpsert(event: EventOf<'item.upsert'>) {
       indexes.delete(event.chatId)
     } else appendItem(event.chatId, items, event.item)
   }
+  if (hasIndexFacts(event.item) && chatItems(event.chatId)) refreshIndex(event.chatId)
   // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
   if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
     items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
@@ -520,12 +577,12 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'climayte.update':
-      Object.assign(store, splitWorkers(event.workers))
+      keepSplit(splitWorkers(event.workers))
       cacheLater('workers', event.workers)
       break
 
     case 'swarm.update':
-      Object.assign(store, splitJobs(event.jobs))
+      keepSplit(splitJobs(event.jobs))
       break
 
     case 'accounts.update':
@@ -549,9 +606,11 @@ function reloadOpenChat() {
   const sel = store.selected
   if (sel.kind !== 'chat' || isPlaceholder(sel.id) || !store.chats.some((c) => c.id === sel.id)) return
   const id = sel.id
-  fetchJson<TranscriptItem[]>(`/chats/${id}/items`)
-    .then((items) => {
-      landItems(id, items)
+  fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${id}/items`)
+    .then((raw) => {
+      const page = asPage(raw)
+      landItems(id, page.items, page.olderBefore)
+      if (page.paged) refreshIndex(id)
     })
     .catch((err: unknown) => retryOpenChat(id, err))
 }
@@ -585,10 +644,12 @@ function keepNewer(snapshot: TranscriptItem[], since: readonly TranscriptItem[] 
   const newer = new Map(since.map((i) => [i.id, i]))
   const out = snapshot.map((i) => newer.get(i.id) ?? i)
   const had = new Set(snapshot.map((i) => i.id))
-  const said = snapshot.flatMap((i) => (i.kind === 'user' ? [i] : []))
+  // The latest time each user message's text was said at, so each message of `since` is one lookup, not a scan of the snapshot.
+  const saidAt = new Map<string, number>()
+  for (const i of snapshot) if (i.kind === 'user') saidAt.set(i.text, Math.max(saidAt.get(i.text) ?? -Infinity, i.ts))
   for (const i of since) {
     if (had.has(i.id)) continue
-    if (i.kind === 'user' && isDrawnMessage(i) && said.some((s) => s.text === i.text && s.ts >= i.ts - 1000)) continue
+    if (i.kind === 'user' && isDrawnMessage(i) && (saidAt.get(i.text) ?? -Infinity) >= i.ts - 1000) continue
     out.push(i)
   }
   return out
@@ -644,8 +705,9 @@ function updateWindowTitle() {
   document.title = `${prefix}AgentHydra`
 }
 
+// The counts as one string: a fresh array would run the callback on every chat change, not when a count moves.
 watch(
-  () => [store.chats.filter((c) => c.status === 'working').length, store.chats.filter((c) => c.status === 'needs_you').length, store.connected],
+  () => `${store.chats.filter((c) => c.status === 'working').length}|${store.chats.filter((c) => c.status === 'needs_you').length}|${store.connected}`,
   () => {
     updateWindowTitle()
   }
@@ -660,6 +722,8 @@ watch(
 // that account's folder when the message goes out.
 const externalPatches = reactive(new Map<string, ChatPatch>())
 const landings = reactive(new Map<string, AccountRef>())
+/** Landings kept; past it the one set longest ago goes, and its session shows no landing until it is picked again. */
+const LANDINGS_MAX = 200
 
 // The poller's list holds the last 24 hours. An older outside session the window opened anyway (a search
 // hit) is fetched on its own and kept here; the public list shows it after the list's own rows, and a
@@ -685,6 +749,25 @@ const queueState = shallowRef<QueueState | null>(null)
 
 function takeQueue(next: QueueState) {
   if (!queueState.value || next.rev >= queueState.value.rev) queueState.value = next
+}
+
+// The queue lines drawn at the click, until their POST answers: the server's QueueItem takes each one's place.
+const queuePlaceholders = shallowRef<QueueItem[]>([])
+
+function queueWithPlaceholders(q: QueueState | null): QueueState | null {
+  return q && queuePlaceholders.value.length ? { ...q, items: [...q.items, ...queuePlaceholders.value] } : q
+}
+
+/** Puts a message back where the window keeps a refused one: the box that shows the chat takes it, else the chat's draft. */
+function putBackInBox(chatId: string, message: { text: string; images?: DraftImage[] }): void {
+  const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+  // No box shows the chat now: it waits as the chat's draft.
+  if (!back.taken) {
+    const storage = typeof localStorage === 'undefined' ? null : localStorage
+    saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
+    saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
+  }
 }
 
 /** A queue request; a refusal ({ error } with 400/404/409) rejects with the server's own words. */
@@ -744,14 +827,33 @@ async function importOutside(s: ExternalSession, fork = false, at?: string): Pro
   })
 }
 
-async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
-  const s = findExternal(sessionId)
-  if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+/** Messages sent from an outside session's own view before its chat is made: drawn in that view until the chat takes them. */
+const standInBubbles = reactive(new Map<string, TranscriptItem[]>())
+function standInFail(sessionId: string, itemId: string, reason: string) {
+  const items = standInBubbles.get(sessionId) ?? []
+  standInBubbles.set(sessionId, items.map((i) => (i.id === itemId ? { ...i, sendFailed: reason } : i)))
+}
+function standInDrop(sessionId: string, itemId: string) {
+  const items = (standInBubbles.get(sessionId) ?? []).filter((i) => i.id !== itemId)
+  if (items.length) standInBubbles.set(sessionId, items)
+  else standInBubbles.delete(sessionId)
+}
+
+async function resumeExternal(sessionId: string, message: SendMessageRequest, bubble: TranscriptItem): Promise<{ queued: boolean; chatId?: string }> {
   const from = viewNow()
-  const chat = await importOutside(s)
-  // The import holds the session's history: in the cache before the send, the chat opens on the whole
-  // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
-  await landHistory(chat.id)
+  let chat: ChatSummary
+  try {
+    const s = findExternal(sessionId)
+    if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+    chat = await importOutside(s)
+    // The import holds the session's history: in the cache before the send, the chat opens on the whole
+    // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
+    await landHistory(chat.id)
+  } catch (err) {
+    standInFail(sessionId, bubble.id, reasonOf(err))
+    throw err
+  }
+  appendItem(chat.id, streamedItems(chat.id), bubble)
   // From here the chat exists: it opens whether the send goes or not, so a refused one is a chat to
   // retry in, its message back in the box. The stand-in's composer is gone by the time the refusal
   // reaches it, so the new chat's transcript says why.
@@ -761,19 +863,98 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
       await fetchJson(`/chats/${chat.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
     }
     externalPatches.delete(sessionId)
-    return await fetchJson<{ queued: boolean }>(`/chats/${chat.id}/messages`, {
+    const sent = await fetchJson<{ queued: boolean }>(`/chats/${chat.id}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(message)
     })
+    return { ...sent, chatId: chat.id }
   } catch (err) {
     saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
-    noteNotSent(chat.id, err instanceof Error ? err.message : String(err), message)
+    markSendFailed(chat.id, bubble.id, reasonOf(err))
+    noteNotSent(chat.id, reasonOf(err), message)
     throw err
   } finally {
     landChat(chat, from)
+    standInDrop(sessionId, bubble.id)
   }
 }
+
+// Messages typed into an outside Codex or Claude Code chat while it works elsewhere (owner, 2026-10-14: "Codex should be
+// exactly the same ... There should be input boxes. It should all work the same"): held here, and in localStorage over a
+// reload, then sent the moment the chat is idle there, by the carry-on its composer uses then (resumeExternal); the rest go
+// to the chat that makes, whose own send queue runs them in turn. A working Claude Desktop chat's go to AgentHydra instead,
+// which queues them in the app. A send that fails puts the text back in the box and says why (heldError).
+const HELD_KEY = 'hydra-desk:outside-held'
+const outsideHeld = reactive(new Map<string, { id: number; text: string }[]>())
+const heldErrors = reactive(new Map<string, string>())
+const sendingHeld = new Set<string>()
+let heldSeq = 0
+
+function saveHeld(): void {
+  try {
+    localStorage.setItem(HELD_KEY, JSON.stringify([...outsideHeld].filter(([, list]) => list.length)))
+  } catch {
+    // floor-ok: no storage (a test, a locked profile) keeps the held messages for this window only
+  }
+}
+
+function loadHeld(): void {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(HELD_KEY)
+    const rows = raw ? (JSON.parse(raw) as [string, { text?: unknown }[]][]) : []
+    for (const [sessionId, list] of Array.isArray(rows) ? rows : []) {
+      const texts = Array.isArray(list) ? list.map((m) => m?.text).filter((t): t is string => typeof t === 'string' && !!t.trim()) : []
+      if (typeof sessionId === 'string' && texts.length) outsideHeld.set(sessionId, texts.map((text) => ({ id: ++heldSeq, text })))
+    }
+  } catch {
+    // floor-ok: a damaged record holds nothing to send; the next hold writes it again
+  }
+}
+loadHeld()
+
+/** Sends what is held for the session once it can be carried on here; a held session still working waits. */
+async function sendHeld(sessionId: string): Promise<void> {
+  const held = outsideHeld.get(sessionId)
+  if (!held?.length || sendingHeld.has(sessionId) || !findExternal(sessionId)?.canResume) return
+  sendingHeld.add(sessionId)
+  outsideHeld.delete(sessionId)
+  saveHeld()
+  const [first, ...rest] = held
+  const bubble = pendingUserItem({ text: first!.text })
+  standInBubbles.set(sessionId, [...(standInBubbles.get(sessionId) ?? []), bubble])
+  try {
+    const { chatId } = await resumeExternal(sessionId, { text: first!.text }, bubble)
+    for (const m of rest) {
+      await fetchJson(`/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: m.text } satisfies SendMessageRequest)
+      })
+    }
+  } catch (err) {
+    // resumeExternal keeps a first message refused after its chat was made in that chat; the box gets the text either way.
+    const chatId = externalChatId(sessionId)
+    const back: PutBack = { chatId, text: held.map((m) => m.text).join('\n\n'), images: [] }
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+    if (!back.taken) {
+      const storage = typeof localStorage === 'undefined' ? null : localStorage
+      saveDraft(storage, chatId, putBackDraft(back.text, loadDraft(storage, chatId)))
+    }
+    heldErrors.set(sessionId, err instanceof Error ? err.message : String(err))
+  } finally {
+    sendingHeld.delete(sessionId)
+  }
+}
+
+// A held session is sent the moment the list says it can be carried on (its turn ended there).
+watch(
+  () => [...outsideHeld.keys()].map((id) => `${id}:${findExternal(id)?.canResume ? 1 : 0}`).join(','),
+  () => {
+    for (const id of [...outsideHeld.keys()]) void sendHeld(id)
+  },
+  { immediate: true }
+)
 
 // What the window itself writes into a chat's transcript: a first message refused after its chat was
 // made, which only the window knows of. Kept here, so the chat's items loaded from the server keep it.
@@ -804,7 +985,7 @@ function withWindowNotes(chatId: string, items: TranscriptItem[]): TranscriptIte
   if (!notes) return items
   const out = [...items]
   for (const { item, reason } of notes) {
-    if (statesReason(items, reason)) continue
+    if (statesReason(items, reason) || out.some((i) => i.id === item.id)) continue
     const at = out.findIndex((i) => i.ts > item.ts)
     out.splice(at < 0 ? out.length : at, 0, item)
   }
@@ -814,7 +995,9 @@ function withWindowNotes(chatId: string, items: TranscriptItem[]): TranscriptIte
 /** Fetches a chat's history into the cache; on a failure it stays unloaded and opening the chat fetches it. */
 async function landHistory(id: string): Promise<void> {
   try {
-    landItems(id, await fetchJson<TranscriptItem[]>(`/chats/${id}/items`))
+    const page = asPage(await fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${id}/items`))
+    landItems(id, page.items, page.olderBefore)
+    if (page.paged) refreshIndex(id)
   } catch {} // floor-ok: left unloaded, DeskFrame loads it when the chat opens
 }
 
@@ -880,12 +1063,31 @@ function chatBusy(chatId: string): boolean {
   return chat.status === 'working' || chat.status === 'needs_you' || (chat.status === 'starting' && chat.turnStartedAt !== null) || chat.queuedCount > 0
 }
 
-function markSendFailed(chatId: string, itemId: string, reason: string) {
+function patchUserItem(chatId: string, itemId: string, patch: { queued?: boolean; sendFailed?: string }) {
   const key = resolveChatId(chatId)
   const items = chatItems(key) ?? unloadedUpserts.get(key)
   const at = items ? indexOfItem(key, items, itemId) : -1
   const item = items?.[at]
-  if (items && item?.kind === 'user') replaceItem(items, at, { ...item, sendFailed: reason })
+  if (items && item?.kind === 'user') replaceItem(items, at, { ...item, ...patch })
+}
+
+function markSendFailed(chatId: string, itemId: string, reason: string) {
+  patchUserItem(chatId, itemId, { sendFailed: reason })
+}
+
+function pendingQueueItem(req: QueueAddRequest): QueueItem {
+  const now = Date.now()
+  const base = {
+    id: `pending-queue:${++pendingSeq}`,
+    rev: 0,
+    createdAt: now,
+    updatedAt: now,
+    state: 'waiting' as const,
+    reason: null,
+    text: req.kind === 'message' ? req.text : (req.prompt ?? ''),
+    ...(req.images?.length ? { images: req.images } : {})
+  }
+  return req.kind === 'message' ? { ...base, kind: 'message', chatId: req.chatId } : { ...base, kind: 'chat', cwd: req.cwd, startedChatId: null }
 }
 
 /** Posts a message whose bubble is already drawn; a failure marks the bubble Not sent and resolves null. */
@@ -955,7 +1157,8 @@ function landPlaceholder(placeholder: string, chat: ChatSummary) {
   const bubbles = itemsByChat.get(placeholder) ?? []
   const streamed = unloadedUpserts.get(chat.id) ?? []
   unloadedUpserts.delete(chat.id)
-  const kept = bubbles.filter((b) => !(b.kind === 'user' && streamed.some((s) => s.kind === 'user' && s.text === b.text)))
+  const streamedTexts = new Set(streamed.flatMap((s) => (s.kind === 'user' ? [s.text] : [])))
+  const kept = bubbles.filter((b) => !(b.kind === 'user' && streamedTexts.has(b.text)))
   itemsByChat.delete(placeholder)
   indexes.delete(placeholder)
   itemsByChat.set(chat.id, shallowReactive([...kept, ...streamed]))
@@ -997,6 +1200,7 @@ export function useDesk() {
     // A chat in the live probe's throwaway folder is never shown (shared/throwaway.ts).
     chats: computed(() => store.chats.filter((c) => !isThrowawayCwd(c.cwd))),
     itemsByChat: computed(() => itemsByChat),
+    indexByChat: computed(() => indexByChat),
     itemsError: computed(() => itemsError),
     external: computed(allExternal),
     workers: computed(() => store.workers),
@@ -1009,7 +1213,7 @@ export function useDesk() {
     settings: computed(() => store.settings),
     connected: computed(() => store.connected),
     selected: computed(() => store.selected),
-    queue: computed(() => queueState.value),
+    queue: computed(() => queueWithPlaceholders(queueState.value)),
     rowKeyOf,
 
     // Actions
@@ -1049,10 +1253,21 @@ export function useDesk() {
       return makeChat(placeholder, req)
     },
 
+    /** Messages sent from an outside session's view before its chat is made: drawn there until the chat takes them. */
+    standInBubblesOf(sessionId: string): TranscriptItem[] {
+      return standInBubbles.get(sessionId) ?? []
+    },
+
     /** Draws the message's bubble before the POST answers; a failed POST marks it Not sent and resolves null. */
     async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean } | null> {
-      if (isExternalChatId(chatId)) return resumeExternal(sessionOfChatId(chatId), message)
       const clicked = performance.now()
+      if (isExternalChatId(chatId)) {
+        const sessionId = sessionOfChatId(chatId)
+        const bubble = pendingUserItem(message)
+        standInBubbles.set(sessionId, [...(standInBubbles.get(sessionId) ?? []), bubble])
+        reportAtPaint('click_to_bubble', clicked, chatId)
+        return resumeExternal(sessionId, message, bubble)
+      }
       const key = resolveChatId(chatId)
       const item = pendingUserItem(message, chatBusy(key))
       appendItem(key, streamedItems(key), item)
@@ -1085,13 +1300,33 @@ export function useDesk() {
       }
     },
 
-    /** Send now on a message queued behind a running turn: the turn stops and that message goes at once. */
+    /**
+     * Send now on a message queued behind a running turn: the turn stops and that message goes at once. The queued line
+     * leaves at the click and its bubble shows; a refusal marks the bubble Not sent and puts the line back.
+     */
     async sendNow(chatId: string, itemId?: string): Promise<SendNowResult> {
-      return fetchJson<SendNowResult>(`/chats/${chatId}/send-now`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId } satisfies SendNowRequest)
-      })
+      const clicked = performance.now()
+      const key = resolveChatId(chatId)
+      const items = chatItems(key)
+      const at = items && itemId ? indexOfItem(key, items, itemId) : -1
+      const item = items?.[at]
+      const queued = !!itemId && item?.kind === 'user' && !!item.queued
+      if (queued) {
+        patchUserItem(key, itemId, { queued: false })
+        reportAtPaint('click_to_bubble', clicked, key)
+      }
+      try {
+        const result = await fetchJson<SendNowResult>(`/chats/${chatId}/send-now`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemId } satisfies SendNowRequest)
+        })
+        if (queued && !result.stopped) patchUserItem(key, itemId, { queued: true })
+        return result
+      } catch (err) {
+        if (queued) patchUserItem(key, itemId, { queued: true, sendFailed: reasonOf(err) })
+        throw err
+      }
     },
 
     /** Cancel on a message held behind a turn: it is never sent, and its text and pictures come back to the box. */
@@ -1102,13 +1337,7 @@ export function useDesk() {
         body: JSON.stringify({ itemId } satisfies CancelQueuedRequest)
       })
       if (!result.cancelled) return result
-      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
-      if (!back.taken) {
-        const storage = typeof localStorage === 'undefined' ? null : localStorage
-        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
-        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
-      }
+      putBackInBox(chatId, message)
       return result
     },
 
@@ -1236,14 +1465,7 @@ export function useDesk() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ at: itemId } satisfies RewindChatRequest)
       })
-      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
-      // No box shows the chat now: it waits as the chat's draft.
-      if (!back.taken) {
-        const storage = typeof localStorage === 'undefined' ? null : localStorage
-        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
-        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
-      }
+      putBackInBox(chatId, message)
       return chat
     },
 
@@ -1379,20 +1601,56 @@ export function useDesk() {
     async loadItems(chatId: string): Promise<TranscriptItem[]> {
       if (isPlaceholder(resolveChatId(chatId))) return chatItems(resolveChatId(chatId)) ?? []
       const opened = performance.now()
-      const snapshot = await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
+      const raw = await fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
         if (store.selected.kind === 'chat' && store.selected.id === chatId) retryOpenChat(chatId, err)
         throw err
       })
-      const items = landItems(chatId, snapshot)
+      const page = asPage(raw)
+      const items = landItems(chatId, page.items, page.olderBefore)
+      if (page.paged) refreshIndex(chatId)
       reportAtPaint('open_to_paint', opened, chatId)
       return items
     },
 
+    /** Fetches the page above the window and puts it in front of it. */
+    async loadOlder(chatId: string): Promise<number> {
+      const before = windowStart.get(chatId) ?? 0
+      const items = chatItems(chatId)
+      if (!items || before <= 0) return 0
+      const page = asPage(await fetchJson<ChatItemsPage>(`/chats/${chatId}/items?before=${before}&limit=${WINDOW_SIZE}`))
+      const now = chatItems(chatId)
+      // The window moved while the page was out (reloaded, dropped): this page no longer joins it.
+      if (!now || windowStart.get(chatId) !== before) return 0
+      const have = new Set(now.map((i) => i.id))
+      const fresh = page.items.filter((i) => !have.has(i.id))
+      now.unshift(...fresh)
+      indexes.delete(chatId)
+      windowStart.set(chatId, page.olderBefore)
+      return fresh.length
+    },
+    hasOlder(chatId: string): boolean {
+      return (windowStart.get(chatId) ?? 0) > 0 && itemsByChat.has(chatId)
+    },
     async loadExternalItems(sessionId: string): Promise<TranscriptItem[]> {
       return fetchJson(`/external/sessions/${sessionId}/items`)
     },
 
     /** What was changed in the composer of an outside session before its first message. */
+    /** Messages held for an outside chat at work elsewhere, sent when its turn ends there (sendHeld). */
+    heldFor(sessionId: string): readonly { id: number; text: string }[] {
+      return outsideHeld.get(sessionId) ?? []
+    },
+    /** Why the held messages last failed to go, until the next is held. */
+    heldError(sessionId: string): string | null {
+      return heldErrors.get(sessionId) ?? null
+    },
+    holdFor(sessionId: string, text: string): Promise<void> {
+      heldErrors.delete(sessionId)
+      outsideHeld.set(sessionId, [...(outsideHeld.get(sessionId) ?? []), { id: ++heldSeq, text }])
+      saveHeld()
+      return sendHeld(sessionId)
+    },
+
     externalPatch(sessionId: string): ChatPatch {
       return externalPatches.get(sessionId) ?? {}
     },
@@ -1402,7 +1660,11 @@ export function useDesk() {
     },
     async ensureLanding(sessionId: string): Promise<void> {
       const landing = await pickLanding()
-      if (landing) landings.set(sessionId, landing)
+      if (!landing) return
+      // Set again, it counts as the newest, so the cap never drops the one just picked.
+      landings.delete(sessionId)
+      landings.set(sessionId, landing)
+      capMap(landings, LANDINGS_MAX)
     },
     /** The stand-in chat of an outside session the composer can carry on now, else null. */
     standInOf(sessionId: string): ChatSummary | null {
@@ -1441,8 +1703,24 @@ export function useDesk() {
     },
 
     // The send queue: the item answers are also broadcast as queue.update; the queue answers are taken at once.
+    /** The queued line is drawn at the click; a refusal takes it back and rejects, and the composer puts the text back. */
     async queueAdd(req: QueueAddRequest): Promise<QueueItem> {
-      return queueJson('', 'POST', req)
+      const clicked = performance.now()
+      const placeholder = pendingQueueItem(req)
+      queuePlaceholders.value = [...queuePlaceholders.value, placeholder]
+      reportAtPaint('click_to_bubble', clicked, req.kind === 'message' ? req.chatId : undefined)
+      const dropPlaceholder = () => (queuePlaceholders.value = queuePlaceholders.value.filter((p) => p !== placeholder))
+      try {
+        const item = await queueJson<QueueItem>('', 'POST', req)
+        dropPlaceholder()
+        if (queueState.value && !queueState.value.items.some((i) => i.id === item.id)) {
+          queueState.value = { ...queueState.value, items: [...queueState.value.items, item] }
+        }
+        return item
+      } catch (err) {
+        dropPlaceholder()
+        throw err
+      }
     },
 
     async queueEdit(id: string, patch: QueuePatch): Promise<QueueItem> {

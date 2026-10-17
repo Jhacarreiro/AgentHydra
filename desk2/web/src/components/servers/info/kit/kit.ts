@@ -28,7 +28,6 @@ export const BTN = `${BTN_SHAPE} ${MD} ${PLAIN}`
 export const BTN_GHOST = `${BTN_SHAPE} ${MD} ${GHOST}`
 /** A destructive action. */
 export const BTN_DANGER = `${BTN_SHAPE} ${MD} ${DANGER}`
-export const BTN_SM = `${BTN_SHAPE} ${SM} ${PLAIN}`
 export const BTN_GHOST_SM = `${BTN_SHAPE} ${SM} ${GHOST}`
 export const BTN_DANGER_SM = `${BTN_SHAPE} ${SM} ${DANGER}`
 

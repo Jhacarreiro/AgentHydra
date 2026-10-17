@@ -35,7 +35,7 @@ const blocks = computed(() =>
         { h: 'By cause, today', d: today.value.byCause, n: today.value.total, account: false },
         { h: 'By cause, 7 days', d: week.value.byCause, n: week.value.total, account: false },
         { h: 'By account, 7 days', d: week.value.byAccount, n: week.value.total, account: true }
-      ]
+      ].map((b) => ({ ...b, entries: ranked(b.d) }))
     : []
 )
 const when = (ts: number): string => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -54,7 +54,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
           <h3 class="text-ui font-semibold leading-5 text-text">{{ b.h }} <span class="tnum font-normal text-text-muted">({{ b.n }})</span></h3>
           <p v-if="!b.n" class="mt-1 text-text-muted">None</p>
           <ul v-else class="mt-1">
-            <li v-for="[k, n] in ranked(b.d)" :key="k" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
+            <li v-for="[k, n] in b.entries" :key="k" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
               <span class="truncate text-text-2">{{ b.account ? k : causeLabel(k) }}</span>
               <span class="tnum text-text">{{ n }}</span>
             </li>

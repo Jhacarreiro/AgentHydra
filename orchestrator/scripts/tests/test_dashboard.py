@@ -80,7 +80,7 @@ class DecideTest(unittest.TestCase):
         does not claim done (yes)', which contradicts itself (2026-09-17)."""
         fin = {"lane": "needs-input-review", "recap_present": True, "done_claim": "yes",
                "ends_with_question": False, "offers_to_continue": False, "interrupted": False,
-               "open_recommendations": ["ship it", "tell Michael"], "last_assistant_text": ""}
+               "open_recommendations": ["ship it", "tell the owner"], "last_assistant_text": ""}
         d = dashboard.decide(gate_verdict("finished", finished=fin), None, False)
         self.assertIn("recommends 2 open thing(s)", d["detail"])
         self.assertNotIn("does not claim done", d["detail"])

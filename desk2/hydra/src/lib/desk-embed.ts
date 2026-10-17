@@ -1,10 +1,10 @@
 // Hydra Desk 2: this copy of AgentHydra's window runs inside Desk 2, in a frame at /ah/?embed=desk. It has
-// no Sessions tab (Michael, 2026-10-04): Desk's cloud list is the session list and Desk's own view shows a
+// no Sessions tab (the other owner, 2026-10-04): Desk's cloud list is the session list and Desk's own view shows a
 // session, with AgentHydra's session header over it. So "open this chat" (the Instances move dialog, the
 // landing page's session tiles) is asked of Desk, which slides back and opens it. Messages go only to the
 // parent window on this same origin; their shapes are desk2/shared/hydra-embed.ts.
 //
-// Desk also owns the one sidebar (Michael, 2026-10-04: "we only have two things, the sidebar and the
+// Desk also owns the one sidebar (the other owner, 2026-10-04: "we only have two things, the sidebar and the
 // content"): a tab with a list of its own (HSwarm's tree) describes it with useDeskSidebar and hides its
 // own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask for an
 // account's row in Instances (its session header's account chip), a CliMayte task or an HSwarm job (its
@@ -125,12 +125,15 @@ export function useDeskSidebar(
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: InstanceTableKind } | null>(null)
-/** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the
- *  job on its Jobs node and clears the ask). */
+/** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the job on
+ *  its Jobs node and clears the ask). */
 export const deskSwarmAsk = ref<{ job?: string } | null>(null)
 /** Desk asked for a CliMayte task (App.vue shows the CliMayte node of the HSwarm tab; CliMayteView opens
  *  it once its list is in and clears the ask); `pc` names another PC's. */
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
+/** Desk asked for the Tools tab, or for one of its pages (App.vue switches tab; ToolsView selects the key
+ *  and clears the ask). */
+export const toolsAsk = ref<{ key?: string } | null>(null)
 
 /** The row of instance #num of this kind once the tab shows it, or null after `ms`; never one in the tab
  *  fading out (App.vue's view Transition keeps it mounted while the next comes in). */
@@ -208,6 +211,17 @@ function setDeskHidden(next: boolean): void {
 if (EMBEDDED) {
   watchDeskVisibility()
   document.addEventListener('mousedown', onTitleBarDown)
+  // A click on Desk never reaches this document, so a menu open here stayed open over it: reka's layers close on a
+  // pointerdown heard here. Focus going to Desk's own page is that click as this document sees it
+  // (desk2/web/src/lib/frame-dismiss.ts is the same the other way round). Focus going to another app closes nothing.
+  window.addEventListener('blur', () =>
+    window.setTimeout(() => {
+      if (window.parent.document.hasFocus())
+        document.documentElement.dispatchEvent(
+          new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', button: 0 }),
+        )
+    }, 0),
+  )
   // The tab on screen's sidebar, sent whenever it changes (the tab, or what its build reads). It is not
   // held back while the pane is out of view: a tree that changes then (a Desk ask switched the tab) would
   // leave Desk drawing the old one for a moment when the pane slides back in.
@@ -220,6 +234,7 @@ if (EMBEDDED) {
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
     else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
+    else if (m.type === 'desk:open-tools') toolsAsk.value = { key: m.key }
     else if (m.type === 'desk:settings-changed') void useAppSettings().load()
     else if (m.type === 'desk:visible') {
       setDeskHidden(!m.visible)

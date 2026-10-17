@@ -1,6 +1,6 @@
 """Cold history: nothing hswarm records is deleted; what is past its working life is packed, one archive a day.
 
-Owner, Michael, 2026-10-02, on whether job archives should be kept 14 days or 7: "Ideally, we would keep all of it,
+Owner, 2026-10-02, on whether job archives should be kept 14 days or 7: "Ideally, we would keep all of it,
 and you would just figure out a way to properly compress or something. We're not low on space, and I'd like you to
 be able to learn from previous experience." Before this, `maintain` deleted job archives past 14 days (449 jobs went
 on 2026-10-02), spill files past a day (14,895 files, about 3.2 GiB) and cc workers' own transcripts past 2 days.

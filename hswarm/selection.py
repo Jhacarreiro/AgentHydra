@@ -29,7 +29,7 @@ PROFILES = {
 # there first, ahead of every paid route.
 #
 # `production` is the DEFAULT because the unmarked case is the dangerous one: an agent that forgets the field gets
-# a paid route (safe, a few cents), never a terms-breaching one. Owner, Michael, 2026-09-29, on the free tier:
+# a paid route (safe, a few cents), never a terms-breaching one. Owner, 2026-09-29, on the free tier:
 # "I'm not gonna flag off it or disable it if it functions. However, you can certainly wire in route capabilities
 # ... and then route it to where you think or need it should go."
 PURPOSES = {
@@ -89,7 +89,7 @@ def profile_for(role=None, tools="none"):
     return "general" if config.is_tool_free(tools) else "code"
 
 
-# Owner, Michael, 2026-09-25: "When something is out of keys, we always advance to the next model in the list
+# Owner, 2026-09-25: "When something is out of keys, we always advance to the next model in the list
 # instead of just... stop." An evaluated model's same-provider siblings are the last legs of its plan: a provider
 # rate-limits each model on its own (Gemini's per-model, per-region quota saturated 3.8 Flash that afternoon while
 # 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite all answered), so a task advances onto them instead of dying. They carry

@@ -17,7 +17,7 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { duplicateSession, moveCodexSession, moveSession, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
+import { copyTitle, duplicateSession, moveCodexSession, moveSession, settingsMissed, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
 import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -82,6 +82,7 @@ import {
   accountFace,
   accountMenu,
   accountNum,
+  bulkMenu,
   chatRow,
   childrenByRow,
   entryKey,
@@ -102,12 +103,14 @@ import {
   withThreads,
   recordCloudOrder,
   recordDeskOrder,
+  sortGroups,
   moveTarget,
   parseFilter,
   projectOfGroup,
   resumeCommand,
   revealChat,
   rowIdentity,
+  lastActionLine,
   rowPatch,
   runningSessionIds,
   deskGlyphs,
@@ -123,14 +126,17 @@ import {
   type StatusGlyph,
   type SidebarFilter,
   type SidebarGroups,
-  emptyListText
+  emptyListText,
+  UNASSIGNED
 } from './logic'
 import { useSidebarOrder } from './order'
+import { useSidebarSort, type RowFacts } from './sort'
 import { chatServices } from './services'
 import { useHiddenGroups } from './hidden'
 import { compactSidebar } from './compact'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem } from './menuClasses'
 import { useRowDrag } from './rowDrag'
+import { NO_PICKS, pickClick, prunePicks, type Picks } from './picked'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
 
 // The real sidebar: 288 wide on #111111, 36px left free at the top for the chrome bar, the New row (the
@@ -217,10 +223,20 @@ function onCloudSearchKey(e: KeyboardEvent) {
   }
 }
 
-// The order rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; rows are dragged into the
+// The order rows keep (the owner, 2026-10-04: sending a message must not reorder the list; rows are dragged into the
 // order wanted), the one the cloud list keeps too (order.ts). New ones join at the top. Folder groups are not kept
 // in it: they are listed A-Z (logic.ts sortFolders).
 const { order, save: saveOrder } = useSidebarOrder()
+// The rows' order (sidebar/sort.ts, the owner's 2026-10-17 ask): the choice the Filter menu's Sort by sets, shared with the
+// cloud list. A Desk chat starts when it was created; an outside session starts as the cloud store's row for it says (the
+// store fetches the list with the cloud off too), else at its own last activity.
+const { sort: sortMode } = useSidebarSort()
+const cloudById = computed(() => new Map(cloud.sessions.value.map((r) => [r.id, r])))
+const sortFacts = (e: SidebarEntry): RowFacts => {
+  const row = e.kind === 'chat' ? undefined : cloudById.value.get(e.id)
+  const started = e.kind === 'chat' ? e.chat.createdAt : (row?.createdAt ?? e.session.lastActivityAt)
+  return { title: (e.kind === 'chat' ? e.chat : e.session).title ?? '', started: started ?? null, activity: e.at }
+}
 
 // While AgentHydra is open, a tab of it with a sidebar of its own (HSwarm's tree) has it drawn here.
 const hydraModel = computed(() => hydraShown.value?.model ?? null)
@@ -266,9 +282,10 @@ const ownGroups = computed<ChatGroup[]>(() => {
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active' || deskPcs.value !== null || activeOnly.value)
-// Rows drag to another place in their own group (rowDrag.ts); not while a search or a filter narrows the list.
+// Rows drag to another place in their own group (rowDrag.ts); only in Manual, where the order dragged into is the one
+// shown (the other sorts would undo a drag at once), and not while a search or a filter narrows the list.
 const rowDrag = useRowDrag()
-const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
+const rowsDraggable = (g: ChatGroup) => sortMode.value === 'manual' && !filtering.value && g.key !== 'archived'
 const rowLeave = leaveUnlessFiltered([query, filter, deskPcs])
 const emptyText = computed(() =>
   emptyListText({ searching: query.value.trim() !== '', hiddenOut: !!groups.value.hiddenOut, filter: filter.value, activeOnly: activeOnly.value })
@@ -319,7 +336,10 @@ const remoteRows = computed(() => {
   return new Map(cloud.sessions.value.filter((r) => ids.has(r.id)).map((r) => [r.id, r]))
 })
 const cloudSearching = computed(() => cloud.on.value && cloud.searching.value && cloud.search.value.trim() !== '')
-const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && cloud.selectMode.value))
+// Also while a filter only the cloud list applies (Archived, Queued work, Session shape, ...) is changed: the desk list
+// cannot apply it, so it would change nothing on screen (owner, 2026-10-17: "I chose only archived. It's not showing
+// archived"). Back at their defaults, the desk list is drawn again.
+const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && (cloud.selectMode.value || cloud.narrowed.value)))
 /** The CloudList is what the sidebar draws: the template's chain puts Hydra's tree and the dev servers first. */
 const cloudShown = computed(() => cloudListShown.value && !hydraModel.value && !devServers.on.value)
 
@@ -362,7 +382,12 @@ function nestAll(): NestedTasks | null {
 /** The rows added for running work no drawn row lists (tasks.ts AddedRow), by id. */
 const addedRows = computed(() => new Map((nesting.value?.added ?? []).map((a) => [a.id, a])))
 /** The added row a row key (`external:` or `cloud:`, then its id) is, if any: among the threads (every one), and among the drawn ones. */
-const threadAddedAt = (key: string) => (threadNesting.value?.added ?? []).find((a) => a.id === key.slice(key.indexOf(':') + 1))
+const threadAddedById = computed(() => {
+  const out = new Map<string, AddedRow>()
+  for (const a of threadNesting.value?.added ?? []) if (!out.has(a.id)) out.set(a.id, a)
+  return out
+})
+const threadAddedAt = (key: string) => threadAddedById.value.get(key.slice(key.indexOf(':') + 1))
 const tasksOf = (key: string) => threadNesting.value?.byRow.get(key) ?? threadAddedAt(key)?.nodes ?? null
 const jobsOf = (key: string) => threadNesting.value?.jobsByRow.get(key) ?? threadAddedAt(key)?.jobs ?? null
 /** An added row that is itself a running HSwarm job no chat is known to have called: its dot pulses blue and a folded heading counts it with the jobs. */
@@ -393,8 +418,9 @@ const deskShown = computed<SidebarGroups>(() => {
   return { ...g, folders: others.length ? addRemoteToDeskGroups(withAdded, others, placing) : withAdded }
 })
 /** The desk list's groups before Active only leaves rows out: a row's threads count the nested rows among them, drawn or not. */
+const sortedDesk = computed(() => sortGroups(deskShown.value, sortMode.value, sortFacts))
 const allGroups = computed<ChatGroup[]>(() => {
-  const g = deskShown.value
+  const g = sortedDesk.value
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const groupList = computed<ChatGroup[]>(() => (activeOnly.value ? onlyActive(allGroups.value, entryGlyph) : allGroups.value))
@@ -420,6 +446,9 @@ const foldOf = (key: string) => {
   const open = !folded.value.has(key)
   return { count: kids.length, open, running: !open && kids.some(entryRunning), needsYou: !open && kids.some((e) => entryGlyph(e).tone === 'warning') }
 }
+/** Each drawn row's fold button and sub-items, by row key: built once per change, since a row's template reads them several times. */
+const rowParts = computed(() => new Map(drawnList.value.flatMap((g) => g.entries.map((e) => [entryKey(e), { fold: foldOf(entryKey(e)), sub: rowSub(entryKey(e)) }] as const))))
+const partsOf = (e: SidebarEntry) => rowParts.value.get(entryKey(e))
 /** A group's icon: its Project Hydra project's icon, or null for none (projectOfGroup). The cloud list uses it too. */
 const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
 /** Each group's heading icon, by group key. */
@@ -458,8 +487,8 @@ watch(
   },
   { immediate: true }
 )
-// The cloud list as drawn (cloudListShown): a search's answer, AgentHydra's best matches, or the list Select multiple
-// sessions ticks rows in.
+// The cloud list as drawn (cloudListShown): a search's answer, AgentHydra's best matches, the list Select multiple
+// sessions ticks rows in, or the list a cloud-only filter narrows.
 const cloudGroups = computed(() => {
   const groups = cloud.groups.value
   if (!activeOnly.value) return groups
@@ -642,7 +671,8 @@ function onSearchKey(e: KeyboardEvent) {
 // Row actions: one menu for our chats and outside sessions. A chat's marks are the chat's; an outside
 // session's are Hydra Desk's overlay on it (its own files are never touched, so it has no Delete).
 type Row = { kind: 'chat'; chat: ChatSummary } | { kind: 'external'; session: ExternalSession }
-const deleting = ref<ChatSummary | null>(null)
+/** The chats Delete asks about: one row's, or the picked rows' (bulkMenu). */
+const deleting = ref<ChatSummary[] | null>(null)
 const groupNames = computed(() => groupChoices(src.chats.value, onPcs.value.external))
 const stateOf = (row: Row): RowState => (row.kind === 'chat' ? chatRow(row.chat) : externalRow(row.session))
 // A row action that failed says so under the list, with the server's reason, until the next one.
@@ -665,12 +695,12 @@ function act(row: Row, item: RowMenuItem) {
   const patch = rowPatch(item, state)
   if (patch) return mark(row, patch)
   if (item.action === 'stop' && row.kind === 'chat') attempt('Stop', src.interrupt(row.chat.id))
-  else if (item.action === 'delete' && row.kind === 'chat') deleting.value = row.chat
+  else if (item.action === 'delete' && row.kind === 'chat') deleting.value = [row.chat]
   else if (item.action === 'fork') attempt('Fork', row.kind === 'chat' ? src.forkChat(row.chat.id) : src.forkExternal(row.session.id))
   else if (item.action === 'pinService' && row.kind === 'chat') attempt('Pin service', src.updateChat(row.chat.id, { service: pinned(item.value) }))
   else if (item.action === 'newGroup') {
     groupDraft.value = ''
-    naming.value = row
+    naming.value = [row]
   } else if (item.action === 'reveal') attempt('Opening the folder', src.revealFolder(state.cwd))
   else if (item.action === 'copyResume' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(resumeCommand(state.sessionId)))
   else if (item.action === 'copySessionId' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(state.sessionId))
@@ -695,54 +725,91 @@ function noteRow(text: string | null, forMs = 0) {
 }
 onBeforeUnmount(() => rowNoteTimer && clearTimeout(rowNoteTimer))
 const codexBusy = (s: ExternalSession) => s.source === 'codex' && (s.status === 'working' || s.status === 'needs_you')
+const BUSY_MOVE = 'Another move is still running. Try again when it ends.'
+const reasonOf = (err: unknown) => (err instanceof Error ? err.message : String(err))
+/** How one move, unassign or copy went: the note the list shows for a while, or why it did not happen. */
+type MoveOutcome = { ok: true; note: string; forMs: number } | { ok: false; error: string }
+/** The end of every move: the lock off, and the accounts and the cloud list read again. */
+function settleMove() {
+  moving.value = false
+  void refreshAhInstances(true)
+  if (cloud.on.value) void cloud.refresh()
+}
+/** One session to the account `ref` names (`label` in the notes), with no note or lock of its own: Move to account, one row or many. */
+async function moveOne(sessionId: string, ref: string, label: string): Promise<MoveOutcome> {
+  const codex = ref.startsWith('codex:')
+  // The mover refuses a chat with an unfinished turn; this says so before any call.
+  if (codex && src.external.value.some((s) => s.id === sessionId && codexBusy(s))) return { ok: false, error: 'it is still working in Codex. Let the turn finish, then move it.' }
+  const before = src.external.value.find((s) => s.id === sessionId)
+  try {
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; settingsInApp?: { ok: boolean; effort: string; ultracode: boolean; permissionMode: string | null; reason?: string }; stoppedCommands?: string[]; restored?: boolean; destinationThreadId?: string } = codex
+      ? await moveCodexSession(sessionId, ref, { unassigned: !!before?.unassigned })
+      : await moveSession(sessionId, ref)
+    if (!x.ok) return { ok: false, error: x.error ?? 'AgentHydra did not say why' }
+    const stopped = x.stoppedCommands?.length
+      ? ` Archiving the original stopped ${x.stoppedCommands.length === 1 ? 'a command' : `${x.stoppedCommands.length} commands`} it still ran: ${x.stoppedCommands.map((c) => (c.length > 60 ? `${c.slice(0, 60)}…` : c)).join('; ')}.`
+      : ''
+    // Out of the holding area: it is on an account now.
+    if (before?.unassigned) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
+    // A Codex move makes a new chat (a new id): the note goes with it.
+    if (before?.note && x.destinationThreadId) await src.updateSessionMeta(x.destinationThreadId, { note: before.note }).catch(() => {})
+    const missed = settingsMissed(x)
+    const note = x.restored
+      ? `Back on ${label}.${missed}`
+      : x.sourceStillShown?.length
+        ? `Moved to ${label}. An old account still lists it.${missed}`
+        : `Moved to ${label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}${missed}`
+    return { ok: true, note, forMs: stopped || missed ? 15000 : 8000 }
+  } catch (err) {
+    return { ok: false, error: reasonOf(err) }
+  }
+}
 async function moveToAccount(sessionId: string, title: string, item: RowMenuItem) {
   if (!item.value) return
   if (moving.value) {
-    rowError.value = 'Another move is still running. Try again when it ends.'
-    return
-  }
-  const codex = item.value.startsWith('codex:')
-  // The mover refuses a chat with an unfinished turn; this says so before any call.
-  if (codex && src.external.value.some((s) => s.id === sessionId && codexBusy(s))) {
-    rowError.value = 'Move failed: it is still working in Codex. Let the turn finish, then move it.'
+    rowError.value = BUSY_MOVE
     return
   }
   moving.value = true
   rowError.value = null
   noteRow(`Moving “${title}” to ${item.label}…`)
-  const before = src.external.value.find((s) => s.id === sessionId)
   try {
-    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; stoppedCommands?: string[]; restored?: boolean; destinationThreadId?: string } = codex
-      ? await moveCodexSession(sessionId, item.value, { unassigned: !!before?.unassigned })
-      : await moveSession(sessionId, item.value)
-    const stopped = x.stoppedCommands?.length
-      ? ` Archiving the original stopped ${x.stoppedCommands.length === 1 ? 'a command' : `${x.stoppedCommands.length} commands`} it still ran: ${x.stoppedCommands.map((c) => (c.length > 60 ? `${c.slice(0, 60)}…` : c)).join('; ')}.`
-      : ''
-    if (!x.ok) {
+    const x = await moveOne(sessionId, item.value, item.label)
+    if (x.ok) noteRow(x.note, x.forMs)
+    else {
       noteRow(null)
-      rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
-    } else {
-      // Out of the holding area: it is on an account now.
-      if (before?.unassigned) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
-      // A Codex move makes a new chat (a new id): the note goes with it.
-      if (before?.note && x.destinationThreadId) await src.updateSessionMeta(x.destinationThreadId, { note: before.note }).catch(() => {})
-      noteRow(
-        x.restored
-          ? `Back on ${item.label}.`
-          : x.sourceStillShown?.length
-            ? `Moved to ${item.label}. An old account still lists it.`
-            : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`,
-        stopped ? 15000 : 8000
-      )
+      rowError.value = `Move failed: ${x.error}`
     }
-  } catch (err) {
-    noteRow(null)
-    rowError.value = `Move failed: ${err instanceof Error ? err.message : String(err)}`
   } finally {
-    moving.value = false
-    void refreshAhInstances(true)
-    if (cloud.on.value) void cloud.refresh()
+    settleMove()
   }
+}
+
+/**
+ * Move to account, Unassigned or Duplicate to account on the picked rows (bulkMenu): one at a time, as AgentHydra takes
+ * them, the list saying which one it is on; then how many went, and each that did not with its reason.
+ */
+async function moveEach(jobs: { title: string; run: () => Promise<MoveOutcome> }[], doing: (n: number, of: number) => string, done: (n: number, of: number) => string) {
+  if (!jobs.length) return
+  if (moving.value) {
+    rowError.value = BUSY_MOVE
+    return
+  }
+  moving.value = true
+  rowError.value = null
+  const failed: string[] = []
+  try {
+    for (const [i, job] of jobs.entries()) {
+      noteRow(doing(i + 1, jobs.length))
+      const x = await job.run()
+      if (!x.ok) failed.push(`“${job.title}”: ${x.error}`)
+    }
+  } finally {
+    settleMove()
+  }
+  const went = jobs.length - failed.length
+  noteRow(went ? done(went, jobs.length) : null, 8000)
+  if (failed.length) rowError.value = `${failed.length} of ${jobs.length} failed. ${failed.join('; ')}`
 }
 
 /**
@@ -750,37 +817,42 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
  * first, so the list keeps it however old, then archived in its account's app, as a move retires its old copy. A refusal
  * takes the mark back. It waits in the Unassigned group until Move to account lands it on an account.
  */
+/** One session off its account, with no note or lock of its own: Unassigned, one row or many. */
+async function unassignOne(s: ExternalSession, state: RowState): Promise<MoveOutcome> {
+  // Archiving a Codex chat would stop its turn, so AgentHydra refuses it; this says so before any call.
+  if (codexBusy(s)) return { ok: false, error: 'it is still working in Codex. Let the turn finish first.' }
+  const num = accountNum(state.account, accountChoices.value)
+  const ref = num != null ? (accountChoices.value?.find((a) => a.num === num)?.ref ?? null) : null
+  const failed = async (why: string): Promise<MoveOutcome> => {
+    await src.updateSessionMeta(s.id, { unassigned: false }).catch(() => {})
+    return { ok: false, error: why }
+  }
+  try {
+    await src.updateSessionMeta(s.id, { unassigned: true, archived: false })
+    const x = s.source === 'codex' ? await unassignCodexSession(s.id) : await unassignSession(s.id, ref)
+    if (!x.ok) return await failed(x.error)
+    return { ok: true, note: x.stillShown ? 'Unassigned. Its old account’s app shows it until that app restarts.' : 'Unassigned. It waits there until you move it to an account.', forMs: 8000 }
+  } catch (err) {
+    return await failed(reasonOf(err))
+  }
+}
 async function unassign(s: ExternalSession, state: RowState) {
   if (moving.value) {
-    rowError.value = 'Another move is still running. Try again when it ends.'
-    return
-  }
-  // Archiving a Codex chat would stop its turn, so AgentHydra refuses it; this says so before any call.
-  if (codexBusy(s)) {
-    rowError.value = 'Unassign failed: it is still working in Codex. Let the turn finish first.'
+    rowError.value = BUSY_MOVE
     return
   }
   moving.value = true
   rowError.value = null
   noteRow(`Taking “${s.title}” off its account…`)
-  const num = accountNum(state.account, accountChoices.value)
-  const ref = num != null ? (accountChoices.value?.find((a) => a.num === num)?.ref ?? null) : null
-  const failed = async (why: string) => {
-    await src.updateSessionMeta(s.id, { unassigned: false }).catch(() => {})
-    noteRow(null)
-    rowError.value = `Unassign failed: ${why}`
-  }
   try {
-    await src.updateSessionMeta(s.id, { unassigned: true, archived: false })
-    const x = s.source === 'codex' ? await unassignCodexSession(s.id) : await unassignSession(s.id, ref)
-    if (!x.ok) await failed(x.error)
-    else noteRow(x.stillShown ? 'Unassigned. Its old account’s app shows it until that app restarts.' : 'Unassigned. It waits there until you move it to an account.', 8000)
-  } catch (err) {
-    await failed(err instanceof Error ? err.message : String(err))
+    const x = await unassignOne(s, state)
+    if (x.ok) noteRow(x.note, x.forMs)
+    else {
+      noteRow(null)
+      rowError.value = `Unassign failed: ${x.error}`
+    }
   } finally {
-    moving.value = false
-    void refreshAhInstances(true)
-    if (cloud.on.value) void cloud.refresh()
+    settleMove()
   }
 }
 
@@ -788,46 +860,50 @@ async function unassign(s: ExternalSession, state: RowState) {
  * Duplicate to account (owner, 2026-10-13): a second chat with the whole conversation, landed on the account picked; the
  * original stays where it is. A copy that could not land waits in Unassigned, so it is never lost on no account.
  */
+/** One copy of a session on the account `ref` names (`label` in the notes), with no note or lock of its own: Duplicate to account, one row or many. */
+async function duplicateOne(sessionId: string, ref: string, label: string): Promise<MoveOutcome> {
+  const codex = ref.startsWith('codex:')
+  const s = src.external.value.find((r) => r.id === sessionId)
+  if (codex && s && codexBusy(s)) return { ok: false, error: 'it is still working in Codex. Let the turn finish, then duplicate it.' }
+  try {
+    if (codex) {
+      // AgentHydra's Codex move with the original kept: the copy is a new chat on that account. Codex gives it the
+      // original's name, so the list names it "<title> (copy)", as a desktop copy is named: two rows of one name read as
+      // a move that went wrong (owner, 2026-10-14: "two of the same named chat ... for no reason").
+      const x = await moveCodexSession(sessionId, ref, { keepSource: true, unassigned: !!s?.unassigned })
+      if (!x.ok) return { ok: false, error: x.error ?? 'AgentHydra did not say why' }
+      const title = copyTitle(s?.title)
+      const named = x.destinationThreadId ? await src.updateSessionMeta(x.destinationThreadId, { title }).then(() => true, () => false) : false
+      return named
+        ? { ok: true, note: `Duplicated to ${label} as “${title}”. It is in that Codex app now.`, forMs: 8000 }
+        : { ok: true, note: `Duplicated to ${label} under the original’s name. It is in that Codex app now.`, forMs: 15000 }
+    }
+    const x = await duplicateSession(sessionId, ref)
+    if (x.ok) return { ok: true, note: `Duplicated to ${label} as “${x.title}”.`, forMs: 8000 }
+    if (x.copyId) await src.updateSessionMeta(x.copyId, { unassigned: true }).catch(() => {})
+    return { ok: false, error: `${x.error ?? 'AgentHydra did not say why'}${x.copyId ? ' The copy waits in Unassigned.' : ''}` }
+  } catch (err) {
+    return { ok: false, error: reasonOf(err) }
+  }
+}
 async function duplicate(sessionId: string, title: string, item: RowMenuItem) {
   if (!item.value) return
   if (moving.value) {
-    rowError.value = 'Another move is still running. Try again when it ends.'
-    return
-  }
-  const codex = item.value.startsWith('codex:')
-  const s = src.external.value.find((r) => r.id === sessionId)
-  if (codex && s && codexBusy(s)) {
-    rowError.value = 'Duplicate failed: it is still working in Codex. Let the turn finish, then duplicate it.'
+    rowError.value = BUSY_MOVE
     return
   }
   moving.value = true
   rowError.value = null
   noteRow(`Duplicating “${title}” to ${item.label}…`)
   try {
-    if (codex) {
-      // AgentHydra's Codex move with the original kept: the copy is a new chat on that account, under the same name.
-      const x = await moveCodexSession(sessionId, item.value, { keepSource: true, unassigned: !!s?.unassigned })
-      if (x.ok) noteRow(`Duplicated to ${item.label}. It is in that Codex app now.`, 8000)
-      else {
-        noteRow(null)
-        rowError.value = `Duplicate failed: ${x.error ?? 'AgentHydra did not say why'}`
-      }
-      return
-    }
-    const x = await duplicateSession(sessionId, item.value)
-    if (x.ok) noteRow(`Duplicated to ${item.label} as “${x.title}”.`, 8000)
+    const x = await duplicateOne(sessionId, item.value, item.label)
+    if (x.ok) noteRow(x.note, x.forMs)
     else {
-      if (x.copyId) await src.updateSessionMeta(x.copyId, { unassigned: true }).catch(() => {})
       noteRow(null)
-      rowError.value = `Duplicate failed: ${x.error ?? 'AgentHydra did not say why'}${x.copyId ? ' The copy waits in Unassigned.' : ''}`
+      rowError.value = `Duplicate failed: ${x.error}`
     }
-  } catch (err) {
-    noteRow(null)
-    rowError.value = `Duplicate failed: ${err instanceof Error ? err.message : String(err)}`
   } finally {
-    moving.value = false
-    void refreshAhInstances(true)
-    if (cloud.on.value) void cloud.refresh()
+    settleMove()
   }
 }
 
@@ -891,6 +967,7 @@ function cloudMenu(r: CloudSession): RowMenuEntry[] {
     const accounts = r.source === 'codex' ? codexAccountChoices.value : accountChoices.value
     const out: RowMenuEntry[] = [
       rowIdentity(r.id, account, accounts),
+      lastActionLine(r.lastActivityAt),
       'separator',
       { action: 'open', label: 'Open' },
       'separator',
@@ -948,22 +1025,127 @@ function externalMenu(id: string): RowMenuEntry[] | undefined {
   return other ? cloudMenu(other) : undefined
 }
 
-// Move to group > New group…: a name, then the row moves there.
-const naming = ref<Row | null>(null)
+// Move to group > New group…: a name, then the row (or every picked row) moves there.
+const naming = ref<Row[] | null>(null)
 const groupDraft = ref('')
 const GROUP_MAX = 60
 const groupName = computed(() => groupDraft.value.trim())
 function confirmGroup() {
-  const row = naming.value
+  const rows = naming.value
   naming.value = null
-  if (row && groupName.value && groupName.value.length <= GROUP_MAX) mark(row, { group: moveTarget(stateOf(row), groupName.value) })
+  if (!rows || !groupName.value || groupName.value.length > GROUP_MAX) return
+  for (const row of rows) mark(row, { group: moveTarget(stateOf(row), groupName.value) })
 }
 function confirmDelete() {
-  const chat = deleting.value
+  const chats = deleting.value
   deleting.value = null
-  if (!chat) return
-  if (selectedChatId.value === chat.id) src.select({ kind: 'new' })
-  attempt('Delete', src.removeChat(chat.id))
+  if (!chats) return
+  if (chats.some((c) => c.id === selectedChatId.value)) src.select({ kind: 'new' })
+  for (const chat of chats) attempt('Delete', src.removeChat(chat.id))
+}
+
+// Rows picked together: Ctrl (Cmd) or Shift and a click (picked.ts; owner, 2026-10-14: "multi-select so I can right-click
+// and transfer or do potentially more relevant actions with the right-click menu"). Two or more picked, a right-click or
+// the three dots on any of them opens one menu for all (bulkMenu); a plain click, Escape or a right-click on a row not
+// picked leaves them. A row added for running work and another PC's row the cloud added are not sessions of this list,
+// so they are never picked. The picks are only rows drawn: a filter, a search, a fold or an archive takes rows out.
+const picks = ref<Picks>(NO_PICKS)
+const pickable = (e: SidebarEntry) => e.kind === 'chat' || (!isAddedRow(e.id) && !remoteRows.value.has(e.id))
+const pickOrder = computed(() =>
+  [...new Set(drawnList.value.flatMap((g) => (compactSidebar.value || !collapsed.value.has(g.key) ? g.entries.filter(pickable).map(entryKey) : [])))]
+)
+watch(pickOrder, (order) => (picks.value = prunePicks(picks.value, order)))
+const openKey = computed(() => (selectedChatId.value ? `chat:${selectedChatId.value}` : selectedExternalId.value ? `external:${selectedExternalId.value}` : null))
+/** A row's picked look: null while none is picked, so the open row shows as it always has. */
+const pickedOf = (e: SidebarEntry): boolean | null => (picks.value.keys.size ? picks.value.keys.has(entryKey(e)) : null)
+/** The picked rows as drawn, top to bottom; none until two are picked (one picked row's menu is its own). */
+const pickedRows = computed<Row[]>(() => {
+  const keys = picks.value.keys
+  if (keys.size < 2) return []
+  const out = new Map<string, Row>()
+  for (const e of drawnList.value.flatMap((g) => g.entries))
+    if (keys.has(entryKey(e)) && !out.has(entryKey(e))) out.set(entryKey(e), e.kind === 'chat' ? { kind: 'chat', chat: e.chat } : { kind: 'external', session: e.session })
+  return [...out.values()]
+})
+const bulkEntries = computed(() => (pickedRows.value.length >= 2 ? bulkMenu(pickedRows.value.map(stateOf), groupNames.value, accountChoices.value, codexAccountChoices.value) : null))
+/** The menu a picked row shows while two or more are picked; undefined for any other row (its own menu). */
+const bulkMenuOf = (e: SidebarEntry): RowMenuEntry[] | undefined => (bulkEntries.value && picks.value.keys.has(entryKey(e)) ? bulkEntries.value : undefined)
+/** A row's click or Enter: with Ctrl or Shift it picks rows; otherwise it leaves the picks and opens the row. */
+function clickRow(entry: SidebarEntry, e: MouseEvent | KeyboardEvent, open: () => void) {
+  const next = pickClick(picks.value, entryKey(entry), { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey }, pickOrder.value, openKey.value)
+  if (next) {
+    picks.value = next
+    return
+  }
+  picks.value = { keys: new Set(), anchor: entryKey(entry) }
+  open()
+}
+/** A right-click on a row not picked is for that row alone, as in Explorer: the picks go. */
+function contextRow(entry: SidebarEntry) {
+  if (picks.value.keys.size && !picks.value.keys.has(entryKey(entry))) picks.value = NO_PICKS
+}
+function clearPicks(e: KeyboardEvent) {
+  if (!picks.value.keys.size || e.defaultPrevented) return
+  picks.value = NO_PICKS
+}
+/** A row's menu item: on every picked row when its menu was the picked rows' (bulkMenuOf), else on the row alone. */
+function rowAction(entry: SidebarEntry, item: RowMenuItem, own: () => void) {
+  if (bulkMenuOf(entry)) bulkAct(pickedRows.value, item)
+  else own()
+}
+const titleOf = (row: Row) => (row.kind === 'chat' ? row.chat.title : row.session.title)
+/**
+ * The picked rows a Move to account or Duplicate to account item can take: those that move to that kind of account,
+ * a move leaving out each already on it and a Codex copy each whose original is on it (the mover copies between two homes).
+ */
+function headedTo(rows: Row[], item: RowMenuItem, copy: boolean) {
+  const codex = !!item.value?.startsWith('codex:')
+  const accounts = (codex ? codexAccountChoices : accountChoices).value
+  const target = accounts?.find((a) => a.ref === item.value)?.num ?? null
+  return rows.flatMap((row) => {
+    const state = stateOf(row)
+    if (state.movable !== (codex ? 'codex' : 'desktop')) return []
+    const on = target !== null && accountNum(state.account, accounts) === target
+    return (copy ? codex && on : on && !state.unassigned) ? [] : [{ row, state }]
+  })
+}
+/** A bulkMenu item, run on every picked row it fits: a mark on each, the account moves one after another. */
+function bulkAct(rows: Row[], item: RowMenuItem) {
+  const ref = item.value
+  if (item.action === 'moveToAccount' && ref)
+    void moveEach(
+      headedTo(rows, item, false).map(({ row, state }) => ({ title: titleOf(row), run: () => moveOne(state.id, ref, item.label) })),
+      (n, of) => `Moving ${n} of ${of} to ${item.label}…`,
+      (n, of) => `Moved ${n} of ${of} to ${item.label}.`
+    )
+  else if (item.action === 'duplicateToAccount' && ref)
+    void moveEach(
+      headedTo(rows, item, true).map(({ row, state }) => ({ title: titleOf(row), run: () => duplicateOne(state.id, ref, item.label) })),
+      (n, of) => `Duplicating ${n} of ${of} to ${item.label}…`,
+      (n, of) => `Duplicated ${n} of ${of} to ${item.label}.`
+    )
+  else if (item.action === 'unassign')
+    void moveEach(
+      rows.flatMap((row) => {
+        const state = stateOf(row)
+        return row.kind === 'external' && state.movable && !state.unassigned ? [{ title: titleOf(row), run: () => unassignOne(row.session, state) }] : []
+      }),
+      (n, of) => `Taking ${n} of ${of} off their accounts…`,
+      (n, of) => `Unassigned ${n} of ${of}. They wait there until you move them to an account.`
+    )
+  else if (item.action === 'delete') {
+    const chats = rows.flatMap((row) => (row.kind === 'chat' ? [row.chat] : []))
+    if (chats.length) deleting.value = chats
+  } else if (item.action === 'newGroup') {
+    groupDraft.value = ''
+    naming.value = rows
+  } else if (item.action === 'copySessionId') {
+    const ids = rows.flatMap((row) => stateOf(row).sessionId ?? [])
+    if (ids.length) attempt('Copy', navigator.clipboard.writeText(ids.join('\n')))
+  } else if (item.action === 'stop') {
+    // Offered while any picked row runs a turn: only those are stopped.
+    for (const row of rows) if (stateOf(row).stoppable) act(row, item)
+  } else for (const row of rows) act(row, item)
 }
 
 // Footer
@@ -1127,7 +1309,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
       </Tip>
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
-      <div class="min-h-0 flex-1 overflow-y-auto pe-0.5 pt-1 [scrollbar-width:none]">
+      <div class="min-h-0 flex-1 overflow-y-auto pe-0.5 pt-1 [scrollbar-width:none]" @keydown.escape="clearPicks">
         <div v-if="searchOpen && !hydraModel && !devServers.on.value" class="mb-1 flex h-6.5 items-center gap-1 rounded-(--radius-6) bg-fill-5 px-0.5">
           <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="icons.search" class="size-4" /></span>
           <input
@@ -1164,6 +1346,14 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               @click="toggleGroup(group.key)"
             >
               <img v-if="groupIcons.get(group.key)" :src="groupIcons.get(group.key)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
+              <!-- No project icon: its first letter in a tile the icon's size (owner, 2026-10-15: "desktop would have, like, a
+                   small D icon. Unassigned can just have no icon"). -->
+              <span
+                v-else-if="group.key !== UNASSIGNED && group.label.trim()"
+                aria-hidden="true"
+                class="me-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-(--radius-4) bg-(--fill-secondary) text-[9px] leading-none font-semibold text-text-2"
+                data-testid="group-letter"
+              >{{ group.label.trim().charAt(0).toUpperCase() }}</span>
               <span class="truncate">{{ group.label }}</span>
               <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
               <component
@@ -1222,8 +1412,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <ReuseGroupHead :group="group" />
           </header>
           </span>
-          <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. -->
-          <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
+          <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. Under a header the
+               rows sit 14px in (about 5% of the sidebar), so a chat led by a person's photo never reads as another project's
+               heading (owner, 2026-10-16). -->
+          <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :class="!compactSidebar && 'ps-3.5'" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
               :key="`${entry.kind}:${src.rowKeyOf?.(entry.id) ?? entry.id}`"
@@ -1235,39 +1427,43 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               @dragover="rowsDraggable(group) && rowDrag.onOver($event, group.key, entry.id)"
               @drop="rowsDraggable(group) && rowDrag.drop($event, group.key, group.entries.map((e) => e.id), entry.id)"
               @dragend="rowDrag.end"
+              @contextmenu.capture="contextRow(entry)"
             >
               <ChatRow
                 v-if="entry.kind === 'chat'"
                 :chat="entry.chat"
                 :selected="selectedChatId === entry.id"
+                :picked="pickedOf(entry)"
+                :entries="bulkMenuOf(entry)"
                 :groups="groupNames"
                 :compact="compactSidebar && !entry.under"
                 :icon="groupIcons.get(group.key) ?? null"
                 :dot="entryGlyph(entry)"
-                @select="src.select({ kind: 'chat', id: entry.id })"
-                @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
+                @select="(e: MouseEvent | KeyboardEvent) => clickRow(entry, e, () => src.select({ kind: 'chat', id: entry.id }))"
+                @action="(item: RowMenuItem) => rowAction(entry, item, () => act({ kind: 'chat', chat: entry.chat }, item))"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
               >
-                <FoldButton v-if="foldOf(`chat:${entry.id}`)" v-bind="foldOf(`chat:${entry.id}`)!" @toggle="toggleFolded(`chat:${entry.id}`)" />
-                <SubBadges v-if="rowSub(`chat:${entry.id}`).badges.length" :row-key="`chat:${entry.id}`" :badges="rowSub(`chat:${entry.id}`).badges" />
+                <FoldButton v-if="partsOf(entry)?.fold" v-bind="partsOf(entry)!.fold!" @toggle="toggleFolded(entryKey(entry))" />
+                <SubBadges v-if="partsOf(entry)?.sub.badges.length" :row-key="entryKey(entry)" :badges="partsOf(entry)!.sub.badges" />
               </ChatRow>
               <ExternalRow
                 v-else
                 :session="entry.session"
                 :selected="selectedExternalId === entry.id"
+                :picked="pickedOf(entry)"
                 :groups="groupNames"
-                :entries="externalMenu(entry.id)"
+                :entries="bulkMenuOf(entry) ?? externalMenu(entry.id)"
                 :dot="entryGlyph(entry)"
                 :compact="compactSidebar && !entry.under"
                 :icon="groupIcons.get(group.key) ?? null"
-                @select="selectExternal(entry.session)"
-                @action="(item: RowMenuItem) => externalAct(entry.session, item)"
+                @select="(e: MouseEvent | KeyboardEvent) => clickRow(entry, e, () => selectExternal(entry.session))"
+                @action="(item: RowMenuItem) => rowAction(entry, item, () => externalAct(entry.session, item))"
                 @rename="(title: string | null) => renameExternal(entry.session, title)"
               >
-                <FoldButton v-if="foldOf(`external:${entry.id}`)" v-bind="foldOf(`external:${entry.id}`)!" @toggle="toggleFolded(`external:${entry.id}`)" />
-                <SubBadges v-if="rowSub(`external:${entry.id}`).badges.length" :row-key="`external:${entry.id}`" :badges="rowSub(`external:${entry.id}`).badges" />
+                <FoldButton v-if="partsOf(entry)?.fold" v-bind="partsOf(entry)!.fold!" @toggle="toggleFolded(entryKey(entry))" />
+                <SubBadges v-if="partsOf(entry)?.sub.badges.length" :row-key="entryKey(entry)" :badges="partsOf(entry)!.sub.badges" />
               </ExternalRow>
-              <TaskRows v-if="rowSub(`${entry.kind}:${entry.id}`).nodes.length || rowSub(`${entry.kind}:${entry.id}`).jobs.length" :nodes="rowSub(`${entry.kind}:${entry.id}`).nodes" :jobs="rowSub(`${entry.kind}:${entry.id}`).jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
+              <TaskRows v-if="partsOf(entry)?.sub.nodes.length || partsOf(entry)?.sub.jobs.length" :nodes="partsOf(entry)!.sub.nodes" :jobs="partsOf(entry)!.sub.jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
             </div>
           </TransitionGroup>
         </section>
@@ -1401,9 +1597,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
     <Dialog :open="deleting !== null" @update:open="(o: boolean) => !o && (deleting = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Delete session?</DialogTitle>
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">{{ (deleting?.length ?? 0) > 1 ? `Delete ${deleting!.length} sessions?` : 'Delete session?' }}</DialogTitle>
         <DialogDescription class="text-ui leading-4.75 text-text-2">
-          “{{ deleting?.title }}” will be removed from Hydra Desk. This cannot be undone.
+          {{ (deleting?.length ?? 0) > 1 ? `${deleting!.length} sessions` : `“${deleting?.[0]?.title ?? ''}”` }} will be removed from Hydra Desk. This cannot be undone.
         </DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
           <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="deleting = null">Cancel</button>
@@ -1415,7 +1611,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     <Dialog :open="naming !== null" @update:open="(o: boolean) => !o && (naming = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">New group</DialogTitle>
-        <DialogDescription class="sr-only">Name the group to move this session to.</DialogDescription>
+        <DialogDescription class="sr-only">Name the group to move {{ (naming?.length ?? 0) > 1 ? 'these sessions' : 'this session' }} to.</DialogDescription>
         <form class="flex flex-col gap-3" @submit.prevent="confirmGroup">
           <Input v-model="groupDraft" aria-label="Group name" placeholder="Group name" :maxlength="GROUP_MAX" class="h-8 text-ui" />
           <div class="flex justify-end gap-2">
